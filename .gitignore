@@ -1,0 +1,20 @@
+# Local machine configuration (absolute paths, personal settings).
+tools/config.local.json
+
+# Build output, emulator storage, logs and captured evidence.
+build/
+*.log
+evidence/
+
+# Downloaded toolchains or third-party sources placed under the repo.
+third_party/downloads/
+
+# Python cache.
+__pycache__/
+*.pyc
+
+# Editor and OS noise.
+.vs/
+.vscode/
+*.swp
+Thumbs.db

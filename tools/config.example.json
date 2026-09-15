@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to tools/config.local.json (ignored by git) and fill in local absolute paths.",
+  "xenia_exe": "C:\\path\\to\\xenia_canary_windows\\xenia_canary.exe",
+  "xenia_expected_sha256": "72719B5EE4B40CB49B242BDEAB4B62DEE2BA0F7A458F84CC0532037619B51150",
+  "xenia_source_dir": "C:\\path\\to\\xenia-canary",
+  "xenia_source_commit": "f21ebd49e979e44f081f474df78c3fbfee9cb3f2",
+  "docker_image": "devkitpro/devkitppc@sha256:db8e39c73546d461d5606dc7dfed462a7d5957498502562e3b46769d02496cc1",
+  "python": "python",
+  "storage_root": "build/xenia-storage",
+  "log_dir": "build/logs"
+}

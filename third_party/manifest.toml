@@ -1,0 +1,41 @@
+# Third-party components used by helengine-x360.
+# Nothing listed here is redistributed by this repository; each component is
+# consumed in place (emulator install, Docker image) or read for facts.
+
+[[dependency]]
+name = "xenia-canary"
+role = "execution target (stock Xbox 360 emulator) and hardware-behaviour reference"
+version = "canary_experimental@f21ebd49e (built 2026-09-15)"
+source = "https://github.com/xenia-canary/xenia-canary"
+source_commit = "f21ebd49e979e44f081f474df78c3fbfee9cb3f2"
+binary_sha256 = "72719B5EE4B40CB49B242BDEAB4B62DEE2BA0F7A458F84CC0532037619B51150"
+spdx = "BSD-3-Clause"
+modified = false
+redistributed = false
+platform = "host"
+review_status = "approved"
+notes = "Emulator binary is unmodified. Source was read to derive the loader, kernel and GPU contracts; register and packet layouts documented in docs/ are facts about the emulator, not copied code."
+
+[[dependency]]
+name = "devkitPPC (devkitpro/devkitppc Docker image)"
+role = "PowerPC cross compiler, assembler, linker and binutils for guest code"
+version = "GCC 15.2.0, GNU Binutils 2.45.1"
+source = "https://hub.docker.com/r/devkitpro/devkitppc"
+source_commit = "sha256:db8e39c73546d461d5606dc7dfed462a7d5957498502562e3b46769d02496cc1"
+spdx = "GPL-3.0-or-later WITH GCC-exception-3.1"
+modified = false
+redistributed = false
+platform = "host (Linux container)"
+review_status = "approved"
+notes = "Build tool only. libgcc.a is linked into guest images under the GCC Runtime Library Exception; no other runtime library from the image is used (-nostdlib, -ffreestanding)."
+
+[[dependency]]
+name = "Python"
+role = "host tooling (XEX2 packer, checks, debug harness)"
+version = "3.11"
+source = "https://www.python.org/"
+spdx = "PSF-2.0"
+modified = false
+redistributed = false
+platform = "host"
+review_status = "approved"
