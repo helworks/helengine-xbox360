@@ -85,3 +85,46 @@ export shims expect for up to eight arguments.
 revision, license and role. Nothing third-party is redistributed by this repo;
 the emulator and the toolchain image are consumed in place.
 
+## 2. Loader and entry contract (xenia-canary f21ebd49e)
+
+All paths below are relative to `src/xenia/` in the pinned source.
+
+### Executable formats accepted by the launcher
+
+| Rule | Source | Value |
+|---|---|---|
+| File signature | `emulator.cc:512-525`, `cpu/xex_module.h:34` | `7F 45 4C 46` selects the ELF path; `XEX2` selects the XEX2 path. Both mount the file's folder as `\Device\Harddisk0\Partition1` (`GAME:`) and load `GAME:\<file>` (`emulator.cc:560-613`). |
+| ELF loader checks | `cpu/elf_module.cc:58-145` | `e_ident[4]==1` (asserted only), `e_type==2`, `e_machine==20`, `e_phoff!=0`, `e_entry!=0`; each `PT_LOAD`/`PT_DYNAMIC` needs `0x80000000 <= p_vaddr <= 0x9FFFFFFF`; segments are `AllocFixed` at `p_vaddr & ~(p_align-1)` and copied; executable segments are committed to the JIT. No import resolution exists for ELF. |
+| ELF launch outcome | `kernel/user_module.cc:207-259`, `kernel/user_module.h:51-58` | `UserModule::LoadContinue` casts the module to `XexModule` regardless of format (the format assert is compiled out in release). Observed: host access violation at `xenia_canary.exe+0xEB3E9` reading `0xFFFFFFFFFFFFFFFF` during `Loading module GAME:\entry.elf` (`build/logs/dbg-elf`). The ELF route is therefore **blocked** in this build; it cannot launch even a valid image. |
+| XEX2 container | `kernel/util/xex2_info.h:773-813`, `cpu/xex_module.cc:939-1028` | Big-endian header: `XEX2`, `module_flags` (must include `XEX_MODULE_TITLE`=1, `cpu/xex_module.h:219`), `header_size` (offset of the base file), `security_offset`, `header_count`, then `(key,value)` pairs. Keys ending in `00` carry the value inline, `01` a value read through a pointer, other keys an offset from the header start (`cpu/xex_module.cc:97-130`). |
+| Required headers | `cpu/xex_module.cc:515-565`, `kernel/user_module.cc:207-259`, `kernel/xthread.cc:273-299` | `FILE_FORMAT_INFO` (0x3FF; encryption 0, compression 0 => base file copied verbatim to the load address), `ENTRY_POINT` (0x10100), `IMAGE_BASE_ADDRESS` (0x10201, overrides the security-info load address), `DEFAULT_STACK_SIZE` (0x20200; without it the main thread stack is 0 bytes). `IMPORT_LIBRARIES` (0x103FF) is optional but required for kernel calls. |
+| Base file | `cpu/xex_module.cc:567-607`, `cpu/xex_module.h:223-230`, `cpu/xex_module.cc:821-887` | Raw memory image; `AllocFixed(base, file_length, 4096)`; the first dword must read `0x905A4D` little-endian (`MZ\x90\x00`). `ReadPEHeaders` requires `e_lfanew` -> `PE\0\0`, `Machine=0x01F2`, `Characteristics & 0x0100`, `SizeOfOptionalHeader=224`, `Magic=0x10B`, `Subsystem=14`; section headers only feed name/size bookkeeping. Memory beyond the file is not allocated, so `.bss` must be inside the file image. |
+| Security info | `kernel/util/xex2_info.h:795-813`, `cpu/xex_module.cc:921-935` | Field offsets 0x000 header_size, 0x004 image_size, 0x110 load_address, 0x128 import_table_count, 0x160 export_table, 0x180 page_descriptor_count, 0x184 descriptors (24 bytes each). Signature, digests and AES key are not verified. |
+| Page descriptors | `cpu/xex_module.cc:1055-1081`, `1148-1170`, `kernel/user_module.cc:1135-1175` | Each descriptor dword is read as `xe::byte_swap(be<uint32_t>)`, which swaps the wrapper's raw storage, so the file stores big-endian `(page_count << 4) | info` with info 1=CODE, 2=DATA, 3=READONLY_DATA. Page size is 64 KiB below 0x90000000. CODE/READONLY pages become read-only after import setup; the module's executable range for the JIT is the span of CODE pages, so the entry point and all code, including import thunks, must be in CODE pages. If no CODE page exists, `CalculateHash` hashes from `base - 64 KiB` and faults (observed before the encoding fix). |
+| Load address | `cpu/xex_module.cc:983-989`, `kernel/kernel_module.cc:30-48`, `kernel/xboxkrnl/xboxkrnl_module.cc:72-82` | Chosen: `0x82000000`. Kernel trampolines occupy `0x80040000-0x801C0000`, kernel variables `0x80070000-0x80280000`; both must be avoided. |
+| Imports | `cpu/xex_module.cc:1083-1134`, `1222-1400` | `IMPORT_LIBRARIES` block: `size`, string table `{size, count, names padded to 4}`, then per library `{size, digest[20], id, version, version_min, name_index:u16, count:u16, addresses[count]}`. Each address points at a dword holding `(type<<24)|ordinal`: type 0 is a 4-byte variable slot (function exports get `0xDEADC0DE`), type 1 is a 16-byte thunk rewritten to `sc 2; blr; nop; nop` (`0x44000042 0x4E800020 0x60000000 0x60000000`) and registered as an extern with the host handler. Ordinals come from `kernel/xboxkrnl/xboxkrnl_table.inc`. |
+| Main thread | `kernel/kernel_state.cc:416-443`, `kernel/xthread.cc:273-299`, `544-641`, `cpu/processor.cc:367-436`, `cpu/thread_state.cc:66-112` | `LaunchModule` creates "Main XThread" with `DEFAULT_STACK_SIZE` bytes of stack in `0x70000000-0x7F000000` plus guard pages (observed `70150000-70190000` for 0x40000). At entry: `r1 = stack_base - 176`, `r2 = 0x20000000`, `r13 = KPCR address` (must not be modified), `r3 = 0`, `lr = 0xBCBCBCBC` (host return sentinel). Returning with `blr` ends the thread with `r3` as exit code. |
+| Function boundaries | `cpu/ppc/ppc_scanner.cc:41-260` | The JIT scans from a function start until a `blr` (or a backward unconditional `b` with no pending forward targets). A function that never returns must still be followed by a reachable-looking `blr`, and import thunks must not sit after such a function (observed: the thunk's `sc 2` was translated inside the caller and reported as `undefined extern call to 82001030`). |
+| Kernel calls | `cpu/ppc/ppc_emit_control.cc:457-471`, `kernel/util/shim_utils.h:32-44`, `141-147` | `sc` with LEV=2 inside a registered thunk dispatches to the host export. Arguments: r3-r10, then 32-bit values at `r1 + 0x54 + 8*(n-8)` for the ninth argument onward (exports with more than eight arguments need an assembly wrapper); floats in f1... ; result in r3. |
+| Guest-only diagnostic | `cpu/ppc/ppc_frontend.cc:83-92` | `sc` with LEV=0 calls the host `SyscallHandler`, which logs `Unhandled syscall <r0 as decimal>!` at error level and continues. |
+| MMIO | `memory.cc:59-91`, `gpu/graphics_system.cc:102-105`, `297-309` | GPU registers are mapped at guest `0x7FC80000` (register index = (address & 0xFFFF) / 4). Only `CP_RB_WPTR` (0x1C5) has a write side effect; other writes just log. |
+| Memory map | `memory.cc:59-91`, `301-360`, `177-294` | `0x80000000-0x8FFFFFFF` xex heap (64 KiB pages, not physically aliased). Physical memory is aliased at `0xA0000000` (64 KiB pages), `0xC0000000` (16 MiB pages) and `0xE0000000` (4 KiB pages); the GPU addresses physical memory `0x00000000-0x1FFFFFFF`. Untouched pages of the 4 GiB reservation are not committed, so reads outside allocations fault on the host. |
+
+### Observation method selected for the probe
+
+Two independent, stock-build channels, both written to the emulator log:
+
+1. `DbgPrint` (xboxkrnl.exe ordinal 3, `kernel/xboxkrnl/xboxkrnl_strings.cc:628-647`)
+   prints `(DbgPrint) <formatted text>` at info level. The probe prints the
+   marker value read back from `hel_probe_result` together with its address.
+2. The `sc` LEV=0 syscall log line carries r0, which the probe loads with the
+   same marker value.
+
+A loaded module, a created thread or a black window is not counted as
+evidence; only the two lines above are.
+
+### Control case
+
+`build/probe/entry-badsubsys.xex` (PE subsystem byte changed from 14 to 2) is
+rejected: `!> Failed to load XEX PE headers!`, `!> Failed to initialize user
+module ...`, `!> Failed to launch target: C0000001` (`build/logs/ctl-badsubsys`).
