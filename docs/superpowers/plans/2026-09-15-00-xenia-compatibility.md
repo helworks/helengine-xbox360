@@ -18,7 +18,7 @@
 - Use openly licensed tools and record dependency provenance. Open-source copyleft build tools are acceptable; their license is distinct from the engine's license.
 - Do not assume the first Xenia executable will also boot through XeLL unchanged.
 - Runtime libraries and shader binaries need documented source and licensing; publicly downloadable code is not automatically a reusable dependency.
-- Execution is on hold. This plan authorizes no installation or code execution by itself.
+- Execution was authorized on 2026-09-15. Results: `../../xenia-compatibility.md` (Tasks 1-3) and `../../xenia-backend-contract.md` (Task 4, classified `ready-for-clear`). The executable route is XEX2 (the raw ELF route is blocked in the pinned build), which the rendering plan's specialization section records.
 
 ## Task 1: Record the reproducible environment
 

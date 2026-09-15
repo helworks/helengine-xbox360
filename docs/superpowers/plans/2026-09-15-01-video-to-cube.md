@@ -18,11 +18,25 @@
 - Use openly licensed tools and record dependency provenance. Open-source copyleft build tools are acceptable; their license is distinct from the engine's license.
 - Do not assume the first Xenia executable will also boot through XeLL unchanged.
 - Runtime libraries and shader binaries need documented source and licensing; publicly downloadable code is not automatically a reusable dependency.
-- Execution is on hold at the user's request.
+- Execution was authorized on 2026-09-15 after the compatibility plan completed.
 
 ## Prerequisite and precision boundary
 
 [Compatibility plan](2026-09-15-00-xenia-compatibility.md) must produce `docs/xenia-backend-contract.md` with status `ready-for-clear`. Its final task must specialize this plan with verified backend calls and build commands before backend implementation begins. The task order, project-owned interfaces, and acceptance tests below are specified now; GPU packets, runtime calls, linker addresses, and shader instructions are deliberately not invented here.
+
+## Specialization from the compatibility plan (2026-09-15)
+
+Status: `docs/xenia-backend-contract.md` is `ready-for-clear`; execution is authorized. Verified facts come from `docs/xenia-compatibility.md`; contract items marked hypothesis there are exercised by the tasks below.
+
+- Executable format: XEX2 built by `tools/xexpack.py` from a devkitPPC ELF (the raw ELF route is blocked in xenia-canary f21ebd49e). The engine keeps the probe's layout: image base `0x82000000`, 4 KiB PE header hole, import thunks first in `.text`, every function ends with `blr`, data on 64 KiB DATA pages, `.bss` inside the file image, `DEFAULT_STACK_SIZE` header present.
+- Build: `tools/build.ps1 -Config tools/config.local.json` compiles `src/**` with the recorded flags (`-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec -mhard-float -mstrict-align -ffreestanding -fno-builtin -nostdlib ... -std=c11 -O2 -Wall -Wextra -Werror`), links with `src/platform/xenia_guest/link.ld`, packs `build/xenia/helengine.xex`, and runs `tools/xexcheck.py`. `tools/run.ps1` reuses `run-probe.ps1`'s launch/dialog/timeout logic against `helengine.xex`.
+- Kernel calls (xboxkrnl.exe ordinals, listed in `src/platform/xenia_guest/imports.inc`): `DbgPrint` 3, `KeQueryPerformanceFrequency` 0x83, `KeDelayExecutionThread` 0x5A, `MmAllocatePhysicalMemoryEx` 0xBA, `MmFreePhysicalMemory` 0xBD, `MmGetPhysicalAddress` 0xBE, `VdInitializeRingBuffer` 0x1C3, `VdEnableRingBufferRPtrWriteBack` 0x1B6, `VdSwap` 0x25B (through the ten-argument assembly wrapper `hel_vdswap` in `start.S`).
+- `hel_platform_init`: read the tick frequency, allocate with `MmAllocatePhysicalMemoryEx(0, size, X_PAGE_READWRITE | X_MEM_LARGE_PAGES, 0, 0xFFFFFFFF, 0)`: ring 64 KiB (`size_log2` 13), read-pointer write-back dword, front buffer 3,686,400 bytes (tiled `k_8_8_8_8`, 4 KiB aligned), fence dword, VdSwap argument block. Log every address and size with `DbgPrint`. `hel_ticks` = `mftb`.
+- `hel_video_init`: `VdInitializeRingBuffer(phys(ring), 13)`, `VdEnableRingBufferRPtrWriteBack(phys(writeback), 6)`, then the contract section 5 register set through type-0 packets and `PM4_SET_CONSTANT` type 4. Kick = store write index to `0x7FC80714`.
+- `hel_frame_begin` (Task 1 form): resolve-with-clear packet group (contract section 5: fetch constant 0 rectangle, `RB_COPY_CONTROL` with clear bits, `RB_COLOR_CLEAR`, `RB_DEPTH_CLEAR`, `RB_MODECONTROL = kCopy`, `PM4_DRAW_INDX` rectangle list of 3 auto indices, `RB_MODECONTROL = kColorDepth`). If Xenia does not apply the clear on this path, fall back to a full-screen draw once Task 2 provides shaders and record the deviation.
+- `hel_frame_present`: resolve color to the front buffer (`RB_COPY_DEST_*`), reserve 64 dwords, call `VdSwap` with the front-buffer fetch constant, append `PM4_EVENT_WRITE_SHD` writing the frame number to the fence dword, kick, then wait for the fence (poll with `KeDelayExecutionThread` 1 ms) before the next frame reuses the ring region.
+- Shaders (Task 2): `tools/xenos_asm.py` assembles `shaders/unlit.vs.xasm` and `shaders/unlit.ps.xasm` into big-endian dword blobs embedded by `shaders/README.md`'s command `tools/build-shaders.ps1`; loaded with `PM4_IM_LOAD_IMMEDIATE`; verified against the emulator's `--dump_shaders` disassembly. Vertex layout `HelVertex` = 7 floats, fetch constant 0 stride 7 dwords, `k_32_32_32_FLOAT` at 0 and `k_32_32_32_32_FLOAT` at 3, endian `k8in32`; 16-bit indices with `VGT_DMA_SIZE.swap_mode = k8in16`; MVP in `c0..c3` via `PM4_SET_CONSTANT` type 0.
+- Diagnostics: `DbgPrint` for stage logs; `hel_syscall_marker` remains available; `tools/hostdbg.py` for host-side faults; `build/logs/<run>/` per launch.
 
 ## Project-owned interfaces
 
