@@ -1,10 +1,10 @@
 # Local machine configuration (absolute paths, personal settings).
 tools/config.local.json
 
-# Build output, emulator storage, logs and captured evidence.
+# Build output, emulator storage and raw logs (concise evidence summaries are
+# kept under docs/evidence).
 build/
 *.log
-evidence/
 
 # Downloaded toolchains or third-party sources placed under the repo.
 third_party/downloads/

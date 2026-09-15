@@ -1,0 +1,2 @@
+powerpc-eabi-gcc (devkitPPC) 15.2.0
+GNU ld (GNU Binutils) 2.45.1

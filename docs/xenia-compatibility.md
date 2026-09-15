@@ -127,4 +127,81 @@ evidence; only the two lines above are.
 
 `build/probe/entry-badsubsys.xex` (PE subsystem byte changed from 14 to 2) is
 rejected: `!> Failed to load XEX PE headers!`, `!> Failed to initialize user
-module ...`, `!> Failed to launch target: C0000001` (`build/logs/ctl-badsubsys`).
+module ...`, `!> Failed to launch target: C0000001` (`build/logs/ctl-badsubsys`,
+summary in `evidence/2026-09-15-probe/ctl-badsubsys.summary.json`).
+
+## 3. Guest execution probe (proven)
+
+### Artifacts
+
+| File | Purpose |
+|---|---|
+| `probes/entry/probe.c` | Stores `0x48454C30` ("HEL0") to `hel_probe_result`, reads it back, reports it through both channels, returns. |
+| `probes/entry/start.S` | `_start`: SVR4 frame, `bl hel_probe_main`, then loops forever (followed by an unreachable `blr` for the function scanner). `hel_syscall_marker`: `mr r0,r3; sc; blr`. |
+| `probes/entry/imports.S`, `imports.inc` | Import records (`DbgPrint`, ordinal 3) in the layout the loader rewrites. |
+| `probes/entry/link.ld` | Base `0x82000000`, 4 KiB header hole, thunks first in `.text`, data on the next 64 KiB page. |
+| `tools/build-probe.ps1` | Compiles/links in the devkitPPC container, emits `entry.elf`, `entry.map`, `entry.dis`, `entry.nm`, `entry.readelf.txt`, then packs `entry.xex` and `entry.xex.json`. |
+| `tools/xexpack.py` | ELF32 big-endian to XEX2 packer (section 2 layout). |
+| `tools/check-probe.ps1`, `tools/xexcheck.py` | Static checks of the ELF and XEX against section 2 (28 rules, all pass). |
+| `tools/run-probe.ps1` | Isolated launch, dialog handling, timeout, marker scan, `summary.json`. |
+| `tools/hostdbg.py` | Win32 debug-loop harness used to expose swallowed host exceptions. |
+
+Build outputs (`evidence/2026-09-15-probe/hashes.txt`, `entry.nm`, `entry.xex.json`):
+
+```
+682EED9D2D5376B972A2E0E64BC793724113F8ED3E2A76A4913D1A41FD561E07  entry.elf
+3A130553732D1665D079880323F12BD4315D345AFF3B16E0E16181F187370214  entry.xex
+_start 0x82001010  hel_syscall_marker 0x82001038  hel_probe_main 0x82001044
+DbgPrint thunk 0x82001000  __imp_DbgPrint 0x82010000  hel_probe_result 0x82010004
+image 0x82000000 + 131072 bytes, pages: 1 CODE, 1 DATA, stack 0x40000
+```
+
+Commands:
+
+```powershell
+./tools/build-probe.ps1 -Config tools/config.local.json
+./tools/check-probe.ps1 -Config tools/config.local.json
+./tools/run-probe.ps1 -Config tools/config.local.json -TimeoutSeconds 20 -RunName probe-run5
+```
+
+### Observations (three consecutive launches, stock emulator)
+
+Every run logged the same two lines from the main guest thread (handle
+`F8000008`), `evidence/2026-09-15-probe/probe-run{5,6,7}.summary.json`:
+
+```
+i> F8000008 (DbgPrint) HEL probe: result=48454C30 at 82010004
+!> F8000008 Unhandled syscall 1212501040!
+```
+
+`1212501040` is decimal `0x48454C30`; `82010004` is the linked address of
+`hel_probe_result`. The value therefore travelled guest store -> guest load ->
+r3 -> r0 -> host syscall log, and separately guest load -> r4 -> kernel
+`DbgPrint` -> host log, from an executable produced entirely by the GNU
+toolchain and the packer in this repository. The runs were terminated by the
+30-second timeout as intended (the probe loops); the emulator window stayed
+responsive and closed on request.
+
+### Failures met on the way (kept as loader facts)
+
+1. Page descriptors written little-endian: no page decoded as CODE, so
+   `UserModule::CalculateHash` hashed from `base - 64 KiB` and raised a host
+   access violation at `xenia_canary.exe+0x24346F` reading `0x181FF0000`
+   (guest `0x81FF0000`); swallowed outside a debugger, fatal under
+   `hostdbg.py` (`evidence/2026-09-15-probe/hostdbg-le-descriptors.txt`).
+2. `for (;;) {}` in C ends with a self-branch and no `blr`; the scanner merged
+   the following import thunk into `hel_probe_main` and logged
+   `undefined extern call to 82001030` instead of running `DbgPrint`.
+   Fixed by moving the loop to `start.S` with a trailing `blr` and placing
+   thunks before all code.
+3. Raw ELF (`entry.elf`, same code): loader crash as described in section 2
+   (`evidence/2026-09-15-probe/hostdbg-elf-control.txt`).
+
+## 4. Result
+
+- Repeatable open-toolchain guest execution inside stock Xenia: **proven**
+  (XEX2 route).
+- ELF route: blocked in this build; not needed.
+- Graphics, presentation and shader interfaces: documented as a contract in
+  `xenia-backend-contract.md`; they remain hypotheses until the rendering
+  plan's milestones exercise them on screen.

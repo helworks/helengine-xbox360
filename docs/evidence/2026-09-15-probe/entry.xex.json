@@ -1,0 +1,50 @@
+{
+  "image_base": "0x82000000",
+  "image_size": 131072,
+  "entry_point": "0x82001010",
+  "header_size": 4096,
+  "stack_size": 262144,
+  "page_size": 65536,
+  "page_descriptors": [
+    {
+      "info": 1,
+      "pages": 1
+    },
+    {
+      "info": 2,
+      "pages": 1
+    }
+  ],
+  "imports": [
+    {
+      "name": "DbgPrint",
+      "ordinal": 3,
+      "variable": "0x82010000",
+      "thunk": "0x82001000"
+    }
+  ],
+  "sections": [
+    {
+      "name": ".text",
+      "addr": "0x82001000",
+      "size": 156
+    },
+    {
+      "name": ".rodata",
+      "addr": "0x8200109C",
+      "size": 32
+    },
+    {
+      "name": ".data",
+      "addr": "0x82010000",
+      "size": 4
+    },
+    {
+      "name": ".bss",
+      "addr": "0x82010004",
+      "size": 12
+    }
+  ],
+  "output": "C:\\dev\\helworks\\helengine-x360\\build\\probe\\entry.xex",
+  "output_size": 135168
+}

@@ -1,0 +1,56 @@
+[  0.015] started pid 44876
+[  0.015] process image C:\dev\helworks\emus\xenia_canary_windows\xenia_canary.exe at 0x7FF6DD870000
+[  0.031] exception 0x80000003 first-chance at 0x7FFD948A2239 (ntdll.dll+0x122239) tid 42172 params ['0x0']
+[  3.250] exception 0xC0000005 first-chance at 0x7FF6DD95B3E9 (xenia_canary.exe+0xEB3E9) tid 42172 params ['0x0', '0xFFFFFFFFFFFFFFFF']
+[  3.250]   rip=0x7FF6DD95B3E9 (xenia_canary.exe+0xEB3E9) rsp=0x18864FDD50 rax=0x18864FE278 rcx=0x179D53DD240 rdx=0x18864FE370 r8=0x1 r9=0x179D53DD240
+[  3.250]     rsp+0xB0: KernelBase.dll+0x1AA300
+[  3.250]     rsp+0x1B8: KernelBase.dll+0x7B485
+[  3.250]     rsp+0x278: xenia_canary.exe+0x14A43B
+[  3.250]     rsp+0x290: xenia_canary.exe+0x15EE000
+[  3.250]     rsp+0x298: xenia_canary.exe+0x117491
+[  3.250]     rsp+0x2A0: xenia_canary.exe+0x15EE000
+[  3.250]     rsp+0x328: ucrtbase.dll+0x12D7B
+[  3.250]     rsp+0x350: ucrtbase.dll+0x1398B0
+[  3.250]     rsp+0x368: ucrtbase.dll+0x50D9
+[  3.250]     rsp+0x388: xenia_canary.exe+0x2449FE
+[  3.250]     rsp+0x398: xenia_canary.exe+0x87FBCE
+[  3.250]     rsp+0x3C8: xenia_canary.exe+0xF13AD
+[  3.250]     rsp+0x428: xenia_canary.exe+0xEB6EF
+[  3.250]     rsp+0x4A8: xenia_canary.exe+0x6D42C
+[  3.250]     rsp+0x528: xenia_canary.exe+0x13B7CD
+[  3.250]     rsp+0x670: xenia_canary.exe+0x8E1210
+[  3.250]     rsp+0x6F0: xenia_canary.exe+0x8EF0A0
+[  3.250]     rsp+0x7B8: xenia_canary.exe+0x7EFFF
+[  3.250]     rsp+0x7E0: xenia_canary.exe+0x93A991
+[  3.250]     rsp+0x7E8: xenia_canary.exe+0x388794
+[  3.250]     rsp+0x7F0: xenia_canary.exe+0x93A98C
+[  3.250]     rsp+0x7F8: xenia_canary.exe+0x93A990
+[  3.250]     rsp+0x858: xenia_canary.exe+0x7EFFF
+[  3.250]     rsp+0x860: xenia_canary.exe+0x93A990
+[  3.250] exception 0xC0000005 SECOND-CHANCE at 0x7FF6DD95B3E9 (xenia_canary.exe+0xEB3E9) tid 42172 params ['0x0', '0xFFFFFFFFFFFFFFFF']
+[  3.250]   rip=0x7FF6DD95B3E9 (xenia_canary.exe+0xEB3E9) rsp=0x18864FDD50 rax=0x18864FE278 rcx=0x179D53DD240 rdx=0x18864FE370 r8=0x1 r9=0x179D53DD240
+[  3.265]     rsp+0xB0: KernelBase.dll+0x1AA300
+[  3.265]     rsp+0x1B8: KernelBase.dll+0x7B485
+[  3.265]     rsp+0x278: xenia_canary.exe+0x14A43B
+[  3.265]     rsp+0x290: xenia_canary.exe+0x15EE000
+[  3.265]     rsp+0x298: xenia_canary.exe+0x117491
+[  3.265]     rsp+0x2A0: xenia_canary.exe+0x15EE000
+[  3.265]     rsp+0x328: ucrtbase.dll+0x12D7B
+[  3.265]     rsp+0x350: ucrtbase.dll+0x1398B0
+[  3.265]     rsp+0x368: ucrtbase.dll+0x50D9
+[  3.265]     rsp+0x388: xenia_canary.exe+0x2449FE
+[  3.265]     rsp+0x398: xenia_canary.exe+0x87FBCE
+[  3.265]     rsp+0x3C8: xenia_canary.exe+0xF13AD
+[  3.265]     rsp+0x428: xenia_canary.exe+0xEB6EF
+[  3.265]     rsp+0x4A8: xenia_canary.exe+0x6D42C
+[  3.265]     rsp+0x528: xenia_canary.exe+0x13B7CD
+[  3.265]     rsp+0x670: xenia_canary.exe+0x8E1210
+[  3.265]     rsp+0x6F0: xenia_canary.exe+0x8EF0A0
+[  3.265]     rsp+0x7B8: xenia_canary.exe+0x7EFFF
+[  3.265]     rsp+0x7E0: xenia_canary.exe+0x93A991
+[  3.265]     rsp+0x7E8: xenia_canary.exe+0x388794
+[  3.265]     rsp+0x7F0: xenia_canary.exe+0x93A98C
+[  3.265]     rsp+0x7F8: xenia_canary.exe+0x93A990
+[  3.265]     rsp+0x858: xenia_canary.exe+0x7EFFF
+[  3.265]     rsp+0x860: xenia_canary.exe+0x93A990
+[  7.421] process exited with code 0xC0000005

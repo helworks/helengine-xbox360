@@ -1,0 +1,9 @@
+00001000 A HEL_HEADER_SIZE
+00010000 A HEL_PAGE_SIZE
+82000000 A HEL_IMAGE_BASE
+82001000 T DbgPrint
+82001010 T _start
+82001038 T hel_syscall_marker
+82001044 T hel_probe_main
+82010000 D __imp_DbgPrint
+82010004 B hel_probe_result
