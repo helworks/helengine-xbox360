@@ -1,0 +1,5 @@
+# Unlit pixel shader: output interpolator 0 (vertex colour) as colour 0.
+# In pixel shaders r0 holds interpolator 0 on entry.
+alloc colors
+exece
+  max oC0, r0, r0

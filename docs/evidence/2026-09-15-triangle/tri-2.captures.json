@@ -1,0 +1,26 @@
+[
+    {
+        "index":  0,
+        "time":  "21:17:32.522",
+        "file":  "capture-0.png",
+        "width":  1280,
+        "height":  720,
+        "avg_rgb":  [
+                        43,
+                        43,
+                        52
+                    ]
+    },
+    {
+        "index":  1,
+        "time":  "21:17:33.368",
+        "file":  "capture-1.png",
+        "width":  1280,
+        "height":  720,
+        "avg_rgb":  [
+                        43,
+                        43,
+                        52
+                    ]
+    }
+]

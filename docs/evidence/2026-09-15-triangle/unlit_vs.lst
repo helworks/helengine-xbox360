@@ -1,0 +1,13 @@
+control-flow entries: 5 (3 pairs), instructions: 7, dwords: 30
+cf exec address=3 count=2 sequence=0x005
+  /*   3 */ vfetch_full r1.xyz1, r0.x, vf0, stride=7, offset=0, format=32_32_32_FLOAT -> 00081000 00390A88 00000007
+  /*   4 */ vfetch_mini r2.xyzw, offset=3, format=32_32_32_32_FLOAT -> 00082000 40260688 00000300
+cf alloc position
+cf exec address=5 count=4 sequence=0x002
+  /*   5 */ serialize serialize mul r3, c0, r1.xxxx -> C80F0003 00006C00 61000100
+  /*   6 */ mad r3, c1, r1.yyyy, r3 -> C80F0003 0000B100 6B010103
+  /*   7 */ mad r3, c2, r1.zzzz, r3 -> C80F0003 0000C600 6B020103
+  /*   8 */ mad oPos, c3, r1.wwww, r3 -> C80F803E 00001B00 6B030103
+cf alloc interpolators
+cf exece address=9 count=1 sequence=0x000
+  /*   9 */ max o0, r2, r2 -> C80F8000 00000000 E2020200

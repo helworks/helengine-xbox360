@@ -1,0 +1,4 @@
+control-flow entries: 2 (1 pairs), instructions: 1, dwords: 6
+cf alloc colors
+cf exece address=1 count=1 sequence=0x000
+  /*   1 */ max oC0, r0, r0 -> C80F8000 00000000 E2000000

@@ -75,6 +75,20 @@ static void ring_reg(uint32_t index, uint32_t value) {
     ring_put(value);
 }
 
+void hel_ring_put(uint32_t value) { ring_put(value); }
+
+void hel_ring_reg(uint32_t index, uint32_t value) { ring_reg(index, value); }
+
+void hel_ring_type3(uint32_t opcode, uint32_t count) {
+    ring_put(XE_PACKET_TYPE3(opcode, count));
+}
+
+int hel_ring_overflowed(void) { return g.overflow; }
+
+uint32_t hel_video_width(void) { return g.width; }
+
+uint32_t hel_video_height(void) { return g.height; }
+
 static void ring_frame_start(void) {
     /* Keep every frame contiguous: pad to the end with NOPs when the frame's
        worst case would cross the ring end, then continue from index 0. */
@@ -330,6 +344,7 @@ void hel_video_shutdown(void) {
     }
     /* All submitted work completed at the last fence wait; nothing pending. */
     g.ready = 0;
+    hel_mesh_release_all();
     hel_phys_free(&g.front);
     hel_phys_free(&g.scratch);
     hel_phys_free(&g.ring);

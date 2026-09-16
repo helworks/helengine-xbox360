@@ -20,10 +20,13 @@ $out = Join-Path $repo $OutDir
 New-Item -ItemType Directory -Force $out | Out-Null
 $outRel = $OutDir.Replace("\", "/")
 
+& (Join-Path $PSScriptRoot "build-shaders.ps1") -Config $Config | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "shader build failed" }
+
 $cflags = "-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec " +
           "-mhard-float -mstrict-align -ffreestanding -fno-builtin -nostdlib " +
           "-fno-stack-protector -fno-asynchronous-unwind-tables -fno-pic " +
-          "-fno-common -std=c11 -O2 -Wall -Wextra -Werror"
+          "-fno-common -std=c11 -O2 -Wall -Wextra -Werror -I/work/build/shaders"
 foreach ($d in $Define) { $cflags += " -D$d" }
 
 $sources = @(
@@ -31,7 +34,13 @@ $sources = @(
     "src/platform/xenia_guest/imports.S",
     "src/platform/xenia_guest/platform.c",
     "src/platform/xenia_guest/video.c",
+    "src/platform/xenia_guest/shader.c",
+    "src/platform/xenia_guest/mesh.c",
     "src/engine/frame.c",
+    "src/engine/math.c",
+    "src/demo/triangle.c",
+    "src/demo/cube.c",
+    "src/demo/cube_demo.c",
     "src/demo/main.c"
 )
 $compileLines = @()

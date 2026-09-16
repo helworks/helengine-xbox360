@@ -1,0 +1,19 @@
+# Unlit vertex shader: clip position = MVP * position, colour passthrough.
+#
+# Inputs:  vf0 = HelVertex stream, 7 dwords per vertex, big-endian floats
+#          (fetch constant endian k8in32): xyz at dword 0, rgba at dword 3.
+#          r0.x = vertex index (hardware convention).
+# Constants: c0..c3 = MVP columns (column-major HelMat4 uploaded as 16 floats).
+# Outputs: oPos = c0*x + c1*y + c2*z + c3*1; o0 = vertex colour.
+exec
+  vfetch_full r1.xyz1, r0.x, vf0, stride=7, offset=0, format=32_32_32_FLOAT
+  vfetch_mini r2.xyzw, offset=3, format=32_32_32_32_FLOAT
+alloc position
+exec
+  serialize mul r3, c0, r1.xxxx
+  mad r3, c1, r1.yyyy, r3
+  mad r3, c2, r1.zzzz, r3
+  mad oPos, c3, r1.wwww, r3
+alloc interpolators
+exece
+  max o0, r2, r2

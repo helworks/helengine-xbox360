@@ -1,0 +1,14 @@
+/*    0.0 */       exec
+/*    3   */          vfetch_full r1.xyz1, r0.x, vf95, DataFormat=FMT_32_32_32_FLOAT, Stride=7
+/*    4   */          vfetch_mini r2, Offset=3, DataFormat=FMT_32_32_32_32_FLOAT
+/*    0.1 */       alloc position
+/*    1.0 */       exec
+/*    5   */          serialize
+                      mul r3, c0, r1.xxxx
+/*    6   */          mad r3, c1, r1.yyyy, r3
+/*    7   */          mad r3, c2, r1.zzzz, r3
+/*    8   */          mad oPos, c3, r1.wwww, r3
+/*    1.1 */       alloc interpolators
+/*    2.0 */       exece
+/*    9   */          max o0, r2, r2
+/*    2.1 */       cnop

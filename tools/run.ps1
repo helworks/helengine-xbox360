@@ -38,7 +38,7 @@ $log = Get-Content (Join-Path $logDir "xenia.log")
 $hel = $log | Select-String -SimpleMatch "(DbgPrint) HEL "
 $firstPresent = $hel | Select-String -SimpleMatch "first present complete"
 $frames = $hel | Select-String -SimpleMatch "HEL frame: frames="
-$errors = $hel | Select-String -Pattern "HEL frame: error|failed|fence timeout|rejected"
+$errors = $hel | Select-String -Pattern "HEL frame: error|failed|fence timeout|rejected configuration|validator accepted"
 $gpuErrors = $log | Select-String -Pattern "^!>" | Where-Object { $_ -notmatch "File not found: .*xam\.xex" }
 
 Write-Host "Log: $(Join-Path $logDir 'xenia.log')"

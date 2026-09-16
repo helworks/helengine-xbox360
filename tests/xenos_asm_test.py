@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Field-level checks of tools/xenos_asm.py against the layouts in
+xenia-canary f21ebd49e src/xenia/gpu/ucode.h."""
+
+import os
+import sys
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import xenos_asm as xa  # noqa: E402
+
+
+def bits(value, low, width):
+    return (value >> low) & ((1 << width) - 1)
+
+
+class AluEncoding(unittest.TestCase):
+    def test_export_position_mad(self):
+        code = xa.encode_alu("mad", xa.parse_dest("oPos"),
+                             [xa.parse_src("c3"), xa.parse_src("r1.wwww"),
+                              xa.parse_src("r3")])
+        d0, d1, d2 = code
+        self.assertEqual(bits(d0, 0, 6), 62)          # vector_dest = oPos
+        self.assertEqual(bits(d0, 15, 1), 1)          # export_data
+        self.assertEqual(bits(d0, 16, 4), 0xF)        # vector_write_mask
+        self.assertEqual(bits(d0, 20, 4), 0)          # scalar_write_mask
+        self.assertEqual(bits(d0, 26, 6), 50)         # retain_prev
+        self.assertEqual(bits(d2, 24, 5), 11)         # mad
+        self.assertEqual(bits(d2, 31, 1), 0)          # src1 constant
+        self.assertEqual(bits(d2, 16, 8), 3)          # c3
+        self.assertEqual(bits(d2, 30, 1), 1)          # src2 temp
+        self.assertEqual(bits(d2, 8, 8), 1)           # r1
+        self.assertEqual(bits(d2, 29, 1), 1)          # src3 temp
+        self.assertEqual(bits(d2, 0, 8), 3)           # r3
+        # r1.wwww: component-relative deltas (3-i)&3 -> 3,2,1,0
+        swz2 = bits(d1, 8, 8)
+        for i in range(4):
+            delta = (swz2 >> (2 * i)) & 3
+            self.assertEqual((i + delta) & 3, 3)
+        self.assertEqual(bits(d1, 16, 8), 0)          # c3.xyzw identity
+
+    def test_register_mask_and_negate(self):
+        d0, d1, d2 = xa.encode_alu("mul", xa.parse_dest("r3.xy"),
+                                   [xa.parse_src("-c0"), xa.parse_src("r1.xxxx")])
+        self.assertEqual(bits(d0, 0, 6), 3)
+        self.assertEqual(bits(d0, 15, 1), 0)
+        self.assertEqual(bits(d0, 16, 4), 0b0011)
+        self.assertEqual(bits(d1, 26, 1), 1)          # src1 negate
+        self.assertEqual(bits(d2, 24, 5), 1)          # mul
+        swz2 = bits(d1, 8, 8)
+        for i in range(4):
+            self.assertEqual((i + ((swz2 >> (2 * i)) & 3)) & 3, 0)
+
+    def test_pixel_colour_export(self):
+        d0, _d1, d2 = xa.encode_alu("max", xa.parse_dest("oC0"),
+                                    [xa.parse_src("r0"), xa.parse_src("r0")])
+        self.assertEqual(bits(d0, 0, 6), 0)
+        self.assertEqual(bits(d0, 15, 1), 1)
+        self.assertEqual(bits(d2, 24, 5), 2)
+
+
+class FetchEncoding(unittest.TestCase):
+    def test_full_fetch(self):
+        reg, swz = xa.parse_fetch_dest("r1.xyz1")
+        d0, d1, d2 = xa.encode_vfetch(reg, swz, 0, 0, 0, 7, 0, 57, False, False)
+        self.assertEqual(bits(d0, 0, 5), 0)           # vertex fetch
+        self.assertEqual(bits(d0, 5, 6), 0)           # r0
+        self.assertEqual(bits(d0, 12, 6), 1)          # r1
+        self.assertEqual(bits(d0, 19, 1), 1)          # must_be_one
+        self.assertEqual(bits(d0, 20, 5), 0)
+        self.assertEqual(bits(d0, 25, 2), 0)
+        self.assertEqual(bits(d1, 0, 12), 0 | (1 << 3) | (2 << 6) | (5 << 9))
+        self.assertEqual(bits(d1, 16, 6), 57)         # 32_32_32_FLOAT
+        self.assertEqual(bits(d1, 30, 1), 0)          # not mini
+        self.assertEqual(bits(d2, 0, 8), 7)           # stride
+        self.assertEqual(bits(d2, 8, 23), 0)
+
+    def test_mini_fetch_offset(self):
+        reg, swz = xa.parse_fetch_dest("r2")
+        _d0, d1, d2 = xa.encode_vfetch(reg, swz, 0, 0, 0, 0, 3, 38, True, False)
+        self.assertEqual(bits(d1, 30, 1), 1)
+        self.assertEqual(bits(d2, 8, 23), 3)
+        self.assertEqual(bits(d1, 0, 12), 0 | (1 << 3) | (2 << 6) | (3 << 9))
+
+
+class ControlFlow(unittest.TestCase):
+    def test_pairs_and_addresses(self):
+        source = """
+        exec
+          vfetch_full r1.xyz1, r0.x, vf0, stride=7, offset=0, format=32_32_32_FLOAT
+          vfetch_mini r2, offset=3, format=32_32_32_32_FLOAT
+        alloc position
+        exec
+          serialize mul r3, c0, r1.xxxx
+          mad oPos, c3, r1.wwww, r3
+        alloc interpolators
+        exece
+          max o0, r2, r2
+        """
+        dwords, _listing = xa.assemble(source)
+        # 5 control-flow entries -> 3 pairs (9 dwords) + 5 instructions.
+        self.assertEqual(len(dwords), 9 + 5 * 3)
+        cf0_w0 = dwords[0]
+        self.assertEqual(bits(cf0_w0, 0, 12), 3)      # first instruction slot
+        self.assertEqual(bits(cf0_w0, 12, 3), 2)      # two instructions
+        self.assertEqual(bits(cf0_w0, 16, 12), 0b0101)  # fetch, fetch
+        cf0_w1 = dwords[1] & 0xFFFF
+        self.assertEqual(bits(cf0_w1, 12, 4), 1)      # exec
+        self.assertEqual(bits(cf0_w1, 9, 1), 1)       # PredicateClean
+        cf1_w0 = (dwords[1] >> 16) | ((dwords[2] & 0xFFFF) << 16)
+        cf1_w1 = dwords[2] >> 16
+        self.assertEqual(bits(cf1_w1, 12, 4), 12)     # alloc
+        self.assertEqual(bits(cf1_w1, 9, 2), 1)       # position
+        self.assertEqual(cf1_w0, 0)
+        cf2_w0 = dwords[3]
+        self.assertEqual(bits(cf2_w0, 0, 12), 5)
+        self.assertEqual(bits(cf2_w0, 16, 12), 0b0010)  # serialize on first
+        cf4_w0 = dwords[6]
+        cf4_w1 = dwords[7] & 0xFFFF
+        self.assertEqual(bits(cf4_w1, 12, 4), 2)      # exece
+        self.assertEqual(bits(cf4_w0, 0, 12), 7)
+        cf5_w1 = dwords[8] >> 16
+        self.assertEqual(bits(cf5_w1, 12, 4), 0)      # padding nop
+
+    def test_rejects_missing_exece(self):
+        with self.assertRaises(xa.AsmError):
+            xa.assemble("exec\n mul r0, r0, r0\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

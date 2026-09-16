@@ -18,6 +18,23 @@ void hel_sleep_ms(uint32_t milliseconds);
 uint32_t hel_platform_allocation_count(void);
 uint32_t hel_platform_allocated_bytes(void);
 
+/* Ring-buffer writer (video.c). Valid between hel_frame_begin and
+   hel_frame_present; writes past the per-frame budget set the overflow flag
+   that hel_frame_present reports as HEL_ERR_RING_FULL. */
+void hel_ring_put(uint32_t value);
+void hel_ring_reg(uint32_t index, uint32_t value);
+void hel_ring_type3(uint32_t opcode, uint32_t count);
+int hel_ring_overflowed(void);
+uint32_t hel_video_width(void);
+uint32_t hel_video_height(void);
+
+/* Mesh storage (mesh.c): released by hel_video_shutdown. */
+void hel_mesh_release_all(void);
+
+/* Shader binaries (shader.c): validated once, then emitted per draw. */
+int hel_shaders_validate(void);
+void hel_shaders_emit(void);
+
 /* Demo entry called from start.S. */
 void hel_demo_main(void);
 

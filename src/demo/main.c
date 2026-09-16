@@ -1,15 +1,20 @@
 /*
  * Demo entry (called from the platform start code).
  *
- * Task 1 diagnostic frame: alternate two clear colours every 60 submitted
- * frames so a live presentation path is distinguishable from a stale image.
- * Building with -DHEL_DEMO_INVALID_CONFIG=1 requests an unsupported mode to
- * exercise the failure path (diagnostic logged, no GPU submission).
+ * HEL_DEMO_MODE selects the diagnostic: 0 alternates two clear colours every
+ * 60 submitted frames, 1 draws the static unlit triangle, 2 the rotating
+ * cube. Building with -DHEL_DEMO_INVALID_CONFIG=1 requests an unsupported
+ * video mode to exercise the failure path (diagnostic logged, no submission).
  */
 #include <stdint.h>
 
 #include "../engine/frame.h"
 #include "../platform/xenia_guest/xenia_guest.h"
+#include "demo.h"
+
+#ifndef HEL_DEMO_MODE
+#define HEL_DEMO_MODE HEL_DEMO_MODE_CLEAR
+#endif
 
 static int clear_frame(uint32_t frame, void *user) {
     (void)user;
@@ -23,6 +28,7 @@ static int clear_frame(uint32_t frame, void *user) {
 
 void hel_demo_main(void) {
     hel_log("HEL demo: start");
+    hel_log_u32("HEL demo: mode", (uint32_t)HEL_DEMO_MODE);
     int err = hel_platform_init();
     if (err) {
         hel_log_u32("HEL demo: platform init failed", (uint32_t)err);
@@ -38,7 +44,17 @@ void hel_demo_main(void) {
         hel_log_u32("HEL demo: video init failed", (uint32_t)err);
         return;
     }
-    err = hel_frame_run(clear_frame, 0, 0);
+    HelFrameFn frame = clear_frame;
+#if HEL_DEMO_MODE == HEL_DEMO_MODE_TRIANGLE
+    err = hel_demo_triangle_init();
+    frame = hel_demo_triangle_frame;
+#endif
+    if (err) {
+        hel_log_u32("HEL demo: scene init failed", (uint32_t)err);
+        hel_video_shutdown();
+        return;
+    }
+    err = hel_frame_run(frame, 0, 0);
     hel_log_u32("HEL demo: frame loop stopped with", (uint32_t)err);
     hel_video_shutdown();
 }
