@@ -184,20 +184,22 @@ against the same image with only the generated runtime differing:
 
 ## Provenance
 
-The generated core currently comes from two branches, not from the default
-branches of those repositories:
+The three fixes this target depends on are merged into the default branches
+of their repositories:
 
-| Repository | Branch | Commit | Why |
-|---|---|---|---|
-| csharpcodegen | `fix/big-endian-binary-serialization` | 8ae4e55 | the byte-order fix above |
-| helengine | `feature/camera-field-of-view` | 9df4b301 | the camera owns its field of view, and `Core.Draw` no longer dereferences a null 3D render manager (that fix is this branch's parent) |
+| Repository | Merge | What it carries |
+|---|---|---|
+| csharpcodegen | `d8a9ed4` on `master` | binary serialization converts between wire and host byte order |
+| helengine | `c1caf35e` on `main` | the camera owns its field of view, and `Core.Draw` no longer dereferences a null 3D render manager |
 
-Regenerating from the default branches would reintroduce all three problems.
-`tools/generate-core.ps1` points at worktrees of those repositories
+`tools/generate-core.ps1` still reads from worktrees of those repositories
 (`C:/dev/helworks/csharpcodegen-x360` and
-`C:/dev/helworks/helengine-camera-fov`) rather than the shared checkouts, so
-a regeneration here cannot be changed by, or disturb, another session working
-in them.
+`C:/dev/helworks/helengine-camera-fov`) rather than from the shared
+checkouts, and both worktrees track the merged tips. That is not about
+pinning unmerged work any more; it is because those shared checkouts are a
+live build input for several ports, so whichever branch one of them happens
+to sit on is what anyone building from it compiles. Reading from a worktree
+means a regeneration here cannot be changed by, or disturb, another session.
 
 ## Known gaps
 

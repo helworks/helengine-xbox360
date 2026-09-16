@@ -51,13 +51,22 @@ static int core_and_scene_frame(uint32_t frame, void *user) {
 
 static int clear_frame(uint32_t frame, void *user) {
     (void)user;
-    unsigned phase = (frame / 60u) & 1u;
-    int err = hel_frame_begin(phase ? 0.25f : 0.02f, 0.02f, 0.08f, 1.0f);
 #if HEL_CORE_BOOT
+    /* A steady background: the engine's scene is what this mode shows, and
+       the frame loop is not tied to the display refresh, so alternating the
+       clear colour flips several times a second and reads as flashing. */
+    (void)frame;
+    int err = hel_frame_begin(0.02f, 0.02f, 0.08f, 1.0f);
     /* With no scene of its own to draw, this mode shows the engine's. */
     if (!err) {
         err = hel_core_draw();
     }
+#else
+    /* Without the core there is nothing on screen, so the two clear colours
+       alternate every 60 frames to show that presentation is still
+       advancing. */
+    unsigned phase = (frame / 60u) & 1u;
+    int err = hel_frame_begin(phase ? 0.25f : 0.02f, 0.02f, 0.08f, 1.0f);
 #endif
     if (!err) {
         err = hel_frame_present();
