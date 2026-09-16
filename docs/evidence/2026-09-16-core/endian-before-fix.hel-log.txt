@@ -1,0 +1,36 @@
+i> F8000008 (DbgPrint) HEL demo: start
+i> F8000008 (DbgPrint) HEL demo: mode=00000002
+i> F8000008 (DbgPrint) HEL platform: tick_frequency=02FAF080
+i> F8000008 (DbgPrint) HEL platform: timebase_now_lo=035D10A3
+i> F8000008 (DbgPrint) HEL platform: alloc heap virt=BDCA0000 phys=1DCA0000 size=02000000
+i> F8000008 (DbgPrint) HEL heap: bytes=02000000
+i> F8000008 (DbgPrint) HEL heap: usable bytes=01FFFFF0
+i> F8000008 (DbgPrint) HEL cxx: static initialisers=00000004
+i> F8000008 (DbgPrint) HEL cxx: static initialisers complete
+i> F8000008 (DbgPrint) HEL cxx: self-test start
+i> F8000008 (DbgPrint) HEL cxx: static constructor ran=00000001
+i> F8000008 (DbgPrint) HEL cxx: virtual dispatch=00000001
+i> F8000008 (DbgPrint) HEL cxx: new used the guest heap=00000001
+i> F8000008 (DbgPrint) HEL cxx: virtual dispatch on a heap object=00000001
+i> F8000008 (DbgPrint) HEL cxx: delete released=00000001
+i> F8000008 (DbgPrint) HEL cxx: array new=00000001
+i> F8000008 (DbgPrint) HEL cxx: array delete ran destructors=00000001
+i> F8000008 (DbgPrint) HEL cxx: function-local static=00000001
+i> F8000008 (DbgPrint) HEL cxx: 64-bit division=00000001
+i> F8000008 (DbgPrint) HEL cxx: float arithmetic=00000001
+i> F8000008 (DbgPrint) HEL cxx: heap survived the self-test=00000001
+i> F8000008 (DbgPrint) HEL cxx: self-test failures=00000000
+i> F8000008 (DbgPrint) HEL endian: binary serialization check start
+i> F8000008 (DbgPrint) HEL endian: host is big-endian=00000001
+i> F8000008 (DbgPrint) HEL endian: unexpected byte at=00000000
+i> F8000008 (DbgPrint) HEL endian: got=00000004
+i> F8000008 (DbgPrint) HEL endian: expected=00000001
+i> F8000008 (DbgPrint) HEL endian: big-endian wire round trip=00000000
+i> F8000008 (DbgPrint) HEL endian: unexpected byte at=00000000
+i> F8000008 (DbgPrint) HEL endian: got=00000001
+i> F8000008 (DbgPrint) HEL endian: expected=00000004
+i> F8000008 (DbgPrint) HEL endian: little-endian wire round trip=00000000
+i> F8000008 (DbgPrint) HEL endian: failures=00000002
+i> F8000008 (DbgPrint) HEL demo: byte-order check failed, not submitting any frames
+i> F8000008 (DbgPrint) HEL heap: leaked allocations at shutdown=0000002A
+i> F8000008 (DbgPrint) HEL heap: leaked bytes=00003710

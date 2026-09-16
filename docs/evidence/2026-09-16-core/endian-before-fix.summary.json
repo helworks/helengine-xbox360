@@ -1,0 +1,14 @@
+{
+    "run":  "endian-prefix",
+    "target":  "build/xenia-prefix/helengine.xex",
+    "first_present":  false,
+    "frame_reports":  [
+
+                      ],
+    "hel_errors":  [
+                       "i\u003e F8000008 (DbgPrint) HEL demo: byte-order check failed, not submitting any frames"
+                   ],
+    "emulator_errors":  [
+
+                        ]
+}

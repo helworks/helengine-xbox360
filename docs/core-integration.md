@@ -122,6 +122,36 @@ Evidence from `build/logs/core-stability` (65 seconds, one launch):
 The heap counters are identical in all 1,793 sixty-frame reports, so the
 managed frame neither leaks nor grows.
 
+## Byte order
+
+The generated `BinaryReader` and `BinaryWriter` used to assume the CPU
+running the program is little-endian, which is wrong here and wrong
+silently: every multi-byte value they read or wrote came out byte-swapped,
+on this target only. It is fixed in csharpcodegen
+(`runtime/native_endian.hpp`, branch `fix/big-endian-binary-serialization`),
+and `src/demo/endian_test.cpp` checks it on this console before any frame is
+submitted. A failure stops the demo.
+
+Evidence is in `evidence/2026-09-16-core`, from two runs of the same check
+against the same image with only the generated runtime differing:
+
+| Run | `host is big-endian` | big-endian wire | little-endian wire |
+|---|---|---|---|
+| `endian-before-fix` | yes | wrote `04 03 02 01`, expected `01 02 03 04` | wrote `01 02 03 04`, expected `04 03 02 01` |
+| `endian-after-fix` | yes | round trip correct | round trip correct |
+
+## Provenance
+
+The generated core currently comes from two branches, not from the default
+branches of those repositories:
+
+| Repository | Branch | Commit | Why |
+|---|---|---|---|
+| csharpcodegen | `fix/big-endian-binary-serialization` | 8ae4e55 | the byte-order fix above |
+| helengine | `fix/core-draw-without-render-managers` | c0157e99 | `Core.Draw` no longer dereferences a null 3D render manager |
+
+Regenerating from the default branches would reintroduce both problems.
+
 ## Known gaps
 
 - **No content.** `EmptyContentStreamSource` answers every request with
@@ -134,11 +164,7 @@ managed frame neither leaks nor grows.
   report. Wiring them to `mesh.c` and `video.c` is what turns the engine's
   own scene into pixels.
 - **No input or audio backend.** `Initialize` receives null for both.
-- **`BinaryReader::Read<T>` in the generated runtime assumes a
-  little-endian host** (`system/io/binary-reader.cpp`): one branch copies
-  wire bytes straight into the value, the other reverses first, and both are
-  only correct on a little-endian CPU. Nothing reads binary assets yet, so
-  this has not bitten; it must be fixed in csharpcodegen before cooked
-  content is loaded on this target.
+- **Render managers are stubs** (see above): that is the one gap between
+  here and drawing the engine's own scene.
 - The image is 1.1 MiB packed, against 132 KiB before the core was linked
   in.

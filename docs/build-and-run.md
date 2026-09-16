@@ -86,6 +86,9 @@ owned allocation count and bytes, and the guest heap's live allocations and
 bytes (all constant after initialisation: 5 physical allocations and 207
 heap allocations for the cube with the core linked in). The core logs its
 own progress as `HEL core: constructing -> constructed -> initializing ->
-ready`, then the first update and draw. Errors name the stage code
+ready`, then the first update and draw. Before any of that, the guest runs
+two checks that stop the demo on failure: the C++ environment self-test
+(`HEL cxx:`) and the binary byte-order check for this big-endian target
+(`HEL endian:`). Errors name the stage code
 (`src/engine/frame.h`); a frame-limited build ends with `frame loop stopped
 with=00000000` and `allocations after shutdown=00000000`.

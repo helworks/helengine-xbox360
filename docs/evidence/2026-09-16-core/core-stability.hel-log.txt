@@ -1,0 +1,76 @@
+i> F8000008 (DbgPrint) HEL demo: start
+i> F8000008 (DbgPrint) HEL demo: mode=00000002
+i> F8000008 (DbgPrint) HEL platform: tick_frequency=02FAF080
+i> F8000008 (DbgPrint) HEL platform: timebase_now_lo=03C4E82C
+i> F8000008 (DbgPrint) HEL platform: alloc heap virt=BDCA0000 phys=1DCA0000 size=02000000
+i> F8000008 (DbgPrint) HEL heap: bytes=02000000
+i> F8000008 (DbgPrint) HEL heap: usable bytes=01FFFFF0
+i> F8000008 (DbgPrint) HEL cxx: static initialisers=00000004
+i> F8000008 (DbgPrint) HEL cxx: static initialisers complete
+i> F8000008 (DbgPrint) HEL cxx: self-test start
+i> F8000008 (DbgPrint) HEL cxx: static constructor ran=00000001
+i> F8000008 (DbgPrint) HEL cxx: virtual dispatch=00000001
+i> F8000008 (DbgPrint) HEL cxx: new used the guest heap=00000001
+i> F8000008 (DbgPrint) HEL cxx: virtual dispatch on a heap object=00000001
+i> F8000008 (DbgPrint) HEL cxx: delete released=00000001
+i> F8000008 (DbgPrint) HEL cxx: array new=00000001
+i> F8000008 (DbgPrint) HEL cxx: array delete ran destructors=00000001
+i> F8000008 (DbgPrint) HEL cxx: function-local static=00000001
+i> F8000008 (DbgPrint) HEL cxx: 64-bit division=00000001
+i> F8000008 (DbgPrint) HEL cxx: float arithmetic=00000001
+i> F8000008 (DbgPrint) HEL cxx: heap survived the self-test=00000001
+i> F8000008 (DbgPrint) HEL cxx: self-test failures=00000000
+i> F8000008 (DbgPrint) HEL video: mode width=00000500
+i> F8000008 (DbgPrint) HEL video: mode height=000002D0
+i> F8000008 (DbgPrint) HEL video: edram tiles per surface=000002D0
+i> F8000008 (DbgPrint) HEL video: edram tiles total=000005A0
+i> F8000008 (DbgPrint) HEL video: front buffer bytes needed=00398000
+i> F8000008 (DbgPrint) HEL platform: alloc ring virt=BDC90000 phys=1DC90000 size=00010000
+i> F8000008 (DbgPrint) HEL platform: alloc scratch virt=BDC80000 phys=1DC80000 size=00010000
+i> F8000008 (DbgPrint) HEL platform: alloc frontbuffer virt=BD880000 phys=1D880000 size=00400000
+i> F8000008 (DbgPrint) HEL video: ring initialised, bytes=00010000
+i> F8000008 (DbgPrint) HEL video: allocations=00000004
+i> F8000008 (DbgPrint) HEL video: allocated bytes=02420000
+i> F8000008 (DbgPrint) HEL platform: alloc mesh virt=BD870000 phys=1D870000 size=00010000
+i> F8000008 (DbgPrint) HEL mesh: created handle=00000001
+i> F8000008 (DbgPrint) HEL mesh: vertices=00000018
+i> F8000008 (DbgPrint) HEL mesh: indices=00000024
+i> F8000008 (DbgPrint) HEL mesh: vertex data physical=1D870000
+i> F8000008 (DbgPrint) HEL mesh: index data physical=1D870300
+i> F8000008 (DbgPrint) HEL core: constructing
+i> F8000008 (DbgPrint) HEL core: heap allocations before=0000002A
+i> F8000008 (DbgPrint) HEL core: constructed
+i> F8000008 (DbgPrint) HEL core: heap allocations after construction=00000046
+i> F8000008 (DbgPrint) HEL core: initializing
+i> F8000008 (DbgPrint) HEL core: ready
+i> F8000008 (DbgPrint) HEL core: heap allocations after initialize=000000CE
+i> F8000008 (DbgPrint) HEL core: heap bytes after initialize=00005370
+i> F8000008 (DbgPrint) HEL core: first update starting
+i> F8000008 (DbgPrint) HEL core: first update returned
+i> F8000008 (DbgPrint) HEL core: first draw returned
+...
+i> F8000008 (DbgPrint) HEL frame: heap bytes=000053B0
+i> F8000008 (DbgPrint) HEL frame: frames=0001A3C4
+i> F8000008 (DbgPrint) HEL frame: avg cpu us per frame=00000797
+i> F8000008 (DbgPrint) HEL frame: last 60 frames ms=00000074
+i> F8000008 (DbgPrint) HEL frame: presented=0001A3C4
+i> F8000008 (DbgPrint) HEL frame: allocations=00000005
+i> F8000008 (DbgPrint) HEL frame: allocated bytes=02430000
+i> F8000008 (DbgPrint) HEL frame: heap allocations=000000CF
+i> F8000008 (DbgPrint) HEL frame: heap bytes=000053B0
+i> F8000008 (DbgPrint) HEL frame: frames=0001A400
+i> F8000008 (DbgPrint) HEL frame: avg cpu us per frame=00000685
+i> F8000008 (DbgPrint) HEL frame: last 60 frames ms=00000064
+i> F8000008 (DbgPrint) HEL frame: presented=0001A400
+i> F8000008 (DbgPrint) HEL frame: allocations=00000005
+i> F8000008 (DbgPrint) HEL frame: allocated bytes=02430000
+i> F8000008 (DbgPrint) HEL frame: heap allocations=000000CF
+i> F8000008 (DbgPrint) HEL frame: heap bytes=000053B0
+i> F8000008 (DbgPrint) HEL frame: frames=0001A43C
+i> F8000008 (DbgPrint) HEL frame: avg cpu us per frame=000008E2
+i> F8000008 (DbgPrint) HEL frame: last 60 frames ms=00000088
+i> F8000008 (DbgPrint) HEL frame: presented=0001A43C
+i> F8000008 (DbgPrint) HEL frame: allocations=00000005
+i> F8000008 (DbgPrint) HEL frame: allocated bytes=02430000
+i> F8000008 (DbgPrint) HEL frame: heap allocations=000000CF
+i> F8000008 (DbgPrint) HEL frame: heap bytes=000053B0
