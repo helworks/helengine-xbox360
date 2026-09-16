@@ -115,6 +115,13 @@ extern "C" int hel_core_scene_build(void) {
     g_camera_entity->InitChildren();
     g_camera_entity->set_LocalPosition(make_float3(0.0f, 0.0f, 3.0f));
     ::CameraComponent *camera = new ::CameraComponent();
+#if defined(HEL_SCENE_FIELD_OF_VIEW_MILLIRADIANS)
+    /* An authored field of view, to show the renderer reads the camera's
+       value rather than choosing its own. */
+    camera->set_FieldOfView((float)(HEL_SCENE_FIELD_OF_VIEW_MILLIRADIANS) / 1000.0f);
+#endif
+    hel_log_u32("HEL scene: camera field of view milliradians",
+                (unsigned int)(camera->get_FieldOfView() * 1000.0f));
     g_camera_entity->AddComponent(camera);
     g_camera_entity->InitializeHierarchy();
 
@@ -150,8 +157,13 @@ extern "C" void hel_core_scene_update(float elapsed_seconds) {
     }
     /* Spin about +Y at 0.5 rad/s through the engine's own transform, so the
        rotation the renderer draws came from the scene rather than from the
-       backend. */
+       backend. -DHEL_SCENE_SPIN=0 holds it still, which is what the
+       measurement captures use. */
+#if defined(HEL_SCENE_SPIN) && (HEL_SCENE_SPIN == 0)
+    (void)elapsed_seconds;
+#else
     g_angle += elapsed_seconds * 0.5f;
+#endif
     while (g_angle > 6.28318531f) {
         g_angle -= 6.28318531f;
     }

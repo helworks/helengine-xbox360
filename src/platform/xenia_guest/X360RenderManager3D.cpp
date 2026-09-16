@@ -9,12 +9,8 @@
  * projection, and hands the mesh and that matrix to the Xenos backend
  * (mesh.c).
  *
- * Two deliberate simplifications, both visible in the log and both with a
- * clear replacement:
- *
- *   Field of view. The engine's camera exposes near and far planes and a
- *   viewport, but no field of view, so the platform picks one; the Dreamcast
- *   port does the same with a fixed 45 degrees, and this matches it.
+ * One deliberate simplification, visible in the log and with a clear
+ * replacement:
  *
  *   Colour. A model carries positions, normals and texture coordinates but
  *   no vertex colours, and materials are not wired up yet, so each vertex
@@ -29,6 +25,7 @@
 #include "IDrawable3D.hpp"
 #include "IRenderQueue3D.hpp"
 #include "IRenderVisitor3D.hpp"
+#include "CameraProjectionUtils.hpp"
 #include "ModelAsset.hpp"
 #include "ObjectManager.hpp"
 #include "X360EngineMath.hpp"
@@ -43,10 +40,6 @@ void hel_log_u32(const char *label, unsigned int value);
 }
 
 namespace {
-
-/* A vertical field of view is not part of the engine's camera; the platform
-   chooses it. 45 degrees matches the Dreamcast port. */
-constexpr float kVerticalFieldOfView = 0.785398163f;
 
 /* Maps a unit normal to a colour, so each face of a mesh is visibly
    different and a flipped normal shows up as a colour change. */
@@ -220,10 +213,10 @@ void X360RenderManager3D::Draw() {
         }
         ::float4x4 view;
         ::float4x4::Transpose__ref0_out1(inverseTranspose, view);
-        ::float4x4 projection;
-        ::float4x4::CreatePerspectiveFieldOfView__out4(
-            kVerticalFieldOfView, aspect, camera->get_NearPlaneDistance(),
-            camera->get_FarPlaneDistance(), projection);
+        /* The field of view comes from the authored camera, so a scene frames
+           the same way here as on any other platform. */
+        ::float4x4 projection = ::CameraProjectionUtils::CreatePerspectiveProjection(
+            camera, aspect);
 
         /* The backend composes with column vectors, so projection comes
            first; the conversion transposes each engine matrix. */

@@ -25,8 +25,12 @@ the generator assembly is used where it was already built.
 param(
     [string]$Config = "tools/config.local.json",
     [string]$OutputRoot = "build/generated-core",
-    [string]$EngineSourceRoot = "C:/dev/helworks/helengine",
-    [string]$CodegenRoot = "C:/dev/helworks/csharpcodegen",
+    # Worktrees of the shared repositories, pinned to the branches this target
+    # needs (docs/core-integration.md records which). They are used instead of
+    # the shared checkouts so a regeneration here cannot be changed by, or
+    # disturb, another session working in those repositories.
+    [string]$EngineSourceRoot = "C:/dev/helworks/helengine-camera-fov",
+    [string]$CodegenRoot = "C:/dev/helworks/csharpcodegen-x360",
     [switch]$Force
 )
 Set-StrictMode -Version Latest

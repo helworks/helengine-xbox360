@@ -147,10 +147,22 @@ entity's component and child lists must be initialised before `AddComponent`
 is legal, and a component registers itself with the object manager at the
 moment it is added, so the entity must already be enabled by then.
 
+The field of view comes from the camera. It used to be invented by each
+renderer, which meant one authored scene framed differently on every
+platform; it now lives on `CameraComponent`, defaulting to the 45 degrees
+every renderer already used.
+
 Evidence in `evidence/2026-09-16-engine-scene`: one camera, one drawable
 drawn and none skipped, with the heap at 238 allocations and 23,696 bytes in
 every report of the run. The captures show the cube spinning with faces
-coloured from their normals.
+coloured from their normals. Two further captures hold the spin still and
+change only the authored field of view, which is how the renderer is shown
+to read it rather than choose its own:
+
+| Authored field of view | Cube on screen | Predicted |
+|---|---|---|
+| 45 degrees (the default) | 347 x 347 px | 347.7 px |
+| 80 degrees | 171 x 171 px | 171.0 px |
 
 ## Byte order
 
@@ -178,9 +190,14 @@ branches of those repositories:
 | Repository | Branch | Commit | Why |
 |---|---|---|---|
 | csharpcodegen | `fix/big-endian-binary-serialization` | 8ae4e55 | the byte-order fix above |
-| helengine | `fix/core-draw-without-render-managers` | c0157e99 | `Core.Draw` no longer dereferences a null 3D render manager |
+| helengine | `feature/camera-field-of-view` | 9df4b301 | the camera owns its field of view, and `Core.Draw` no longer dereferences a null 3D render manager (that fix is this branch's parent) |
 
-Regenerating from the default branches would reintroduce both problems.
+Regenerating from the default branches would reintroduce all three problems.
+`tools/generate-core.ps1` points at worktrees of those repositories
+(`C:/dev/helworks/csharpcodegen-x360` and
+`C:/dev/helworks/helengine-camera-fov`) rather than the shared checkouts, so
+a regeneration here cannot be changed by, or disturb, another session working
+in them.
 
 ## Known gaps
 
@@ -203,8 +220,5 @@ Regenerating from the default branches would reintroduce both problems.
   engine, and the renderer colours vertices from their normals instead.
   Material colour needs a per-draw constant in the pixel shader.
 - **No input or audio backend.** `Initialize` receives null for both.
-- **Fixed field of view.** The engine's camera carries near and far planes
-  but no field of view, so the renderer picks 45 degrees, as the Dreamcast
-  port does.
 - The image is 1.1 MiB packed, against 132 KiB before the core was linked
   in.
