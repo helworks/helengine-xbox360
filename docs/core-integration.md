@@ -1,10 +1,11 @@
 # Compiling the engine core into the Xbox 360 image
 
-Status: the transpiled engine core boots in the pinned Xenia build. It is
-constructed, initialized and stepped once per frame with its own render
-managers attached. Nothing is drawn through it yet, because no cooked
-content is packaged into the image and the render managers do not reach the
-Xenos backend.
+Status: the transpiled engine core boots in the pinned Xenia build, and a
+scene built with the engine's own types draws through the Xenos backend. A
+camera and a cube entity are created in code, the cube's model is a
+ModelAsset filled in code rather than cooked content, and the renderer draws
+it by walking the engine's cameras and render queues. No cooked content is
+packaged yet, and the 2D manager is still a stub.
 
 ## The pipeline
 
@@ -122,6 +123,35 @@ Evidence from `build/logs/core-stability` (65 seconds, one launch):
 The heap counters are identical in all 1,793 sixty-frame reports, so the
 managed frame neither leaks nor grows.
 
+## Drawing the engine's scene
+
+`X360RenderManager3D` implements the two things the engine needs from a
+platform renderer:
+
+- `BuildModelFromRaw` converts a `ModelAsset` into backend mesh storage.
+  The Dreamcast port refuses this path and requires cooked assets; here it
+  is the path that makes a content-free scene possible.
+- `Draw` walks `ObjectManager`'s cameras, inverts each camera entity's world
+  transform for the view matrix, builds the projection, then visits the
+  camera's render queue and draws each drawable with its entity's world
+  transform.
+
+`src/demo/core_scene.cpp` builds the scene: an entity with a
+`CameraComponent`, and an entity with a `MeshComponent` whose model is a cube
+`ModelAsset` filled in code. It spins the cube through the entity's own
+orientation, so the rotation on screen came from the engine's transform
+rather than from the backend.
+
+Two steps there are easy to miss and cost a crash or an empty queue: an
+entity's component and child lists must be initialised before `AddComponent`
+is legal, and a component registers itself with the object manager at the
+moment it is added, so the entity must already be enabled by then.
+
+Evidence in `evidence/2026-09-16-engine-scene`: one camera, one drawable
+drawn and none skipped, with the heap at 238 allocations and 23,696 bytes in
+every report of the run. The captures show the cube spinning with faces
+coloured from their normals.
+
 ## Byte order
 
 The generated `BinaryReader` and `BinaryWriter` used to assume the CPU
@@ -164,7 +194,17 @@ Regenerating from the default branches would reintroduce both problems.
   report. Wiring them to `mesh.c` and `video.c` is what turns the engine's
   own scene into pixels.
 - **No input or audio backend.** `Initialize` receives null for both.
-- **Render managers are stubs** (see above): that is the one gap between
-  here and drawing the engine's own scene.
+- **No cooked content.** The scene is built in code. Packaging cooked assets
+  with a real scene catalog, as the PS1 and Dreamcast ports do, is the next
+  step.
+- **The 2D manager is still a stub.** Sprites and text report their calls
+  and draw nothing.
+- **No materials.** A drawable with an empty material array is legal in the
+  engine, and the renderer colours vertices from their normals instead.
+  Material colour needs a per-draw constant in the pixel shader.
+- **No input or audio backend.** `Initialize` receives null for both.
+- **Fixed field of view.** The engine's camera carries near and far planes
+  but no field of view, so the renderer picks 45 degrees, as the Dreamcast
+  port does.
 - The image is 1.1 MiB packed, against 132 KiB before the core was linked
   in.

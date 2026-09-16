@@ -58,7 +58,9 @@ $coreSources = @(
     "src/platform/xenia_guest/X360RuntimeProvider.cpp",
     "src/platform/xenia_guest/X360Math.cpp",
     "src/platform/xenia_guest/X360LibcShim.cpp",
+    "src/platform/xenia_guest/X360RenderManager3D.cpp",
     "src/demo/core_boot.cpp",
+    "src/demo/core_scene.cpp",
     "src/demo/endian_test.cpp",
     "src/demo/matrix_test.cpp"
 )

@@ -21,6 +21,9 @@
 #include "PlatformInfo.hpp"
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
+
+#include "../platform/xenia_guest/X360RenderManager3D.hpp"
+#include "core_host.hpp"
 #include "RuntimeSceneCatalog.hpp"
 #include "RuntimeSceneCatalogEntry.hpp"
 #include "runtime/array.hpp"
@@ -30,6 +33,8 @@ void hel_log(const char *message);
 void hel_log_u32(const char *label, unsigned int value);
 unsigned int hel_heap_live_allocations(void);
 unsigned int hel_heap_used_bytes(void);
+unsigned int hel_video_width(void);
+unsigned int hel_video_height(void);
 }
 
 namespace {
@@ -50,26 +55,9 @@ public:
     unsigned int requests = 0;
 };
 
-/* The engine's draw path calls RenderManager3D::Draw unconditionally
-   (Core::MeasureRenderManager3DDrawMilliseconds does not null-check it), so
-   the core needs render managers even before anything is drawn through
-   them. These implement the smallest surface the base classes leave
-   abstract and report the calls they receive; the scene is empty until
-   cooked content is packaged, so nothing else reaches them yet. Replacing
-   the bodies with calls into the Xenos backend (mesh.c, video.c) is the
-   next milestone. */
-class X360RenderManager3D : public ::RenderManager3D {
-public:
-    ::RuntimeModel *BuildModelFromRaw(::ModelAsset *data) override {
-        (void)data;
-        hel_log("HEL core: 3D model requested, no model backend yet");
-        models++;
-        return nullptr;
-    }
-
-    unsigned int models = 0;
-};
-
+/* The 2D manager is still a stub: nothing draws through it yet. The 3D
+   manager is the real one (X360RenderManager3D), which walks the engine's
+   cameras and render queues and draws through the Xenos backend. */
 class X360RenderManager2D : public ::RenderManager2D {
 public:
     ::RuntimeTexture *BuildTextureFromRaw(::TextureAsset *data) override {
@@ -111,7 +99,7 @@ public:
     unsigned int draws2d = 0;
 };
 
-X360RenderManager3D *g_render3d;
+helengine::x360::X360RenderManager3D *g_render3d;
 X360RenderManager2D *g_render2d;
 EmptyContentStreamSource *g_content;
 ::Core *g_core;
@@ -141,34 +129,59 @@ extern "C" int hel_core_boot(void) {
     hel_log("HEL core: initializing");
     /* Render managers are supplied because the engine's draw path requires
        them; there is still no input or audio backend. */
-    g_render3d = new X360RenderManager3D();
+    g_render3d = new helengine::x360::X360RenderManager3D();
+    /* The engine reads the window size from the render manager. */
+    g_render3d->AddWindow(0, (int32_t)hel_video_width(),
+                          (int32_t)hel_video_height());
     g_render2d = new X360RenderManager2D();
     g_core->Initialize(g_render3d, g_render2d, nullptr, g_platform, g_options);
     hel_log("HEL core: ready");
     hel_log_u32("HEL core: heap allocations after initialize",
                 hel_heap_live_allocations());
     hel_log_u32("HEL core: heap bytes after initialize", hel_heap_used_bytes());
+
+    const int sceneError = hel_core_scene_build();
+    if (sceneError != 0) {
+        hel_log_u32("HEL core: scene build failed with",
+                    (unsigned int)sceneError);
+        return sceneError;
+    }
+    hel_log_u32("HEL core: heap allocations after the scene",
+                hel_heap_live_allocations());
     return 0;
 }
 
-extern "C" int hel_core_frame(double elapsed_seconds) {
+::Core *hel_core_instance() { return g_core; }
+
+helengine::x360::X360RenderManager3D *hel_core_render3d() { return g_render3d; }
+
+/* The managed frame is split in two so the engine's draw calls land between
+   the backend's clear and its present. Running Update and Draw together
+   before the frame began would emit geometry that the clear then wipes. */
+extern "C" int hel_core_update(double elapsed_seconds) {
     if (!g_core) {
         return 0;
     }
-    if (g_frames == 0) {
-        hel_log("HEL core: first update starting");
-    }
+    hel_core_scene_update((float)elapsed_seconds);
     g_core->Update(elapsed_seconds);
     if (g_frames == 0) {
         hel_log("HEL core: first update returned");
     }
-    g_core->Draw();
-    if (g_frames == 0) {
-        hel_log("HEL core: first draw returned");
+    return 0;
+}
+
+extern "C" int hel_core_draw(void) {
+    if (!g_core) {
+        return 0;
     }
+    g_core->Draw();
     g_core->CompleteFrameBoundary();
     if (g_frames == 0) {
         hel_log("HEL core: first update and draw complete");
+        hel_log_u32("HEL core: drawables drawn in the first frame",
+                    g_render3d ? g_render3d->lastDrawnCount() : 0u);
+        hel_log_u32("HEL core: drawables skipped in the first frame",
+                    g_render3d ? g_render3d->lastSkippedCount() : 0u);
         hel_log_u32("HEL core: heap allocations after first frame",
                     hel_heap_live_allocations());
     }

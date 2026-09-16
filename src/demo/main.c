@@ -41,7 +41,7 @@ static int core_and_scene_frame(uint32_t frame, void *user) {
         elapsed = (double)(now - g_last_ticks) / (double)frequency;
     }
     g_last_ticks = now;
-    int err = hel_core_frame(elapsed);
+    int err = hel_core_update(elapsed);
     if (!err) {
         err = g_scene_frame(frame, user);
     }
@@ -53,6 +53,12 @@ static int clear_frame(uint32_t frame, void *user) {
     (void)user;
     unsigned phase = (frame / 60u) & 1u;
     int err = hel_frame_begin(phase ? 0.25f : 0.02f, 0.02f, 0.08f, 1.0f);
+#if HEL_CORE_BOOT
+    /* With no scene of its own to draw, this mode shows the engine's. */
+    if (!err) {
+        err = hel_core_draw();
+    }
+#endif
     if (!err) {
         err = hel_frame_present();
     }

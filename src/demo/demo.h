@@ -17,7 +17,11 @@ int hel_demo_cube_frame(uint32_t frame, void *user);
    and initializes the generated Core; hel_core_frame runs one managed frame.
    Both return a HEL_ERR_* code, zero on success. */
 int hel_core_boot(void);
-int hel_core_frame(double elapsed_seconds);
+/* The managed frame is split: the update runs before the backend's frame
+   begins, the draw between hel_frame_begin and hel_frame_present so its
+   geometry survives the clear. */
+int hel_core_update(double elapsed_seconds);
+int hel_core_draw(void);
 uint32_t hel_core_frames(void);
 void hel_core_shutdown(void);
 

@@ -34,6 +34,9 @@ int hel_demo_cube_frame(uint32_t frame, void *user) {
     }
     HelMat4 mvp = hel_cube_mvp(aspect, angle);
     int err = hel_frame_begin(0.02f, 0.02f, 0.08f, 1.0f);
+#if HEL_CORE_BOOT
+    if (!err) err = hel_core_draw();
+#endif
     if (!err) err = hel_draw_unlit(g_cube, &mvp);
     if (!err) err = hel_frame_present();
     return err;
