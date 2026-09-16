@@ -10,6 +10,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct { float m[16]; } HelMat4;           /* column-major */
 typedef struct { float x, y, z, r, g, b, a; } HelVertex;
 typedef uint32_t HelMesh;
@@ -54,5 +58,9 @@ typedef int (*HelFrameFn)(uint32_t frame_index, void *user);
 /* Runs frames until fn returns non-zero or frame_limit frames ran (0 = no
    limit). Logs CPU timing every 60 frames. Returns the first error. */
 int hel_frame_run(HelFrameFn fn, void *user, uint32_t frame_limit);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -28,6 +28,16 @@ _start:
     blr
     .size _start, .-_start
 
+    /* void hel_halt(void): stops after a fatal error. The trailing blr is
+       unreachable but keeps the emulator's function scanner from merging the
+       next function into this one (docs/xenia-compatibility.md section 3). */
+    .globl hel_halt
+    .type hel_halt, @function
+hel_halt:
+1:  b       1b
+    blr
+    .size hel_halt, .-hel_halt
+
     /* void hel_syscall_marker(uint32_t value): `sc` (LEV=0) makes the host log
        "Unhandled syscall <r0>", a kernel-independent execution marker. */
     .globl hel_syscall_marker

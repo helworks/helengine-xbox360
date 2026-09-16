@@ -23,17 +23,27 @@ $outRel = $OutDir.Replace("\", "/")
 & (Join-Path $PSScriptRoot "build-shaders.ps1") -Config $Config | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "shader build failed" }
 
-$cflags = "-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec " +
+# Shared machine/ABI flags. -msdata=none keeps r13 (the KPCR in Xenia)
+# untouched; -mno-eabi drops the EABI helper calls no runtime provides here.
+$common = "-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec " +
           "-mhard-float -mstrict-align -ffreestanding -fno-builtin -nostdlib " +
           "-fno-stack-protector -fno-asynchronous-unwind-tables -fno-pic " +
-          "-fno-common -std=c11 -O2 -Wall -Wextra -Werror -I/work/build/shaders"
-foreach ($d in $Define) { $cflags += " -D$d" }
-
+          "-fno-common -O2 -Wall -Wextra -Werror -I/work/build/shaders"
+foreach ($d in $Define) { $common += " -D$d" }
+$cflags = "$common -std=c11"
+# The transpiled engine core is C++: freestanding, no C++ library, no
+# exceptions or RTTI, no thread-safe static guards (the guest is single
+# threaded). src/platform/xenia_guest/cxx_runtime.cpp supplies what the
+# compiler still emits calls to.
+$cxxflags = "$common -std=c++17 -fno-exceptions -fno-rtti " +
+            "-fno-threadsafe-statics -fno-unwind-tables"
 $sources = @(
     "src/platform/xenia_guest/start.S",
     "src/platform/xenia_guest/imports.S",
     "src/platform/xenia_guest/platform.c",
     "src/platform/xenia_guest/runtime.c",
+    "src/platform/xenia_guest/heap.c",
+    "src/platform/xenia_guest/cxx_runtime.cpp",
     "src/platform/xenia_guest/video.c",
     "src/platform/xenia_guest/shader.c",
     "src/platform/xenia_guest/mesh.c",
@@ -42,6 +52,7 @@ $sources = @(
     "src/demo/triangle.c",
     "src/demo/cube.c",
     "src/demo/cube_demo.c",
+    "src/demo/cxx_selftest.cpp",
     "src/demo/main.c"
 )
 $compileLines = @()
@@ -49,16 +60,21 @@ $objects = @()
 foreach ($s in $sources) {
     $obj = "`$OUT/" + ($s -replace "[/\\]", "_") + ".o"
     $objects += $obj
-    $compileLines += "powerpc-eabi-gcc $cflags -c /work/$s -o $obj"
+    if ($s.EndsWith(".cpp")) {
+        $compileLines += "powerpc-eabi-g++ $cxxflags -c /work/$s -o $obj"
+    } else {
+        $compileLines += "powerpc-eabi-gcc $cflags -c /work/$s -o $obj"
+    }
 }
 $script = @"
 set -euo pipefail
 export PATH=/opt/devkitpro/devkitPPC/bin:`$PATH
 OUT=/work/$outRel
 powerpc-eabi-gcc --version | head -1 > `$OUT/toolchain.txt
+powerpc-eabi-g++ --version | head -1 >> `$OUT/toolchain.txt
 powerpc-eabi-ld --version | head -1 >> `$OUT/toolchain.txt
 $($compileLines -join "`n")
-powerpc-eabi-gcc $cflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') -lgcc
+powerpc-eabi-g++ $cxxflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') -lgcc
 powerpc-eabi-objdump -d `$OUT/helengine.elf > `$OUT/helengine.dis
 powerpc-eabi-nm -n `$OUT/helengine.elf > `$OUT/helengine.nm
 powerpc-eabi-readelf -h -l -S `$OUT/helengine.elf > `$OUT/helengine.readelf.txt
@@ -67,8 +83,17 @@ $scriptPath = Join-Path $out "build.sh"
 [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n"))
 
 $env:MSYS_NO_PATHCONV = "1"
-& docker run --rm -v "${repo}:/work" $cfg.docker_image bash "/work/$outRel/build.sh"
-if ($LASTEXITCODE -ne 0) { throw "docker build step failed with exit code $LASTEXITCODE" }
+# Run through cmd with the output redirected: Windows PowerShell turns any
+# native stderr line into a terminating error under ErrorActionPreference
+# Stop, and the compiler writes warnings there even on a successful build.
+$buildLog = Join-Path $out "build.log"
+& cmd /c "docker run --rm -v ""${repo}:/work"" $($cfg.docker_image) bash ""/work/$outRel/build.sh"" > ""$buildLog"" 2>&1"
+if ($LASTEXITCODE -ne 0) {
+    Get-Content $buildLog | Select-Object -Last 25
+    throw "docker build step failed with exit code $LASTEXITCODE (see $buildLog)"
+}
+$warnings = @(Get-Content $buildLog | Select-String -Pattern "warning:")
+if ($warnings.Count -gt 0) { Write-Host "$($warnings.Count) compiler warning(s); see $buildLog" }
 
 $imports = Join-Path $repo "src/platform/xenia_guest/imports.inc"
 & $cfg.python (Join-Path $repo "tools/xexpack.py") `

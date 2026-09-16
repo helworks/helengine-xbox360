@@ -20,6 +20,9 @@
 #ifndef HEL_DEMO_FRAME_LIMIT
 #define HEL_DEMO_FRAME_LIMIT 0u
 #endif
+#ifndef HEL_HEAP_BYTES
+#define HEL_HEAP_BYTES (32u * 1024u * 1024u)
+#endif
 
 static int clear_frame(uint32_t frame, void *user) {
     (void)user;
@@ -37,6 +40,19 @@ void hel_demo_main(void) {
     int err = hel_platform_init();
     if (err) {
         hel_log_u32("HEL demo: platform init failed", (uint32_t)err);
+        return;
+    }
+    /* The heap comes before the C++ static constructors because a
+       constructor in the transpiled core may allocate. */
+    err = hel_heap_init(HEL_HEAP_BYTES);
+    if (err) {
+        hel_log_u32("HEL demo: heap init failed", (uint32_t)err);
+        return;
+    }
+    hel_cxx_init();
+    if (hel_cxx_selftest() != 0) {
+        hel_log("HEL demo: C++ self-test failed, not submitting any frames");
+        hel_heap_shutdown();
         return;
     }
 #if defined(HEL_DEMO_INVALID_CONFIG)
@@ -67,6 +83,8 @@ void hel_demo_main(void) {
     hel_log_u32("HEL demo: allocations before shutdown",
                 hel_platform_allocation_count());
     hel_video_shutdown();
+    hel_heap_report("HEL demo: heap at shutdown");
+    hel_heap_shutdown();
     hel_log_u32("HEL demo: allocations after shutdown",
                 hel_platform_allocation_count());
 }

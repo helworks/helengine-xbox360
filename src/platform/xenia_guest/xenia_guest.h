@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* A physical-memory block: guest virtual address (0xA0000000 alias, 64 KiB
    pages), physical address for GPU fields, and size in bytes. */
 typedef struct {
@@ -35,7 +39,34 @@ void hel_mesh_release_all(void);
 int hel_shaders_validate(void);
 void hel_shaders_emit(void);
 
+/* General-purpose heap (heap.c): the C++ runtime and the transpiled engine
+   core allocate from here. GPU-visible memory uses hel_phys_alloc instead. */
+int hel_heap_init(uint32_t bytes);
+void *hel_malloc(uint32_t size);
+void *hel_realloc(void *pointer, uint32_t size);
+void hel_free(void *pointer);
+uint32_t hel_heap_used_bytes(void);
+uint32_t hel_heap_peak_bytes(void);
+uint32_t hel_heap_live_allocations(void);
+uint32_t hel_heap_total_allocations(void);
+uint32_t hel_heap_failed_allocations(void);
+void hel_heap_report(const char *label);
+void hel_heap_shutdown(void);
+
+/* C++ runtime support (cxx_runtime.cpp). hel_cxx_init runs the static
+   constructors in .init_array and must run after hel_heap_init. */
+void hel_cxx_init(void);
+uint32_t hel_cxx_static_initialiser_count(void);
+
+/* Stops the guest after a fatal condition: logs nothing itself, spins so the
+   emulator window and log stay inspectable. Never returns (start.S). */
+void hel_halt(void);
+
 /* Demo entry called from start.S. */
 void hel_demo_main(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -29,12 +29,36 @@ SECTIONS
 
   . = ALIGN(HEL_PAGE_SIZE);
 
+  /* Static constructors of the C++ core, run by hel_cxx_init. GCC marks
+     .init_array writable, so it belongs in the writable pages, not with the
+     code: tools/xexpack.py refuses a page that is executable and writable.
+     The image is linked at a fixed base, so the pointers need no relocation. */
+  .init_array : {
+    PROVIDE_HIDDEN(__init_array_start = .);
+    KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+    KEEP(*(.init_array .ctors))
+    PROVIDE_HIDDEN(__init_array_end = .);
+  }
+
+  /* Kept so the layout stays explicit; static destructors never run. */
+  .fini_array : {
+    KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
+    KEEP(*(.fini_array .dtors))
+  }
+
   .data : {
     *(.data .data.*)
+    *(.data.rel.ro .data.rel.ro.*)
+    /* libsupc++'s type-info objects land in .sdata. They are addressed
+       absolutely (no small-data-relative relocations survive the link), so
+       they only need a home, not a small-data base register: r13 stays the
+       KPCR the emulator hands us. */
+    *(.sdata .sdata.*)
     *(.xeximp.var)
   }
 
   .bss : {
+    *(.sbss .sbss.*)
     *(.bss .bss.*)
     *(COMMON)
     . = ALIGN(16);
