@@ -1,0 +1,193 @@
+/*
+ * Boots the transpiled engine core inside the guest.
+ *
+ * This is the Xbox 360 counterpart of the PS1 port's core-boot host: it
+ * constructs the generated Core with an empty scene catalog and no render,
+ * input or audio backends, then runs its frame calls. Nothing the core draws
+ * reaches the screen yet, because the render managers are still null; the
+ * point of this stage is that the engine's own object graph, allocator use
+ * and frame loop run on the console target at all.
+ *
+ * Every step logs a marker so a failure can be placed exactly:
+ *   HEL core: constructing -> constructed -> initializing -> ready
+ * and then per-frame counters from the first update and draw.
+ *
+ * This translation unit is compiled with the core's flags (hosted headers,
+ * C++20), not the guest's freestanding flags; see tools/build.ps1.
+ */
+#include "Core.hpp"
+#include "CoreInitializationOptions.hpp"
+#include "IContentStreamSource.hpp"
+#include "PlatformInfo.hpp"
+#include "RenderManager2D.hpp"
+#include "RenderManager3D.hpp"
+#include "RuntimeSceneCatalog.hpp"
+#include "RuntimeSceneCatalogEntry.hpp"
+#include "runtime/array.hpp"
+
+extern "C" {
+void hel_log(const char *message);
+void hel_log_u32(const char *label, unsigned int value);
+unsigned int hel_heap_live_allocations(void);
+unsigned int hel_heap_used_bytes(void);
+}
+
+namespace {
+
+/* No cooked assets are packaged into the image yet, so every request is
+   reported and answered with "not present". Once content is embedded this
+   becomes the reader over that archive, which is where the PS1 and
+   Dreamcast ports put their own content sources. */
+class EmptyContentStreamSource : public ::IContentStreamSource {
+public:
+    ::Stream *OpenRead(HeCppString assetPath) override {
+        hel_log("HEL core: content requested but none is packaged");
+        hel_log(assetPath.c_str());
+        requests++;
+        return nullptr;
+    }
+
+    unsigned int requests = 0;
+};
+
+/* The engine's draw path calls RenderManager3D::Draw unconditionally
+   (Core::MeasureRenderManager3DDrawMilliseconds does not null-check it), so
+   the core needs render managers even before anything is drawn through
+   them. These implement the smallest surface the base classes leave
+   abstract and report the calls they receive; the scene is empty until
+   cooked content is packaged, so nothing else reaches them yet. Replacing
+   the bodies with calls into the Xenos backend (mesh.c, video.c) is the
+   next milestone. */
+class X360RenderManager3D : public ::RenderManager3D {
+public:
+    ::RuntimeModel *BuildModelFromRaw(::ModelAsset *data) override {
+        (void)data;
+        hel_log("HEL core: 3D model requested, no model backend yet");
+        models++;
+        return nullptr;
+    }
+
+    unsigned int models = 0;
+};
+
+class X360RenderManager2D : public ::RenderManager2D {
+public:
+    ::RuntimeTexture *BuildTextureFromRaw(::TextureAsset *data) override {
+        (void)data;
+        hel_log("HEL core: texture requested, no texture backend yet");
+        textures++;
+        return nullptr;
+    }
+
+    void DrawRoundedRect(::IRoundedRectDrawable2D *shape) override {
+        (void)shape;
+        draws2d++;
+    }
+
+    void DrawSprite(::ISpriteDrawable2D *sprite) override {
+        (void)sprite;
+        draws2d++;
+    }
+
+    void DrawText(::ITextDrawable2D *text) override {
+        (void)text;
+        draws2d++;
+    }
+
+    void UpdateTextureRegionCore(::RuntimeTexture *texture, int32_t x,
+                                 int32_t y, int32_t width, int32_t height,
+                                 Array<uint8_t> *rgba8,
+                                 int32_t sourceRowPitch) override {
+        (void)texture;
+        (void)x;
+        (void)y;
+        (void)width;
+        (void)height;
+        (void)rgba8;
+        (void)sourceRowPitch;
+    }
+
+    unsigned int textures = 0;
+    unsigned int draws2d = 0;
+};
+
+X360RenderManager3D *g_render3d;
+X360RenderManager2D *g_render2d;
+EmptyContentStreamSource *g_content;
+::Core *g_core;
+::PlatformInfo *g_platform;
+::CoreInitializationOptions *g_options;
+unsigned int g_frames;
+
+} // namespace
+
+extern "C" int hel_core_boot(void) {
+    hel_log("HEL core: constructing");
+    hel_log_u32("HEL core: heap allocations before", hel_heap_live_allocations());
+
+    g_options = new ::CoreInitializationOptions();
+    g_content = new EmptyContentStreamSource();
+    g_options->set_ContentStreamSource(g_content);
+    /* An empty catalog: no cooked scenes are packaged into the image yet. */
+    g_options->set_SceneCatalog(
+        new ::RuntimeSceneCatalog(new Array<::RuntimeSceneCatalogEntry *>(0)));
+    g_platform = new ::PlatformInfo(HeCppString("xbox360"),
+                                    HeCppString("core-boot"));
+    g_core = new ::Core(g_options);
+    hel_log("HEL core: constructed");
+    hel_log_u32("HEL core: heap allocations after construction",
+                hel_heap_live_allocations());
+
+    hel_log("HEL core: initializing");
+    /* Render managers are supplied because the engine's draw path requires
+       them; there is still no input or audio backend. */
+    g_render3d = new X360RenderManager3D();
+    g_render2d = new X360RenderManager2D();
+    g_core->Initialize(g_render3d, g_render2d, nullptr, g_platform, g_options);
+    hel_log("HEL core: ready");
+    hel_log_u32("HEL core: heap allocations after initialize",
+                hel_heap_live_allocations());
+    hel_log_u32("HEL core: heap bytes after initialize", hel_heap_used_bytes());
+    return 0;
+}
+
+extern "C" int hel_core_frame(double elapsed_seconds) {
+    if (!g_core) {
+        return 0;
+    }
+    if (g_frames == 0) {
+        hel_log("HEL core: first update starting");
+    }
+    g_core->Update(elapsed_seconds);
+    if (g_frames == 0) {
+        hel_log("HEL core: first update returned");
+    }
+    g_core->Draw();
+    if (g_frames == 0) {
+        hel_log("HEL core: first draw returned");
+    }
+    g_core->CompleteFrameBoundary();
+    if (g_frames == 0) {
+        hel_log("HEL core: first update and draw complete");
+        hel_log_u32("HEL core: heap allocations after first frame",
+                    hel_heap_live_allocations());
+    }
+    g_frames++;
+    return 0;
+}
+
+extern "C" unsigned int hel_core_frames(void) { return g_frames; }
+
+extern "C" void hel_core_shutdown(void) {
+    if (!g_core) {
+        return;
+    }
+    hel_log_u32("HEL core: frames run", g_frames);
+    hel_log_u32("HEL core: content requests", g_content ? g_content->requests : 0u);
+    hel_log_u32("HEL core: 2D draw calls", g_render2d ? g_render2d->draws2d : 0u);
+    g_core->Dispose();
+    g_core = nullptr;
+    hel_log("HEL core: disposed");
+    hel_log_u32("HEL core: heap allocations after dispose",
+                hel_heap_live_allocations());
+}

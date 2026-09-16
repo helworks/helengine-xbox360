@@ -11,6 +11,8 @@ HEL_DEMO_INVALID_CONFIG=1. Every step checks its exit code.
 param(
     [string]$Config = "tools/config.local.json",
     [string]$OutDir = "build/xenia",
+    [string]$CoreGenerated = "build/generated-core/generated",
+    [string]$CoreLib = "build/core/libhelcore.a",
     [string[]]$Define = @()
 )
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,11 @@ $cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
 $out = Join-Path $repo $OutDir
 New-Item -ItemType Directory -Force $out | Out-Null
 $outRel = $OutDir.Replace("\", "/")
+$coreGenRel = $CoreGenerated.Replace("\", "/")
+$coreLibRel = $CoreLib.Replace("\", "/")
+if (-not (Test-Path (Join-Path $repo $CoreLib))) {
+    throw "No core archive at $CoreLib. Run tools/build-core.ps1 first."
+}
 
 & (Join-Path $PSScriptRoot "build-shaders.ps1") -Config $Config | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "shader build failed" }
@@ -37,6 +44,22 @@ $cflags = "$common -std=c11"
 # compiler still emits calls to.
 $cxxflags = "$common -std=c++17 -fno-exceptions -fno-rtti " +
             "-fno-threadsafe-statics -fno-unwind-tables"
+# Sources that include the transpiled core or its runtime need the hosted
+# libstdc++ headers (the generated runtime includes <functional> and <memory>
+# unconditionally) and C++20, which is what the generator emits. They are
+# still linked into the same freestanding image; see build-core.ps1 and
+# src/platform/xenia_guest/X360RuntimeProvider.hpp.
+$coreCxxflags = (($common -replace " -ffreestanding", "") -replace " -Werror", "") +
+                " -std=c++20 -fno-exceptions -frtti -fno-threadsafe-statics " +
+                "-fno-unwind-tables -I/work/$coreGenRel -I/work/src/platform/xenia_guest"
+
+# Compiled against the generated core (hosted headers, C++20).
+$coreSources = @(
+    "src/platform/xenia_guest/X360RuntimeProvider.cpp",
+    "src/platform/xenia_guest/X360Math.cpp",
+    "src/platform/xenia_guest/X360LibcShim.cpp",
+    "src/demo/core_boot.cpp"
+)
 $sources = @(
     "src/platform/xenia_guest/start.S",
     "src/platform/xenia_guest/imports.S",
@@ -57,10 +80,12 @@ $sources = @(
 )
 $compileLines = @()
 $objects = @()
-foreach ($s in $sources) {
+foreach ($s in ($sources + $coreSources)) {
     $obj = "`$OUT/" + ($s -replace "[/\\]", "_") + ".o"
     $objects += $obj
-    if ($s.EndsWith(".cpp")) {
+    if ($coreSources -contains $s) {
+        $compileLines += "powerpc-eabi-g++ $coreCxxflags -c /work/$s -o $obj"
+    } elseif ($s.EndsWith(".cpp")) {
         $compileLines += "powerpc-eabi-g++ $cxxflags -c /work/$s -o $obj"
     } else {
         $compileLines += "powerpc-eabi-gcc $cflags -c /work/$s -o $obj"
@@ -74,7 +99,7 @@ powerpc-eabi-gcc --version | head -1 > `$OUT/toolchain.txt
 powerpc-eabi-g++ --version | head -1 >> `$OUT/toolchain.txt
 powerpc-eabi-ld --version | head -1 >> `$OUT/toolchain.txt
 $($compileLines -join "`n")
-powerpc-eabi-g++ $cxxflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') -lgcc
+powerpc-eabi-g++ $cxxflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') /work/$coreLibRel -lstdc++ -lsupc++ -lm -lgcc
 powerpc-eabi-objdump -d `$OUT/helengine.elf > `$OUT/helengine.dis
 powerpc-eabi-nm -n `$OUT/helengine.elf > `$OUT/helengine.nm
 powerpc-eabi-readelf -h -l -S `$OUT/helengine.elf > `$OUT/helengine.readelf.txt

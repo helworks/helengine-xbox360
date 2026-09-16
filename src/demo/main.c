@@ -20,8 +20,33 @@
 #ifndef HEL_DEMO_FRAME_LIMIT
 #define HEL_DEMO_FRAME_LIMIT 0u
 #endif
+#ifndef HEL_CORE_BOOT
+#define HEL_CORE_BOOT 1
+#endif
 #ifndef HEL_HEAP_BYTES
 #define HEL_HEAP_BYTES (32u * 1024u * 1024u)
+#endif
+
+#if HEL_CORE_BOOT
+/* Runs one managed frame before the scene's own frame, so the generated
+   core advances on the console's clock while the backend keeps drawing. */
+static HelFrameFn g_scene_frame;
+static uint64_t g_last_ticks;
+
+static int core_and_scene_frame(uint32_t frame, void *user) {
+    uint64_t now = hel_ticks();
+    uint64_t frequency = hel_tick_frequency();
+    double elapsed = 0.0;
+    if (g_last_ticks != 0 && frequency != 0) {
+        elapsed = (double)(now - g_last_ticks) / (double)frequency;
+    }
+    g_last_ticks = now;
+    int err = hel_core_frame(elapsed);
+    if (!err) {
+        err = g_scene_frame(frame, user);
+    }
+    return err;
+}
 #endif
 
 static int clear_frame(uint32_t frame, void *user) {
@@ -78,8 +103,22 @@ void hel_demo_main(void) {
         hel_video_shutdown();
         return;
     }
+#if HEL_CORE_BOOT
+    err = hel_core_boot();
+    if (err) {
+        hel_log_u32("HEL demo: core boot failed", (uint32_t)err);
+        hel_video_shutdown();
+        hel_heap_shutdown();
+        return;
+    }
+    g_scene_frame = frame;
+    frame = core_and_scene_frame;
+#endif
     err = hel_frame_run(frame, 0, HEL_DEMO_FRAME_LIMIT);
     hel_log_u32("HEL demo: frame loop stopped with", (uint32_t)err);
+#if HEL_CORE_BOOT
+    hel_core_shutdown();
+#endif
     hel_log_u32("HEL demo: allocations before shutdown",
                 hel_platform_allocation_count());
     hel_video_shutdown();

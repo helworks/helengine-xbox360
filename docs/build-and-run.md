@@ -5,7 +5,15 @@ Windows PowerShell, the pinned Xenia Canary build, and
 `tools/config.local.json` copied from `tools/config.example.json` with local
 paths. Pinned revisions and hashes are in `xenia-compatibility.md`.
 
+The engine core is transpiled from C# and linked into the image; see
+`core-integration.md`. `tools/build.ps1` needs its archive, so a fresh
+checkout runs the first two commands once:
+
 ```powershell
+# C# core -> C++ (build/generated-core) -> PowerPC archive (build/core)
+./tools/generate-core.ps1 -Config tools/config.local.json
+./tools/build-core.ps1 -Config tools/config.local.json
+
 # Engine image -> build/xenia/helengine.{elf,xex,map,dis,nm,readelf.txt,xex.json,hashes.txt}
 ./tools/build.ps1 -Config tools/config.local.json
 
@@ -24,6 +32,9 @@ paths. Pinned revisions and hashes are in `xenia-compatibility.md`.
 
 # Failure-path build (unsupported video mode requested by the demo)
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-invalid -Define HEL_DEMO_INVALID_CONFIG=1
+
+# Without the transpiled core (backend and demo only)
+./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-nocore -Define HEL_CORE_BOOT=0
 
 # Teardown check: stop after 120 frames, shut video down, log allocations left
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-cube-limit -Define HEL_DEMO_MODE=2,HEL_DEMO_FRAME_LIMIT=120
@@ -71,7 +82,10 @@ address and size, the selected video mode and EDRAM tile budget, ring
 initialization, `first present complete` with the first frame's ring size
 and GPU wait, then every 60 frames the frame count, average CPU microseconds
 per frame, the wall time of the last 60 frames, presented frames and the
-owned allocation count and bytes (constant after initialisation: 4
-allocations, 0x430000 bytes for the cube). Errors name the stage code
+owned allocation count and bytes, and the guest heap's live allocations and
+bytes (all constant after initialisation: 5 physical allocations and 207
+heap allocations for the cube with the core linked in). The core logs its
+own progress as `HEL core: constructing -> constructed -> initializing ->
+ready`, then the first update and draw. Errors name the stage code
 (`src/engine/frame.h`); a frame-limited build ends with `frame loop stopped
 with=00000000` and `allocations after shutdown=00000000`.

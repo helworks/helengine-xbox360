@@ -30,6 +30,11 @@ int hel_frame_run(HelFrameFn fn, void *user, uint32_t frame_limit) {
             hel_log_u32("HEL frame: presented", hel_frame_count());
             hel_log_u32("HEL frame: allocations", hel_platform_allocation_count());
             hel_log_u32("HEL frame: allocated bytes", hel_platform_allocated_bytes());
+            /* Heap counters too: the transpiled core allocates from the heap,
+               so a managed leak shows up here rather than in the physical
+               allocation count. */
+            hel_log_u32("HEL frame: heap allocations", hel_heap_live_allocations());
+            hel_log_u32("HEL frame: heap bytes", hel_heap_used_bytes());
             window_start = now;
             cpu_ticks = 0;
         }

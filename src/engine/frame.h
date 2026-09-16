@@ -41,6 +41,9 @@ void hel_log_u32(const char *label, uint32_t value); /* prints label=hex */
 /* Owned physical allocations (count and bytes) still held by the backend. */
 uint32_t hel_platform_allocation_count(void);
 uint32_t hel_platform_allocated_bytes(void);
+/* Guest heap (heap.c): where the transpiled core's allocations land. */
+uint32_t hel_heap_live_allocations(void);
+uint32_t hel_heap_used_bytes(void);
 
 /* Video */
 int hel_video_init(const HelVideoConfig *config);
