@@ -131,11 +131,12 @@ Clear: the resolve draw can clear the EDRAM region it copies.
 `RB_COPY_CONTROL` (0x2318) bits `color_clear_enable` (8) and
 `depth_clear_enable` (9) with `RB_COLOR_CLEAR` (0x231E, packed 8_8_8_8) and
 `RB_DEPTH_CLEAR` (0x231D) apply after the copy (`gpu/draw_util.cc:986-1330`
-reads them into the resolve info). **Hypothesis:** frame = resolve-with-clear
-(sets EDRAM to the clear color; its copy output is discarded) then a second
-resolve without clear into the front buffer, then `VdSwap`. Once shaders
-exist, the clear becomes a full-screen draw and only the second resolve
-remains.
+reads them into the resolve info). **Verified (Tasks 1-3):** frame =
+resolve-with-clear (sets EDRAM color and depth to the clear values; its copy
+output is discarded) then the draws, then a resolve without clear into the
+front buffer, then `VdSwap`. The clear-through-resolve path works in the
+emulator, so no full-screen clear draw was needed; `hel_frame_begin` keeps
+it (`src/platform/xenia_guest/video.c`).
 
 Resolve draw requirements (`draw_util.cc:986-1130`, `d3d12/d3d12_command_processor.cc:2609-2613`):
 
@@ -171,7 +172,9 @@ Verification: run with `--dump_shaders=<dir>` so the emulator writes each
 loaded microcode blob and its own disassembly; the disassembly must match the
 intended program before the draw is trusted.
 
-Binding facts for the unlit pipeline (**hypothesis** until the triangle draws):
+Binding facts for the unlit pipeline (**verified** by the triangle and the
+cube, `evidence/2026-09-15-triangle` and `evidence/2026-09-15-cube`; the
+emulator's own disassembly of the loaded microcode matches the sources):
 
 - Vertex fetch: `vfetch_full` from fetch constant 0, stride in dwords,
   `k_32_32_32_FLOAT` position then `k_32_32_32_32_FLOAT` color at dword offset 3
@@ -183,14 +186,27 @@ Binding facts for the unlit pipeline (**hypothesis** until the triangle draws):
   `vs_export_count` = interpolators-1, `vs_export_mode = 0`.
 - Exports: vertex position `62`, interpolator `0`; pixel color `0`
   (`ucode.h:1792-1851`).
-- Draw state: `PA_CL_VTE_CNTL` (0x2206) all six enables set with
-  `PA_CL_VPORT_*` (0x210F-0x2114) = `xscale 640, xoffset 640, yscale -360,
-  yoffset 360, zscale 1, zoffset 0`; `PA_CL_CLIP_CNTL` (0x2204) = 0 (clip on,
-  Direct3D 0..w depth); `PA_SU_SC_MODE_CNTL` (0x2205) culling bits 0-1 and
-  `face` bit 2; `RB_DEPTHCONTROL` (0x2200) `z_enable|z_write_enable|zfunc`;
-  `RB_COLOR_MASK` (0x2104) = 0xF; `RB_BLENDCONTROL0` (0x2201) = 0 (copy);
+- Draw state: `PA_CL_VTE_CNTL` (0x2206) = 0x43F: all six enables plus
+  `vtx_w0_fmt` (bit 10, "W is not 1/W"; without it the emulator takes the
+  reciprocal of the exported W, `d3d12_command_processor.cc:4116-4126`, and
+  any vertex with W != 1 is clipped away), with `PA_CL_VPORT_*`
+  (0x210F-0x2114) = `xscale 640, xoffset 640, yscale -360, yoffset 360,
+  zscale 1, zoffset 0`; `PA_CL_CLIP_CNTL` (0x2204) = `dx_clip_space_def`
+  (bit 19: clip on, Direct3D 0..w depth); `PA_SU_SC_MODE_CNTL` (0x2205)
+  culling bits 0-1 and `face` bit 2; `RB_DEPTHCONTROL` (0x2200)
+  `z_enable|z_write_enable|zfunc`;
+  `RB_COLOR_MASK` (0x2104) = 0xF; `RB_BLENDCONTROL0` (0x2201) = 0x00010001
+  (`src = one, dst = zero` for color and alpha, i.e. copy);
   `VGT_MAX_VTX_INDX` (0x2100) = 0xFFFFFF, `VGT_MIN_VTX_INDX` (0x2101) = 0,
   `VGT_INDX_OFFSET` (0x2102) = 0, `VGT_OUTPUT_PATH_CNTL` (0x2284) = 0.
+- Winding and depth (cube evidence): with `PA_SU_SC_MODE_CNTL = 0x2`
+  (`cull_back`, `face = 0`) and the cube's faces wound counter-clockwise as
+  seen from outside, the outside faces survive, so counter-clockwise is the
+  front face under this viewport (`yscale < 0`). `RB_DEPTHCONTROL = 0x16`
+  (`z_enable`, `z_write_enable`, `zfunc = less`) with the resolve depth
+  clear of 1.0 orders faces correctly: the `HEL_CULL_MODE=0` build (no
+  culling) renders pixel-identical to the culled build at pi/4
+  (`cube-a1-nocull-capture-0.png` vs `cube-a1-capture-0.png`).
 
 ## 7. Synchronization and ownership
 
@@ -216,11 +232,15 @@ ignored; `mftb` frequency equals the host tick frequency. The real console
 also enforces XEX signing and a different `VdSwap` implementation; those are
 the follow-up hardware milestone's concern.
 
-## 9. Smallest next experiment
+## 9. Status and next experiment
 
-Rendering plan Task 1: allocate ring (64 KiB), front buffer (3,686,400 bytes
-in 64 KiB pages), fetch/scratch dwords; initialise the ring; per frame emit
-the section 5 register set, a resolve-with-clear, a resolve to the front
-buffer, `VdSwap`, an `EVENT_WRITE_SHD` fence; kick; wait for the fence. Pass
-criteria are the two clear colors alternating in the emulator window across
-five launches, with the log showing initialization and first presentation.
+Rendering plan Tasks 1-3 exercised every section above in the pinned
+emulator: clear/present (`evidence/2026-09-15-clear`), unlit triangle
+(`evidence/2026-09-15-triangle`) and the depth-tested rotating cube
+(`evidence/2026-09-15-cube`: fixed angles 0, pi/4, pi/2, pi show blue,
+cyan+blue, cyan and yellow faces; the no-cull build is pixel-identical).
+Deviations from the first draft of this contract: ELF loading is blocked
+(section 1), `PA_CL_VTE_CNTL` needs `vtx_w0_fmt` (section 6) and
+`RB_BLENDCONTROL0` is written as one/zero rather than 0. Next: Task 4
+stability and reproducibility (five launches, ten-minute run, allocation
+counters), then the hardware follow-up in the rendering plan.

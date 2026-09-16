@@ -13,6 +13,8 @@ paths. Pinned revisions and hashes are in `xenia-compatibility.md`.
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-triangle -Define HEL_DEMO_MODE=1
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-cube -Define HEL_DEMO_MODE=2
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-cube-a2 -Define HEL_DEMO_MODE=2,HEL_DEMO_FIXED_ANGLE=2
+# Culling override (PA_SU_SC_MODE_CNTL bits): 0 none, 1 cull front, 2 cull back (default)
+./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-cube-a1-nocull -Define HEL_DEMO_MODE=2,HEL_DEMO_FIXED_ANGLE=1,HEL_CULL_MODE=0
 
 # Shaders only (also run by build.ps1): shaders/*.xasm -> build/shaders
 ./tools/build-shaders.ps1 -Config tools/config.local.json

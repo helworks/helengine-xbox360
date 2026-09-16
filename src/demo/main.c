@@ -48,6 +48,9 @@ void hel_demo_main(void) {
 #if HEL_DEMO_MODE == HEL_DEMO_MODE_TRIANGLE
     err = hel_demo_triangle_init();
     frame = hel_demo_triangle_frame;
+#elif HEL_DEMO_MODE == HEL_DEMO_MODE_CUBE
+    err = hel_demo_cube_init();
+    frame = hel_demo_cube_frame;
 #endif
     if (err) {
         hel_log_u32("HEL demo: scene init failed", (uint32_t)err);

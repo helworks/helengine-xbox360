@@ -18,6 +18,9 @@
 #define HEL_MAX_VERTICES 4096u
 #define HEL_MAX_INDICES 65535u
 #define HEL_VERTEX_DWORDS 7u
+#ifndef HEL_CULL_MODE
+#define HEL_CULL_MODE (1u << 1) /* cull back faces, CCW front */
+#endif
 
 typedef struct {
     HelPhysBlock block;
@@ -123,9 +126,14 @@ int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp) {
     hel_ring_put(float_bits((float)height * 0.5f));
     hel_ring_put(float_bits(1.0f));
     hel_ring_put(float_bits(0.0f));
-    hel_ring_reg(XE_GPU_REG_PA_CL_VTE_CNTL, 0x3Fu);
+    /* All six viewport scale/offset enables plus VTX_W0_FMT (bit 10): the
+       exported W is a true W, not 1/W. Without that bit the emulator applies
+       a reciprocal and every position with W != 1 leaves the frustum. */
+    hel_ring_reg(XE_GPU_REG_PA_CL_VTE_CNTL, 0x3Fu | (1u << 10));
     hel_ring_reg(XE_GPU_REG_PA_CL_CLIP_CNTL, 1u << 19); /* dx_clip_space_def */
-    hel_ring_reg(XE_GPU_REG_PA_SU_SC_MODE_CNTL, 0u);    /* no culling yet */
+    /* Back-face culling with counter-clockwise front faces (face bit = 0);
+       the cube's fixed-angle captures verify the winding convention. */
+    hel_ring_reg(XE_GPU_REG_PA_SU_SC_MODE_CNTL, HEL_CULL_MODE);
     hel_ring_reg(XE_GPU_REG_PA_SC_AA_CONFIG, 0u);
     hel_ring_reg(XE_GPU_REG_PA_SC_AA_MASK, 0xFFFFu);
     /* Depth test less, depth writes on; no stencil, no alpha test, no blend. */

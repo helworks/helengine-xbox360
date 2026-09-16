@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Builds and runs the host tests: engine math and the shader
+Builds and runs the host tests: engine math, cube geometry, and the shader
 assembler encoding tests. Uses the host C compiler on PATH (gcc) for the C
 tests; the engine sources are compiled unchanged.
 #>
@@ -17,7 +17,8 @@ $gcc = (Get-Command gcc -ErrorAction Stop).Source
 $failed = 0
 
 foreach ($t in @(
-    @{ name = "math_test"; sources = @("tests/math_test.c", "src/engine/math.c") }
+    @{ name = "math_test"; sources = @("tests/math_test.c", "src/engine/math.c") },
+    @{ name = "cube_test"; sources = @("tests/cube_test.c", "src/engine/math.c", "src/demo/cube.c") }
 )) {
     $exe = Join-Path $out "$($t.name).exe"
     $srcs = $t.sources | ForEach-Object { Join-Path $repo $_ }
