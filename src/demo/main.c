@@ -4,7 +4,9 @@
  * HEL_DEMO_MODE selects the diagnostic: 0 alternates two clear colours every
  * 60 submitted frames, 1 draws the static unlit triangle, 2 the rotating
  * cube. Building with -DHEL_DEMO_INVALID_CONFIG=1 requests an unsupported
- * video mode to exercise the failure path (diagnostic logged, no submission).
+ * video mode to exercise the failure path (diagnostic logged, no submission);
+ * -DHEL_DEMO_FRAME_LIMIT=<n> stops after n frames and shuts video down so the
+ * teardown path can be checked (default 0 = run until the emulator closes).
  */
 #include <stdint.h>
 
@@ -14,6 +16,9 @@
 
 #ifndef HEL_DEMO_MODE
 #define HEL_DEMO_MODE HEL_DEMO_MODE_CLEAR
+#endif
+#ifndef HEL_DEMO_FRAME_LIMIT
+#define HEL_DEMO_FRAME_LIMIT 0u
 #endif
 
 static int clear_frame(uint32_t frame, void *user) {
@@ -57,7 +62,11 @@ void hel_demo_main(void) {
         hel_video_shutdown();
         return;
     }
-    err = hel_frame_run(frame, 0, 0);
+    err = hel_frame_run(frame, 0, HEL_DEMO_FRAME_LIMIT);
     hel_log_u32("HEL demo: frame loop stopped with", (uint32_t)err);
+    hel_log_u32("HEL demo: allocations before shutdown",
+                hel_platform_allocation_count());
     hel_video_shutdown();
+    hel_log_u32("HEL demo: allocations after shutdown",
+                hel_platform_allocation_count());
 }

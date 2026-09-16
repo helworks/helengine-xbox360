@@ -39,3 +39,15 @@ modified = false
 redistributed = false
 platform = "host"
 review_status = "approved"
+
+[[dependency]]
+name = "WinLibs GCC (MinGW-W64, host)"
+role = "host C compiler for tests/*.c only (tools/test-host.ps1); never builds guest code"
+version = "GCC 16.1.0 (x86_64-ucrt-mcf-seh, WinLibs r1)"
+source = "https://winlibs.com/"
+spdx = "GPL-3.0-or-later WITH GCC-exception-3.1"
+modified = false
+redistributed = false
+platform = "host"
+review_status = "approved"
+notes = "Used to compile the engine's math and cube sources natively for unit tests. Any C11 compiler on PATH as gcc would do; nothing from it ships in the guest image."

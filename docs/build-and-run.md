@@ -25,6 +25,9 @@ paths. Pinned revisions and hashes are in `xenia-compatibility.md`.
 # Failure-path build (unsupported video mode requested by the demo)
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-invalid -Define HEL_DEMO_INVALID_CONFIG=1
 
+# Teardown check: stop after 120 frames, shut video down, log allocations left
+./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-cube-limit -Define HEL_DEMO_MODE=2,HEL_DEMO_FRAME_LIMIT=120
+
 # Launch for 30 s, log to build/logs/<run>/xenia.log, evaluate markers
 ./tools/run.ps1 -Config tools/config.local.json -TimeoutSeconds 30 -RunName clear-1
 ./tools/run.ps1 -Config tools/config.local.json -Target build/xenia-invalid/helengine.xex -ExpectFailure
@@ -44,7 +47,16 @@ Window captures: `./tools/run.ps1 ... -CaptureCount 4 -CaptureAfterMs 7000
 -CaptureIntervalMs 800` saves `capture-N.png` of the emulator window's client
 area and records the average colour of its central region in
 `captures.json`; the images are the visual evidence, the averages the quick
-check.
+check. `./tools/capture-pixels.ps1 -Image <png> -Points "560,360","720,360"`
+reads individual pixels, `-Compare <png>` counts differing pixels between two
+captures and `-Background "10,10"` prints the bounding box of everything that
+differs from the pixel at that position (face size and aspect checks).
+
+A long run is a short `-TimeoutSeconds` after late captures, because the
+launcher waits for the timeout only after the last capture:
+`./tools/run.ps1 -Target build/xenia-cube/helengine.xex -TimeoutSeconds 5
+-CaptureCount 2 -CaptureAfterMs 5000 -CaptureIntervalMs 590000` runs ten
+minutes with captures at 5 s and 595 s.
 
 Useful emulator flags for diagnosis (append with `-ExtraArgs`):
 `--log_level=3` (debug log), `--dump_shaders=<dir>` (microcode and
@@ -58,5 +70,8 @@ init and tick frequency, every physical allocation with virtual/physical
 address and size, the selected video mode and EDRAM tile budget, ring
 initialization, `first present complete` with the first frame's ring size
 and GPU wait, then every 60 frames the frame count, average CPU microseconds
-per frame and the wall time of the last 60 frames. Errors name the stage
-code (`src/engine/frame.h`).
+per frame, the wall time of the last 60 frames, presented frames and the
+owned allocation count and bytes (constant after initialisation: 4
+allocations, 0x430000 bytes for the cube). Errors name the stage code
+(`src/engine/frame.h`); a frame-limited build ends with `frame loop stopped
+with=00000000` and `allocations after shutdown=00000000`.

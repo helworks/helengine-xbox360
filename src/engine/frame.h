@@ -34,6 +34,9 @@ uint64_t hel_ticks(void);
 uint64_t hel_tick_frequency(void);
 void hel_log(const char *message);
 void hel_log_u32(const char *label, uint32_t value); /* prints label=hex */
+/* Owned physical allocations (count and bytes) still held by the backend. */
+uint32_t hel_platform_allocation_count(void);
+uint32_t hel_platform_allocated_bytes(void);
 
 /* Video */
 int hel_video_init(const HelVideoConfig *config);

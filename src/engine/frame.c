@@ -1,6 +1,8 @@
 /*
  * Frame lifecycle: runs the demo's frame function, counts frames, measures
- * CPU time per frame (submission side only) and stops on the first error.
+ * CPU time per frame (submission side only), reports the backend's owned
+ * allocations so a long run exposes growth, and stops on the first error.
+ * Logging uses fixed buffers in the platform layer; it allocates nothing.
  */
 #include "frame.h"
 
@@ -26,6 +28,8 @@ int hel_frame_run(HelFrameFn fn, void *user, uint32_t frame_limit) {
             hel_log_u32("HEL frame: avg cpu us per frame", cpu_us);
             hel_log_u32("HEL frame: last 60 frames ms", window_ms);
             hel_log_u32("HEL frame: presented", hel_frame_count());
+            hel_log_u32("HEL frame: allocations", hel_platform_allocation_count());
+            hel_log_u32("HEL frame: allocated bytes", hel_platform_allocated_bytes());
             window_start = now;
             cpu_ticks = 0;
         }
