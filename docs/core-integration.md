@@ -211,6 +211,9 @@ live build input for several ports, so whichever branch one of them happens
 to sit on is what anyone building from it compiles. Reading from a worktree
 means a regeneration here cannot be changed by, or disturb, another session.
 
+The gaps below are listed in priority order, with what closing them buys, in
+`next-steps.md`.
+
 ## Known gaps
 
 - **No content.** `EmptyContentStreamSource` answers every request with
