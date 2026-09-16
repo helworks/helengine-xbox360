@@ -149,8 +149,11 @@ moment it is added, so the entity must already be enabled by then.
 
 The field of view comes from the camera. It used to be invented by each
 renderer, which meant one authored scene framed differently on every
-platform; it now lives on `CameraComponent`, defaulting to the 45 degrees
-every renderer already used.
+platform; it now lives on `CameraComponent`. The default is 45 degrees,
+which leaves DirectX11, Vulkan, Dreamcast and this target unchanged.
+PlayStation 1 used 60 degrees and did reframe when it adopted the authored
+value, so the change was not a no-op everywhere, which is what an earlier
+version of this note wrongly claimed.
 
 Evidence in `evidence/2026-09-16-engine-scene`: one camera, one drawable
 drawn and none skipped, with the heap at 238 allocations and 23,696 bytes in
