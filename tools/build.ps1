@@ -33,6 +33,7 @@ $sources = @(
     "src/platform/xenia_guest/start.S",
     "src/platform/xenia_guest/imports.S",
     "src/platform/xenia_guest/platform.c",
+    "src/platform/xenia_guest/runtime.c",
     "src/platform/xenia_guest/video.c",
     "src/platform/xenia_guest/shader.c",
     "src/platform/xenia_guest/mesh.c",
