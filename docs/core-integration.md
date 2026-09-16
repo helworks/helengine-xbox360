@@ -169,10 +169,17 @@ to read it rather than choose its own:
 The generated `BinaryReader` and `BinaryWriter` used to assume the CPU
 running the program is little-endian, which is wrong here and wrong
 silently: every multi-byte value they read or wrote came out byte-swapped,
-on this target only. It is fixed in csharpcodegen
-(`runtime/native_endian.hpp`, branch `fix/big-endian-binary-serialization`),
-and `src/demo/endian_test.cpp` checks it on this console before any frame is
+on this target only. It is fixed in csharpcodegen (`runtime/native_endian.hpp`), and
+`src/demo/endian_test.cpp` checks it on this console before any frame is
 submitted. A failure stops the demo.
+
+One thing that header must not do, and briefly did: equate the platform's
+declared endianness with the CPU's. `HE_CPP_PLATFORM_IS_LITTLE_ENDIAN` comes
+from `PlatformSerializationEndianness` and describes cooked data, not the
+processor. The Nintendo 64 is a big-endian target that declares
+little-endian serialization, which is legitimate, so an assert tying the two
+together would have failed that build for no reason. The host order now
+comes only from the compiler.
 
 Evidence is in `evidence/2026-09-16-core`, from two runs of the same check
 against the same image with only the generated runtime differing:
@@ -189,7 +196,7 @@ of their repositories:
 
 | Repository | Merge | What it carries |
 |---|---|---|
-| csharpcodegen | `d8a9ed4` on `master` | binary serialization converts between wire and host byte order |
+| csharpcodegen | `d8ad75d` on `master` | binary serialization converts between wire and host byte order |
 | helengine | `c1caf35e` on `main` | the camera owns its field of view, and `Core.Draw` no longer dereferences a null 3D render manager |
 
 `tools/generate-core.ps1` still reads from worktrees of those repositories
