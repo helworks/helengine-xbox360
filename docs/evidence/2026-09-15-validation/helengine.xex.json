@@ -1,0 +1,98 @@
+{
+  "image_base": "0x82000000",
+  "image_size": 131072,
+  "entry_point": "0x82001090",
+  "header_size": 4096,
+  "stack_size": 262144,
+  "page_size": 65536,
+  "page_descriptors": [
+    {
+      "info": 1,
+      "pages": 1
+    },
+    {
+      "info": 2,
+      "pages": 1
+    }
+  ],
+  "imports": [
+    {
+      "name": "DbgPrint",
+      "ordinal": 3,
+      "variable": "0x82010000",
+      "thunk": "0x82001000"
+    },
+    {
+      "name": "KeDelayExecutionThread",
+      "ordinal": 90,
+      "variable": "0x82010004",
+      "thunk": "0x82001010"
+    },
+    {
+      "name": "KeQueryPerformanceFrequency",
+      "ordinal": 131,
+      "variable": "0x82010008",
+      "thunk": "0x82001020"
+    },
+    {
+      "name": "MmAllocatePhysicalMemoryEx",
+      "ordinal": 186,
+      "variable": "0x8201000C",
+      "thunk": "0x82001030"
+    },
+    {
+      "name": "MmFreePhysicalMemory",
+      "ordinal": 189,
+      "variable": "0x82010010",
+      "thunk": "0x82001040"
+    },
+    {
+      "name": "MmGetPhysicalAddress",
+      "ordinal": 190,
+      "variable": "0x82010014",
+      "thunk": "0x82001050"
+    },
+    {
+      "name": "VdEnableRingBufferRPtrWriteBack",
+      "ordinal": 438,
+      "variable": "0x82010018",
+      "thunk": "0x82001060"
+    },
+    {
+      "name": "VdInitializeRingBuffer",
+      "ordinal": 451,
+      "variable": "0x8201001C",
+      "thunk": "0x82001070"
+    },
+    {
+      "name": "VdSwap",
+      "ordinal": 603,
+      "variable": "0x82010020",
+      "thunk": "0x82001080"
+    }
+  ],
+  "sections": [
+    {
+      "name": ".text",
+      "addr": "0x82001000",
+      "size": 15684
+    },
+    {
+      "name": ".rodata",
+      "addr": "0x82004D48",
+      "size": 3356
+    },
+    {
+      "name": ".data",
+      "addr": "0x82010000",
+      "size": 36
+    },
+    {
+      "name": ".bss",
+      "addr": "0x82010028",
+      "size": 248
+    }
+  ],
+  "output": "C:\\dev\\helworks\\helengine-x360\\build\\xenia-cube\\helengine.xex",
+  "output_size": 135168
+}

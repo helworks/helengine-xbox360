@@ -1,0 +1,56 @@
+i> F8000008 (DbgPrint) HEL demo: start
+i> F8000008 (DbgPrint) HEL demo: mode=00000002
+i> F8000008 (DbgPrint) HEL platform: tick_frequency=02FAF080
+i> F8000008 (DbgPrint) HEL platform: timebase_now_lo=0393E812
+i> F8000008 (DbgPrint) HEL video: mode width=00000500
+i> F8000008 (DbgPrint) HEL video: mode height=000002D0
+i> F8000008 (DbgPrint) HEL video: edram tiles per surface=000002D0
+i> F8000008 (DbgPrint) HEL video: edram tiles total=000005A0
+i> F8000008 (DbgPrint) HEL video: front buffer bytes needed=00398000
+i> F8000008 (DbgPrint) HEL platform: alloc ring virt=BFC90000 phys=1FC90000 size=00010000
+i> F8000008 (DbgPrint) HEL platform: alloc scratch virt=BFC80000 phys=1FC80000 size=00010000
+i> F8000008 (DbgPrint) HEL platform: alloc frontbuffer virt=BF880000 phys=1F880000 size=00400000
+i> F8000008 (DbgPrint) HEL video: ring initialised, bytes=00010000
+i> F8000008 (DbgPrint) HEL video: allocations=00000003
+i> F8000008 (DbgPrint) HEL video: allocated bytes=00420000
+i> F8000008 (DbgPrint) HEL platform: alloc mesh virt=BF870000 phys=1F870000 size=00010000
+i> F8000008 (DbgPrint) HEL mesh: created handle=00000001
+i> F8000008 (DbgPrint) HEL mesh: vertices=00000018
+i> F8000008 (DbgPrint) HEL mesh: indices=00000024
+i> F8000008 (DbgPrint) HEL mesh: vertex data physical=1F870000
+i> F8000008 (DbgPrint) HEL mesh: index data physical=1F870300
+i> F8000008 (DbgPrint) HEL cube: angle milliradians=00000000
+i> F8000008 (DbgPrint) HEL shader: unlit vertex
+i> F8000008 (DbgPrint) HEL shader: dwords=0000001E
+i> F8000008 (DbgPrint) HEL shader: unlit pixel
+i> F8000008 (DbgPrint) HEL shader: dwords=00000006
+i> F8000008 (DbgPrint) HEL draw: first draw, mesh=00000001
+i> F8000008 (DbgPrint) HEL draw: indices=00000024
+i> F8000008 (DbgPrint) HEL draw: vertices=00000018
+i> F8000008 (DbgPrint) HEL video: first present complete
+i> F8000008 (DbgPrint) HEL video: first frame ring dwords=000000FF
+i> F8000008 (DbgPrint) HEL video: first frame gpu wait ms=0000003F
+i> F8000008 (DbgPrint) HEL video: first frame submit->done ticks=004A74A0
+i> F8000008 (DbgPrint) HEL frame: frames=0000003C
+i> F8000008 (DbgPrint) HEL frame: avg cpu us per frame=00000CEF
+i> F8000008 (DbgPrint) HEL frame: last 60 frames ms=000000C6
+i> F8000008 (DbgPrint) HEL frame: presented=0000003C
+i> F8000008 (DbgPrint) HEL frame: allocations=00000004
+i> F8000008 (DbgPrint) HEL frame: allocated bytes=00430000
+i> F8000008 (DbgPrint) HEL cube: angle milliradians=00000064
+i> F8000008 (DbgPrint) HEL frame: frames=00000078
+i> F8000008 (DbgPrint) HEL frame: avg cpu us per frame=00000649
+i> F8000008 (DbgPrint) HEL frame: last 60 frames ms=00000061
+i> F8000008 (DbgPrint) HEL frame: presented=00000078
+...
+i> F8000008 (DbgPrint) HEL frame: allocated bytes=00430000
+i> F8000008 (DbgPrint) HEL frame: frames=000B86C8
+i> F8000008 (DbgPrint) HEL frame: avg cpu us per frame=00000624
+i> F8000008 (DbgPrint) HEL frame: last 60 frames ms=0000005E
+i> F8000008 (DbgPrint) HEL frame: presented=000B86C8
+i> F8000008 (DbgPrint) HEL frame: allocations=00000004
+i> F8000008 (DbgPrint) HEL frame: allocated bytes=00430000
+
+total HEL lines: 75575
+12590 x frame: allocations=00000004
+12590 x frame: allocated bytes=00430000

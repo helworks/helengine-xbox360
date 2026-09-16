@@ -1,0 +1,15 @@
+{
+    "run":  "v01-teardown",
+    "target":  "build/xenia-cube-limit/helengine.xex",
+    "first_present":  true,
+    "frame_reports":  [
+                          "i\u003e F8000008 (DbgPrint) HEL frame: frames=0000003C",
+                          "i\u003e F8000008 (DbgPrint) HEL frame: frames=00000078"
+                      ],
+    "hel_errors":  [
+
+                   ],
+    "emulator_errors":  [
+
+                        ]
+}

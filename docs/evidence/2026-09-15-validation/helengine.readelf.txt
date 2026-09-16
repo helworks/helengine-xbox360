@@ -1,0 +1,53 @@
+ELF Header:
+  Magic:   7f 45 4c 46 01 02 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF32
+  Data:                              2's complement, big endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           PowerPC
+  Version:                           0x1
+  Entry point address:               0x82001090
+  Start of program headers:          52 (bytes into file)
+  Start of section headers:          82952 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               52 (bytes)
+  Size of program headers:           32 (bytes)
+  Number of program headers:         2
+  Size of section headers:           40 (bytes)
+  Number of section headers:         15
+  Section header string table index: 14
+
+Section Headers:
+  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            00000000 000000 000000 00      0   0  0
+  [ 1] .text             PROGBITS        82001000 001000 003d44 00  AX  0   0 16
+  [ 2] .rodata           PROGBITS        82004d48 004d48 000d1c 00   A  0   0  8
+  [ 3] .data             PROGBITS        82010000 010000 000024 00  WA  0   0  4
+  [ 4] .bss              NOBITS          82010028 010024 0000f8 00  WA  0   0  8
+  [ 5] .debug_info       PROGBITS        00000000 010024 000ed4 00      0   0  1
+  [ 6] .debug_abbrev     PROGBITS        00000000 010ef8 000438 00      0   0  1
+  [ 7] .debug_loclists   PROGBITS        00000000 011330 0010a7 00      0   0  1
+  [ 8] .debug_aranges    PROGBITS        00000000 0123d7 000080 00      0   0  1
+  [ 9] .debug_rnglists   PROGBITS        00000000 012457 000175 00      0   0  1
+  [10] .debug_line       PROGBITS        00000000 0125cc 000ced 00      0   0  1
+  [11] .debug_str        PROGBITS        00000000 0132b9 0002f4 01  MS  0   0  1
+  [12] .symtab           SYMTAB          00000000 0135b0 0007d0 10     13  46  4
+  [13] .strtab           STRTAB          00000000 013d80 0005f2 00      0   0  1
+  [14] .shstrtab         STRTAB          00000000 014372 000094 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), v (VLE), p (processor specific)
+
+Program Headers:
+  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align
+  LOAD           0x000000 0x82000000 0x82000000 0x05a64 0x05a64 R E 0x10000
+  LOAD           0x010000 0x82010000 0x82010000 0x00024 0x00120 RW  0x10000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .text .rodata 
+   01     .data .bss 

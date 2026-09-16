@@ -1,0 +1,8 @@
+i> F8000008 (DbgPrint) HEL demo: start
+i> F8000008 (DbgPrint) HEL demo: mode=00000002
+i> F8000008 (DbgPrint) HEL platform: tick_frequency=02FAF080
+i> F8000008 (DbgPrint) HEL platform: timebase_now_lo=034875A3
+i> F8000008 (DbgPrint) HEL video: rejected configuration (width/height must be multiples of 8 and at most 1280x720)
+i> F8000008 (DbgPrint) HEL video: requested width=00000504
+i> F8000008 (DbgPrint) HEL video: requested height=000002D0
+i> F8000008 (DbgPrint) HEL demo: video init failed=00000002

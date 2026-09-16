@@ -1,7 +1,7 @@
 # Helengine Xbox 360 v0.1: Xenia-first unlit cube
 
 Date: 2026-09-15
-Status: Accepted as the planning baseline on 2026-09-15; implementation started the same day (Milestone 0 complete, see ../../xenia-compatibility.md).
+Status: Accepted as the planning baseline on 2026-09-15; implemented and validated in Xenia the same day (see ../../xenia-compatibility.md and ../../v0.1-validation.md). Hardware validation is pending.
 
 ## Objective
 
