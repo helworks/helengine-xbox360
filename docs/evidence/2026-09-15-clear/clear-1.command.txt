@@ -1,0 +1,4 @@
+C:\dev\helworks\emus\xenia_canary_windows\xenia_canary.exe --log_file=C:\dev\helworks\helengine-x360\build\logs\clear-1\xenia.log --log_level=2 --discord=false --storage_root=C:\dev\helworks\helengine-x360\build\xenia-storage --log_level=3 C:\dev\helworks\helengine-x360\build\xenia\helengine.xex
+xenia sha256 72719B5EE4B40CB49B242BDEAB4B62DEE2BA0F7A458F84CC0532037619B51150
+target sha256 70A08510D4C7BDF7214CFEE3793291E8BBC195AC73A60241CE4807DC9F1F1D74
+closed window after 25s timeout

@@ -1,0 +1,15 @@
+{
+    "run":  "clear-invalid",
+    "target":  "build/xenia-invalid/helengine.xex",
+    "first_present":  false,
+    "frame_reports":  [
+
+                      ],
+    "hel_errors":  [
+                       "i\u003e F8000008 (DbgPrint) HEL video: rejected configuration (width/height must be multiples of 8 and at most 1280x720)",
+                       "i\u003e F8000008 (DbgPrint) HEL demo: video init failed=00000002"
+                   ],
+    "emulator_errors":  [
+
+                        ]
+}
