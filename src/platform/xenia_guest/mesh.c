@@ -14,7 +14,9 @@
 #include "xenia_guest.h"
 #include "xenos_regs.h"
 
-#define HEL_MAX_MESHES 4u
+/* Scene models each take a slot, so the limit is a scene budget rather than
+   a demo one. Each slot costs one 64 KiB physical allocation. */
+#define HEL_MAX_MESHES 64u
 #define HEL_MAX_VERTICES 4096u
 #define HEL_MAX_INDICES 65535u
 #define HEL_VERTEX_DWORDS 7u

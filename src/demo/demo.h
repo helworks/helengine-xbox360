@@ -25,6 +25,9 @@ void hel_core_shutdown(void);
    (src/demo/endian_test.cpp): returns the number of failed checks. */
 uint32_t hel_endian_test(void);
 
+/* Engine/backend matrix convention check (src/demo/matrix_test.cpp). */
+uint32_t hel_matrix_test(void);
+
 /* C++ environment self-test (src/demo/cxx_selftest.cpp): returns the number
    of failed checks, zero when the guest's C++ runtime is sound. */
 uint32_t hel_cxx_selftest(void);

@@ -80,6 +80,11 @@ void hel_demo_main(void) {
         hel_heap_shutdown();
         return;
     }
+    if (hel_matrix_test() != 0) {
+        hel_log("HEL demo: matrix convention check failed, not submitting any frames");
+        hel_heap_shutdown();
+        return;
+    }
     if (hel_endian_test() != 0) {
         hel_log("HEL demo: byte-order check failed, not submitting any frames");
         hel_heap_shutdown();

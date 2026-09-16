@@ -59,7 +59,8 @@ $coreSources = @(
     "src/platform/xenia_guest/X360Math.cpp",
     "src/platform/xenia_guest/X360LibcShim.cpp",
     "src/demo/core_boot.cpp",
-    "src/demo/endian_test.cpp"
+    "src/demo/endian_test.cpp",
+    "src/demo/matrix_test.cpp"
 )
 $sources = @(
     "src/platform/xenia_guest/start.S",
