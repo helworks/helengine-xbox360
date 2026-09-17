@@ -15,7 +15,21 @@ extern "C" {
 #endif
 
 typedef struct { float m[16]; } HelMat4;           /* column-major */
-typedef struct { float x, y, z, r, g, b, a; } HelVertex;
+/* Position, normal and colour. The normal is carried to the GPU rather than
+   consumed at upload, because the scene can switch a light off while running
+   and shading baked into the colour could not follow it. */
+typedef struct { float x, y, z, nx, ny, nz, r, g, b, a; } HelVertex;
+
+/* What a draw shades with. The colour is the cooked material's; the light is
+   whatever the scene has switched on, already resolved to world space. A
+   direction of zero means no directional light, leaving only the ambient
+   term, which is how a scene with its light toggled off is drawn. */
+typedef struct {
+    float base_color[4];     /* material base colour, RGBA 0..1 */
+    float light_direction[3];/* unit vector pointing from the surface to the light */
+    float ambient[3];        /* ambient colour applied everywhere */
+    float light_color[3];    /* directional light colour, already scaled by intensity */
+} HelDrawParams;
 typedef uint32_t HelMesh;
 typedef struct { uint32_t width, height; } HelVideoConfig;
 
@@ -52,6 +66,12 @@ int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
                     const uint16_t *indices, uint32_t index_count,
                     HelMesh *out_mesh);
 int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp);
+/* As hel_draw_unlit, but shading with the material and light in params.
+   The normal is transformed by the model rotation the caller supplies, so a
+   rotating object is lit from a fixed direction rather than turning its
+   lighting with it. */
+int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
+                    const HelDrawParams *params);
 int hel_frame_present(void);
 void hel_video_shutdown(void);
 uint32_t hel_frame_count(void);

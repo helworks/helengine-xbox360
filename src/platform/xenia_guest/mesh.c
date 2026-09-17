@@ -19,7 +19,7 @@
 #define HEL_MAX_MESHES 64u
 #define HEL_MAX_VERTICES 4096u
 #define HEL_MAX_INDICES 65535u
-#define HEL_VERTEX_DWORDS 7u
+#define HEL_VERTEX_DWORDS 10u
 #ifndef HEL_CULL_MODE
 #define HEL_CULL_MODE (1u << 1) /* cull back faces, CCW front */
 #endif
@@ -80,13 +80,16 @@ int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
     volatile uint32_t *dst = (volatile uint32_t *)(uintptr_t)slot->block.virt;
     for (uint32_t v = 0; v < vertex_count; ++v) {
         const HelVertex *src = &vertices[v];
-        dst[v * 7u + 0u] = float_bits(src->x);
-        dst[v * 7u + 1u] = float_bits(src->y);
-        dst[v * 7u + 2u] = float_bits(src->z);
-        dst[v * 7u + 3u] = float_bits(src->r);
-        dst[v * 7u + 4u] = float_bits(src->g);
-        dst[v * 7u + 5u] = float_bits(src->b);
-        dst[v * 7u + 6u] = float_bits(src->a);
+        dst[v * HEL_VERTEX_DWORDS + 0u] = float_bits(src->x);
+        dst[v * HEL_VERTEX_DWORDS + 1u] = float_bits(src->y);
+        dst[v * HEL_VERTEX_DWORDS + 2u] = float_bits(src->z);
+        dst[v * HEL_VERTEX_DWORDS + 3u] = float_bits(src->nx);
+        dst[v * HEL_VERTEX_DWORDS + 4u] = float_bits(src->ny);
+        dst[v * HEL_VERTEX_DWORDS + 5u] = float_bits(src->nz);
+        dst[v * HEL_VERTEX_DWORDS + 6u] = float_bits(src->r);
+        dst[v * HEL_VERTEX_DWORDS + 7u] = float_bits(src->g);
+        dst[v * HEL_VERTEX_DWORDS + 8u] = float_bits(src->b);
+        dst[v * HEL_VERTEX_DWORDS + 9u] = float_bits(src->a);
     }
     volatile uint16_t *idx =
         (volatile uint16_t *)(uintptr_t)(slot->block.virt + index_offset);
@@ -106,7 +109,27 @@ int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
     return HEL_OK;
 }
 
+static int draw(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
+                const HelDrawParams *params);
+
 int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp) {
+    return draw(mesh, mvp, 0, 0);
+}
+
+int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
+                    const HelDrawParams *params) {
+    if (!model || !params) {
+        return HEL_ERR_MESH_INVALID;
+    }
+    return draw(mesh, mvp, model, params);
+}
+
+/* One draw path for both shaders. The only differences are which vertex
+   shader is emitted and how many constants follow the MVP, so splitting them
+   into two functions would duplicate every piece of pipeline state and let
+   the two drift. */
+static int draw(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
+                const HelDrawParams *params) {
     if (mesh == 0 || mesh > g_mesh_count || !mvp) {
         return HEL_ERR_MESH_INVALID;
     }
@@ -117,8 +140,9 @@ int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp) {
     const HelMeshSlot *slot = &g_meshes[mesh - 1u];
     uint32_t width = hel_video_width();
     uint32_t height = hel_video_height();
+    const int shaded = (model != 0 && params != 0);
 
-    hel_shaders_emit();
+    hel_shaders_emit_kind(shaded ? HEL_SHADER_SHADED : HEL_SHADER_UNLIT);
 
     /* Viewport: NDC -> pixels, Direct3D 0..1 depth, clipping enabled. */
     hel_ring_put(XE_PACKET_TYPE0(XE_GPU_REG_PA_CL_VPORT_XSCALE, 6));
@@ -145,11 +169,43 @@ int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp) {
     hel_ring_reg(XE_GPU_REG_RB_COLOR_MASK, 0xFu);
     hel_ring_reg(XE_GPU_REG_RB_MODECONTROL, XE_EDRAM_MODE_COLOR_DEPTH);
 
-    /* MVP columns into c0..c3 (float constants 0-15). */
-    hel_ring_type3(PM4_SET_CONSTANT, 1u + 16u);
+    /* Float constants, starting at c0. The unlit shader reads only the MVP;
+       the shaded one also reads the model transform, the material colour and
+       the light, so the same packet just carries more of them. */
+    const uint32_t constant_count = shaded ? 52u : 16u;
+    hel_ring_type3(PM4_SET_CONSTANT, 1u + constant_count);
     hel_ring_put(0u); /* type 0 (ALU) << 16 | index 0 */
     for (uint32_t i = 0; i < 16u; ++i) {
-        hel_ring_put(float_bits(mvp->m[i]));
+        hel_ring_put(float_bits(mvp->m[i])); /* c0..c3 */
+    }
+    if (shaded) {
+        for (uint32_t i = 0; i < 16u; ++i) {
+            hel_ring_put(float_bits(model->m[i])); /* c4..c7 */
+        }
+        for (uint32_t i = 0; i < 4u; ++i) {
+            hel_ring_put(float_bits(params->base_color[i])); /* c8 */
+        }
+        /* c9: the vector from the surface towards the light. */
+        hel_ring_put(float_bits(params->light_direction[0]));
+        hel_ring_put(float_bits(params->light_direction[1]));
+        hel_ring_put(float_bits(params->light_direction[2]));
+        hel_ring_put(float_bits(0.0f));
+        /* c10: ambient, with 1 in w so the material's alpha survives the
+           multiply chain rather than being scaled by the lighting. */
+        hel_ring_put(float_bits(params->ambient[0]));
+        hel_ring_put(float_bits(params->ambient[1]));
+        hel_ring_put(float_bits(params->ambient[2]));
+        hel_ring_put(float_bits(1.0f));
+        /* c11: light colour scaled by intensity, with 0 in w for the same
+           reason. */
+        hel_ring_put(float_bits(params->light_color[0]));
+        hel_ring_put(float_bits(params->light_color[1]));
+        hel_ring_put(float_bits(params->light_color[2]));
+        hel_ring_put(float_bits(0.0f));
+        /* c12: zero, which is what the Lambert term is clamped against. */
+        for (uint32_t i = 0; i < 4u; ++i) {
+            hel_ring_put(float_bits(0.0f));
+        }
     }
 
     /* Vertex fetch constant 0 -> the mesh's vertex data. */

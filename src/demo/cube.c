@@ -1,12 +1,16 @@
 #include "cube.h"
 
 
-#define R 1.0f, 0.0f, 0.0f, 1.0f
-#define CY 0.0f, 1.0f, 1.0f, 1.0f
-#define G 0.0f, 1.0f, 0.0f, 1.0f
-#define MG 1.0f, 0.0f, 1.0f, 1.0f
-#define B 0.0f, 0.0f, 1.0f, 1.0f
-#define Y 1.0f, 1.0f, 0.0f, 1.0f
+/* Each macro is one face's outward normal followed by its colour, which is
+   the order HelVertex stores them in. The normal is per face, not per corner,
+   because a cube has flat faces and sharing a corner normal would round them
+   off. */
+#define R 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f
+#define CY -1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f
+#define G 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f
+#define MG 0.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f
+#define B 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f
+#define Y 0.0f, 0.0f, -1.0f, 1.0f, 1.0f, 0.0f, 1.0f
 
 /* Each face lists its four corners counter-clockwise as seen from outside. */
 const HelVertex hel_cube_vertices[HEL_CUBE_VERTEX_COUNT] = {

@@ -36,8 +36,12 @@ uint32_t hel_video_height(void);
 void hel_mesh_release_all(void);
 
 /* Shader binaries (shader.c): validated once, then emitted per draw. */
+/* Which vertex shader a draw uses; both share the pixel shader. */
+typedef enum { HEL_SHADER_UNLIT = 0, HEL_SHADER_SHADED = 1 } HelShaderKind;
+
 int hel_shaders_validate(void);
 void hel_shaders_emit(void);
+void hel_shaders_emit_kind(HelShaderKind kind);
 
 /* General-purpose heap (heap.c): the C++ runtime and the transpiled engine
    core allocate from here. GPU-visible memory uses hel_phys_alloc instead. */

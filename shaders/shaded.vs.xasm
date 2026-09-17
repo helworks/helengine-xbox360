@@ -1,0 +1,51 @@
+# Shaded vertex shader: clip position = MVP * position, colour = material base
+# colour times one directional light plus ambient, times the vertex colour.
+#
+# Inputs:  vf0 = HelVertex stream, 10 dwords per vertex, big-endian floats
+#          (fetch constant endian k8in32): xyz at dword 0, normal at dword 3,
+#          rgba at dword 6. r0.x = vertex index (hardware convention).
+# Constants: c0..c3  = MVP columns (column-major HelMat4, 16 floats).
+#            c4..c7  = model transform columns, used for the normal. Normals
+#                      take the model transform and not the full MVP because
+#                      lighting is done in world space: a rotating object then
+#                      stays lit from a fixed direction instead of carrying its
+#                      shading around with it.
+#            c8      = material base colour RGBA.
+#            c9.xyz  = unit vector from the surface towards the light.
+#            c10     = ambient colour in xyz, 1 in w so alpha survives.
+#            c11     = directional light colour scaled by intensity in xyz,
+#                      0 in w.
+#            c12     = zero, for clamping the Lambert term.
+# Outputs: oPos = clip position; o0 = shaded colour.
+#
+# The normal is not renormalized. The model transforms this backend receives
+# are rotations and uniform scales, which leave a unit normal unit up to that
+# scale, and the clamp below absorbs the rest. A non-uniform scale would need
+# the inverse transpose, which is not built for.
+#
+# There is no mov in the assembler's instruction set, so max r, r is the move,
+# the same way the unlit shaders do it. The ALU work is split across exec
+# blocks because one block holds at most six instructions.
+exec
+  vfetch_full r1.xyz1, r0.x, vf0, stride=10, offset=0, format=32_32_32_FLOAT
+  vfetch_mini r2.xyz0, offset=3, format=32_32_32_FLOAT
+  vfetch_mini r3.xyzw, offset=6, format=32_32_32_32_FLOAT
+alloc position
+exec
+  serialize mul r4, c0, r1.xxxx
+  mad r4, c1, r1.yyyy, r4
+  mad r4, c2, r1.zzzz, r4
+  mad oPos, c3, r1.wwww, r4
+exec
+  mul r5, c4, r2.xxxx
+  mad r5, c5, r2.yyyy, r5
+  mad r5, c6, r2.zzzz, r5
+  dp3 r6, r5, c9
+  max r6, r6, c12
+exec
+  mad r7, c11, r6.xxxx, c10
+  mul r8, r7, c8
+  mul r9, r8, r3
+alloc interpolators
+exece
+  max o0, r9, r9

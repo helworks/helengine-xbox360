@@ -7,10 +7,11 @@
 #include "../engine/frame.h"
 #include "demo.h"
 
+/* Position, then the normal (the triangle faces +Z), then the colour. */
 static const HelVertex triangle[] = {
-    {-0.5f, -0.5f, 0.5f, 1.0f, 0.0f, 0.0f, 1.0f},
-    {0.5f, -0.5f, 0.5f, 0.0f, 1.0f, 0.0f, 1.0f},
-    {0.0f, 0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f},
+    {-0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f},
+    {0.5f, -0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f},
+    {0.0f, 0.5f, 0.5f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f},
 };
 static const uint16_t triangle_indices[] = {0, 1, 2};
 /* Same vertices with an out-of-range index: must be rejected before upload. */

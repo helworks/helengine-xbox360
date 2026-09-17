@@ -1,7 +1,11 @@
 /*
- * Shader binaries for the unlit pipeline. The arrays are generated from the
- * shaders folder (unlit.vs.xasm, unlit.ps.xasm) by tools/xenos_asm.py at
- * build time into build/shaders.
+ * Shader binaries. The arrays are generated from the shaders folder by
+ * tools/xenos_asm.py at build time into build/shaders.
+ *
+ * Two vertex shaders are carried. The unlit one passes the vertex colour
+ * through and is what the built-in demos draw with. The shaded one applies a
+ * material colour and one directional light, and is what an authored scene
+ * draws with. They share the pixel shader, which only emits interpolator 0.
  * Validation happens once before the first draw; emission uses
  * PM4_IM_LOAD_IMMEDIATE so the microcode travels inside the ring buffer
  * (docs/xenia-backend-contract.md section 3).
@@ -12,6 +16,7 @@
 #include "xenia_guest.h"
 #include "xenos_regs.h"
 
+#include "shaded_vs.h"
 #include "unlit_ps.h"
 #include "unlit_vs.h"
 
@@ -53,6 +58,9 @@ int hel_shaders_validate(void) {
     int err = validate_ucode("HEL shader: unlit vertex", hel_shader_unlit_vs,
                              HEL_SHADER_UNLIT_VS_DWORDS);
     if (err) return err;
+    err = validate_ucode("HEL shader: shaded vertex", hel_shader_shaded_vs,
+                         HEL_SHADER_SHADED_VS_DWORDS);
+    if (err) return err;
     err = validate_ucode("HEL shader: unlit pixel", hel_shader_unlit_ps,
                          HEL_SHADER_UNLIT_PS_DWORDS);
     if (err) return err;
@@ -70,11 +78,18 @@ static void emit_shader(uint32_t shader_type, const uint32_t *dwords,
     }
 }
 
-void hel_shaders_emit(void) {
-    emit_shader(0u, hel_shader_unlit_vs, HEL_SHADER_UNLIT_VS_DWORDS);
+void hel_shaders_emit(void) { hel_shaders_emit_kind(HEL_SHADER_UNLIT); }
+
+void hel_shaders_emit_kind(HelShaderKind kind) {
+    const int shaded = (kind == HEL_SHADER_SHADED);
+    emit_shader(0u, shaded ? hel_shader_shaded_vs : hel_shader_unlit_vs,
+                shaded ? HEL_SHADER_SHADED_VS_DWORDS
+                       : HEL_SHADER_UNLIT_VS_DWORDS);
     emit_shader(1u, hel_shader_unlit_ps, HEL_SHADER_UNLIT_PS_DWORDS);
-    /* r0-r3 in the vertex shader, r0 in the pixel shader, one interpolator. */
-    hel_ring_reg(XE_GPU_REG_SQ_PROGRAM_CNTL, 3u | (0u << 8) | (0u << 20));
+    /* Highest register the vertex shader uses, then the pixel shader, then the
+       interpolator count. The shaded shader needs r0 through r9. */
+    hel_ring_reg(XE_GPU_REG_SQ_PROGRAM_CNTL,
+                 (shaded ? 9u : 3u) | (0u << 8) | (0u << 20));
     hel_ring_reg(XE_GPU_REG_SQ_CONTEXT_MISC, 0u);
     hel_ring_reg(XE_GPU_REG_SQ_INTERPOLATOR_CNTL, 0u);
     hel_ring_reg(XE_GPU_REG_SQ_VS_CONST, 0x000FF000u);
