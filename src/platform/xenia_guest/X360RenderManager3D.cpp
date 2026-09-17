@@ -244,6 +244,10 @@ void X360RenderManager3D::Draw() {
     }
 }
 
+int32_t X360RenderManager3D::get_LastDrawCallCount() {
+    return (int32_t)lastDrawnCount_;
+}
+
 void X360RenderManager3D::recordDrawError(int error) {
     if (lastDrawError_ == HEL_OK) {
         lastDrawError_ = error;

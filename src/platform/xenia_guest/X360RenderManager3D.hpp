@@ -39,12 +39,12 @@ public:
     ::RuntimeModel *BuildModelFromRaw(::ModelAsset *data) override;
     void Draw() override;
     void ReleaseModel(::RuntimeModel *model) override;
+    /* The engine reads this to report how much the renderer drew. */
+    int32_t get_LastDrawCallCount() override;
 
     /// <summary>Records the first backend failure of the current frame.</summary>
     void recordDrawError(int error);
 
-    /* The engine's get_LastDrawCallCount is not virtual in the generated
-       code, so the per-frame count is read through these instead. */
     uint32_t modelCount() const { return models_; }
     uint32_t lastDrawnCount() const { return lastDrawnCount_; }
     uint32_t lastSkippedCount() const { return lastSkippedCount_; }

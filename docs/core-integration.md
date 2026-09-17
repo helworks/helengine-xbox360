@@ -147,6 +147,13 @@ entity's component and child lists must be initialised before `AddComponent`
 is legal, and a component registers itself with the object manager at the
 moment it is added, so the entity must already be enabled by then.
 
+The engine records what the renderer drew. `RenderManager3D.LastDrawCallCount`
+is a virtual property with an expression body, and the generator used to drop
+the virtual on that path, so every generated platform reported zero draw calls
+whatever it drew. Fixed in csharpcodegen; this renderer overrides it and the
+console now reports one drawable drawn and one draw call recorded by the
+engine, rather than one and zero.
+
 The field of view comes from the camera. It used to be invented by each
 renderer, which meant one authored scene framed differently on every
 platform; it now lives on `CameraComponent`. The default is 45 degrees,
@@ -199,7 +206,7 @@ of their repositories:
 
 | Repository | Merge | What it carries |
 |---|---|---|
-| csharpcodegen | `d8ad75d` on `master` | binary serialization converts between wire and host byte order |
+| csharpcodegen | `ebed520` on `master` | binary serialization converts between wire and host byte order, and a property keeps its virtual modifier through the expression-bodied path |
 | helengine | `c1caf35e` on `main` | the camera owns its field of view, and `Core.Draw` no longer dereferences a null 3D render manager |
 
 `tools/generate-core.ps1` still reads from worktrees of those repositories

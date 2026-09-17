@@ -191,6 +191,10 @@ extern "C" int hel_core_draw(void) {
                     g_render3d ? g_render3d->lastDrawnCount() : 0u);
         hel_log_u32("HEL core: drawables skipped in the first frame",
                     g_render3d ? g_render3d->lastSkippedCount() : 0u);
+        /* What the engine itself recorded, which is only non-zero if the
+           renderer's draw-call count is actually overridable. */
+        hel_log_u32("HEL core: engine recorded draw calls",
+                    (unsigned int)g_core->get_LastRenderManager3DDrawCallCount());
         hel_log_u32("HEL core: heap allocations after first frame",
                     hel_heap_live_allocations());
     }
