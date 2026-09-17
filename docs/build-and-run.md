@@ -72,6 +72,60 @@ launcher waits for the timeout only after the last capture:
 -CaptureCount 2 -CaptureAfterMs 5000 -CaptureIntervalMs 590000` runs ten
 minutes with captures at 5 s and 595 s.
 
+## Building from the editor
+
+Everything above builds the image by hand. The editor builds it through
+`builder/`, which cooks the project's assets, stages them, writes the scene
+catalog and then calls `tools/build-image.ps1`. That script is the only entry
+point the builder knows about; running it directly is how an editor build is
+reproduced outside the editor.
+
+Three pieces of machine-local state have to line up first, and none of them
+live in this repository:
+
+- `helengine/user_settings/platforms.json` needs an entry whose `platformId`
+  is `x360`. Its `engineVersion` must match the project's
+  `requiredEngineVersion` **as a string**; the editor compares them
+  literally and silently ignores every entry that does not match, so a
+  mismatch presents as the platform simply not existing. Relative paths in
+  that file resolve against the `user_settings` directory, not the
+  repository. `codegenToolPath` is required by older engine revisions and
+  ignored with a warning by newer ones, so it is safe to carry.
+- The project's supported-platform lists, in both `project.heproj` and
+  `settings/platforms.json`.
+- The project's `user_settings/build_config.json` needs an `x360` entry
+  naming the scenes to build and the profile ids from the platform
+  definition. The headless path does not create one; without it the build
+  stops with "No build settings exist for platform 'x360'".
+
+The editor also has a headless build mode, which is what a scripted build
+uses:
+
+```powershell
+$env:HELENGINE_SOURCE_ROOT = "<engine checkout>"
+$env:HELENGINE_ENGINE_USER_SETTINGS_ROOT = "<engine checkout>\user_settings"
+$env:HELENGINE_X360_REPOSITORY_ROOT = "C:\dev\helworks\helengine-x360"
+dotnet <published editor>\helengine.editor.app.dll `
+    --project <project root> --build x360 --output <output directory>
+```
+
+No window is created and nothing is prompted for. The engine source root, the
+registry location and the codegen tool all come from the environment and the
+registry; there are no command-line switches for them. Build phases are
+printed as `[build] <phase>` and are also appended to `logs/build-phases.log`
+in the editor's own build workspace, which is where to look when the process
+dies without a summary.
+
+The codegen the editor runs is whichever one the platform entry or the engine
+publishes, **not** this repository's `tools/generate-core.ps1` settings. The
+platform definition in `builder/` restates every codegen flag for that
+reason: those flags, not the ones in `generate-core.ps1`, are what an editor
+build compiles the core with.
+
+One limitation worth knowing: `tools/build-image.ps1` uses fixed intermediate
+directories under `build/`, so two builds of this repository must not run at
+the same time.
+
 Useful emulator flags for diagnosis (append with `-ExtraArgs`):
 `--log_level=3` (debug log), `--dump_shaders=<dir>` (microcode and
 translated shader dumps), `--gpu=vulkan` (alternate host backend).
