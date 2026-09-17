@@ -32,18 +32,33 @@ $generated = (Resolve-Path -LiteralPath $GeneratedCoreRoot).Path
 $output = [IO.Path]::GetFullPath($OutputRoot)
 New-Item -ItemType Directory -Force $output | Out-Null
 
-# Relative paths keep the docker mount and the build scripts consistent; the
-# builder passes absolute ones, so convert them back to repository-relative.
-function ConvertTo-RepoRelative([string]$path) {
+# The container mounts this repository and nothing else, so anything the compiler
+# has to read must be inside it. An editor build's generated core and staged
+# content live in the editor's own build workspace, which is not, so they are
+# copied in. Inputs that are already inside are used where they are, which is
+# what a hand-run build does.
+$importRoot = Join-Path $repo "build/from-editor"
+function ConvertTo-RepoRelative([string]$path, [string]$importName) {
     $full = [IO.Path]::GetFullPath($path)
     if ($full.StartsWith($repo, [StringComparison]::OrdinalIgnoreCase)) {
         return $full.Substring($repo.Length).TrimStart('\', '/').Replace('\', '/')
     }
-    throw "build-image.ps1 needs paths inside the repository; '$path' is outside '$repo'."
+    if (-not (Test-Path -LiteralPath $full)) {
+        throw "build-image.ps1 was given a path that does not exist: $path"
+    }
+    # Cleared rather than merged: a stale file from a previous build that this one
+    # no longer produces would otherwise be compiled or packed into the image.
+    $destination = Join-Path $importRoot $importName
+    if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
+    New-Item -ItemType Directory -Force $destination | Out-Null
+    & robocopy $full $destination /E /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "Copying '$path' into the repository failed with robocopy exit code $LASTEXITCODE" }
+    Write-Host "Imported $importName from outside the repository"
+    return "build/from-editor/$importName"
 }
 
-$generatedRelative = ConvertTo-RepoRelative $generated
-$contentRelative = ConvertTo-RepoRelative $ContentRoot
+$generatedRelative = ConvertTo-RepoRelative $generated "generated-core"
+$contentRelative = ConvertTo-RepoRelative $ContentRoot "content"
 $coreLibDir = "build/core"
 
 Write-Host "Compiling the generated core from $generatedRelative"

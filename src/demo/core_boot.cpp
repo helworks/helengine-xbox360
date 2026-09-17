@@ -16,8 +16,11 @@
  * C++20), not the guest's freestanding flags; see tools/build.ps1.
  */
 #include "Core.hpp"
+#include "AssetSerializer.hpp"
 #include "CoreInitializationOptions.hpp"
 #include "IContentStreamSource.hpp"
+#include "RuntimeTexture.hpp"
+#include "TextureAsset.hpp"
 #include "system/io/file-stream.hpp"
 #include "PlatformInfo.hpp"
 #include "RenderManager2D.hpp"
@@ -69,14 +72,53 @@ public:
 
 /* The 2D manager is still a stub: nothing draws through it yet. The 3D
    manager is the real one (X360RenderManager3D), which walks the engine's
-   cameras and render queues and draws through the Xenos backend. */
+   cameras and render queues and draws through the Xenos backend.
+
+   Textures are described but never uploaded. There is no texture path on this
+   backend yet, so no pixels reach the GPU and nothing samples them: the 2D
+   path draws nothing, and 3D materials are untextured. What the engine does
+   need is a texture object with real dimensions, because layout and sprite
+   sizing divide by them. Returning null instead makes the engine treat the
+   renderer as unable to create textures at all, which stops an authored scene
+   from loading even when everything it draws is geometry.
+
+   Every texture is counted and the first is named, so a scene that wanted
+   textures says so rather than appearing to have worked. */
 class X360RenderManager2D : public ::RenderManager2D {
 public:
     ::RuntimeTexture *BuildTextureFromRaw(::TextureAsset *data) override {
-        (void)data;
-        hel_log("HEL core: texture requested, no texture backend yet");
-        textures++;
-        return nullptr;
+        if (!data) {
+            return nullptr;
+        }
+        return Describe((int32_t)data->Width, (int32_t)data->Height, nullptr);
+    }
+
+    /* The cooked path: the payload is a serialized TextureAsset in the
+       archive, so the engine's own deserializer reads its dimensions rather
+       than this guessing at them. */
+    ::RuntimeTexture *BuildTextureFromCooked(
+        HeCppString cookedAssetPath,
+        ::IContentStreamSource *contentStreamSource) override {
+        if (!contentStreamSource) {
+            return Describe(1, 1, cookedAssetPath.c_str());
+        }
+        ::Stream *stream = contentStreamSource->OpenRead(cookedAssetPath);
+        if (!stream) {
+            hel_log("HEL core: cooked texture is not in the image");
+            hel_log(cookedAssetPath.c_str());
+            return Describe(1, 1, cookedAssetPath.c_str());
+        }
+        ::TextureAsset *asset =
+            dynamic_cast<::TextureAsset *>(::AssetSerializer::Deserialize(stream));
+        if (!asset) {
+            hel_log("HEL core: cooked texture did not deserialize");
+            hel_log(cookedAssetPath.c_str());
+            return Describe(1, 1, cookedAssetPath.c_str());
+        }
+        ::RuntimeTexture *texture = Describe((int32_t)asset->Width,
+                                             (int32_t)asset->Height,
+                                             cookedAssetPath.c_str());
+        return texture;
     }
 
     void DrawRoundedRect(::IRoundedRectDrawable2D *shape) override {
@@ -109,6 +151,25 @@ public:
 
     unsigned int textures = 0;
     unsigned int draws2d = 0;
+
+private:
+    /* A texture object carrying only its size. IsEngineOwned stays false so the
+       engine releases it through this manager, the same as a real one. */
+    ::RuntimeTexture *Describe(int32_t width, int32_t height, const char *path) {
+        if (textures == 0) {
+            hel_log("HEL core: textures are described but not uploaded; "
+                    "this backend has no texture path");
+            if (path) {
+                hel_log(path);
+            }
+        }
+        textures++;
+        ::RuntimeTexture *texture = new ::RuntimeTexture();
+        texture->set_Width(width > 0 ? width : 1);
+        texture->set_Height(height > 0 ? height : 1);
+        texture->set_IsEngineOwned(false);
+        return texture;
+    }
 };
 
 /* Turns the table the builder compiled into the image into the catalog the

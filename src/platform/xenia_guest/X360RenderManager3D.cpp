@@ -28,6 +28,9 @@
 #include "CameraProjectionUtils.hpp"
 #include "ModelAsset.hpp"
 #include "ObjectManager.hpp"
+#include "AssetSerializer.hpp"
+#include "IContentStreamSource.hpp"
+#include "PlatformMaterialAsset.hpp"
 #include "X360EngineMath.hpp"
 #include "float3.hpp"
 #include "float4.hpp"
@@ -168,6 +171,78 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
     runtimeModel->SetRawModelAsset(data);
     runtimeModel->SetBounds(data->BoundsMin, data->BoundsMax);
     return runtimeModel;
+}
+
+::RuntimeModel *X360RenderManager3D::BuildModelFromCooked(
+    HeCppString cookedAssetPath, ::IContentStreamSource *contentStreamSource) {
+    /* A cooked model is a serialized ModelAsset in the archive. Once read it is
+       the same thing BuildModelFromRaw already uploads, so the two paths do not
+       differ after this point. */
+    if (!contentStreamSource) {
+        hel_log("HEL render3d: cooked model requested with no content source");
+        return nullptr;
+    }
+    ::Stream *stream = contentStreamSource->OpenRead(cookedAssetPath);
+    if (!stream) {
+        hel_log("HEL render3d: cooked model is not in the image");
+        hel_log(cookedAssetPath.c_str());
+        return nullptr;
+    }
+    ::ModelAsset *asset =
+        dynamic_cast<::ModelAsset *>(::AssetSerializer::Deserialize(stream));
+    if (!asset) {
+        hel_log("HEL render3d: cooked model did not deserialize");
+        hel_log(cookedAssetPath.c_str());
+        return nullptr;
+    }
+    return BuildModelFromRaw(asset);
+}
+
+::RuntimeMaterial *
+X360RenderManager3D::BuildMaterialFromCooked(::PlatformMaterialAsset *materialAsset) {
+    X360RuntimeMaterial *material = new X360RuntimeMaterial();
+    /* Unlit is not a preference here, it is what the backend does: the pixel
+       shader has no lighting. The cooker rejects any other lighting mode, so a
+       cooked material always agrees with this. */
+    material->set_LightingModel(::RuntimeMaterialLightingModel::Unlit);
+    if (materialAsset) {
+        material->baseColor = ((uint32_t)materialAsset->BaseColorR << 24) |
+                              ((uint32_t)materialAsset->BaseColorG << 16) |
+                              ((uint32_t)materialAsset->BaseColorB << 8) |
+                              (uint32_t)materialAsset->BaseColorA;
+    }
+    if (materials_ == 0) {
+        hel_log("HEL render3d: first cooked material; its colour is carried "
+                "but the shader still shades from normals");
+        hel_log_u32("HEL render3d: first material colour RGBA",
+                    material->baseColor);
+    }
+    materials_++;
+    return material;
+}
+
+::RuntimeMaterial *X360RenderManager3D::BuildMaterialFromCooked(
+    HeCppString cookedAssetPath, ::IContentStreamSource *contentStreamSource) {
+    if (!contentStreamSource) {
+        hel_log("HEL render3d: cooked material requested with no content source");
+        return BuildMaterialFromCooked((::PlatformMaterialAsset *)nullptr);
+    }
+    ::Stream *stream = contentStreamSource->OpenRead(cookedAssetPath);
+    if (!stream) {
+        hel_log("HEL render3d: cooked material is not in the image");
+        hel_log(cookedAssetPath.c_str());
+        return BuildMaterialFromCooked((::PlatformMaterialAsset *)nullptr);
+    }
+    /* The payload is whatever the cooker serialized. A different asset type
+       here means the build staged the wrong file, which is worth saying rather
+       than reading as a default-coloured material. */
+    ::PlatformMaterialAsset *asset = dynamic_cast<::PlatformMaterialAsset *>(
+        ::AssetSerializer::Deserialize(stream));
+    if (!asset) {
+        hel_log("HEL render3d: cooked material did not deserialize");
+        hel_log(cookedAssetPath.c_str());
+    }
+    return BuildMaterialFromCooked(asset);
 }
 
 void X360RenderManager3D::Draw() {
