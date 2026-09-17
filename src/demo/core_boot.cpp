@@ -178,15 +178,14 @@ extern "C" int hel_core_boot(void) {
        two cameras in the object graph and draw the wrong one. */
     const char *const startupSceneId = he_x360_startup_scene_id();
     if (startupSceneId && startupSceneId[0] != '\0') {
-        hel_log("HEL core: loading the authored startup scene");
+        hel_log("HEL core: requesting the authored startup scene");
         hel_log(startupSceneId);
+        /* The engine queues the load and materializes it at the next frame
+           boundary, so nothing is read from the archive here; the counters
+           that say whether it was found are logged after the first update. */
         g_core->get_SceneManager()->LoadScene(HeCppString(startupSceneId),
                                               ::SceneLoadMode::Single);
-        hel_log("HEL core: authored scene loaded");
-        hel_log_u32("HEL core: content opened while loading it",
-                    g_content ? g_content->opened : 0u);
-        hel_log_u32("HEL core: content missing while loading it",
-                    g_content ? g_content->misses : 0u);
+        hel_log("HEL core: authored scene load queued");
     } else {
         const int sceneError = hel_core_scene_build();
         if (sceneError != 0) {
@@ -215,6 +214,10 @@ extern "C" int hel_core_update(double elapsed_seconds) {
     g_core->Update(elapsed_seconds);
     if (g_frames == 0) {
         hel_log("HEL core: first update returned");
+        /* A queued scene is materialized during this update, so this is the
+           first point at which the archive has been asked for it. */
+        hel_log_u32("HEL core: content opened", g_content ? g_content->opened : 0u);
+        hel_log_u32("HEL core: content missing", g_content ? g_content->misses : 0u);
     }
     return 0;
 }
