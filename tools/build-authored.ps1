@@ -122,8 +122,8 @@ foreach ($match in [regex]::Matches($sceneText, '([A-Za-z_][A-Za-z0-9_\.]*)\s*,\
     if (-not $typeName.Contains('.')) { continue }
     $retainedScriptClasses += $typeName.Substring($typeName.LastIndexOf('.') + 1)
 }
-$retainedScriptClasses = @($retainedScriptClasses + $AdditionalRetainedClasses | Sort-Object -Unique)
-if ($retainedScriptClasses.Count -eq 0) { throw "No project script components were found in $stagedScene." }
+$sceneNamedClasses = @($retainedScriptClasses + $AdditionalRetainedClasses | Sort-Object -Unique)
+if ($sceneNamedClasses.Count -eq 0) { throw "No project script components were found in $stagedScene." }
 
 $codebaseRoot = Join-Path $stagedProject 'assets\codebase'
 if (-not (Test-Path -LiteralPath $codebaseRoot)) { throw "Staged project has no codebase: $codebaseRoot" }
@@ -135,6 +135,34 @@ foreach ($moduleFile in Get-ChildItem -LiteralPath $codebaseRoot -Recurse -Filte
         Remove-Item -LiteralPath $moduleFile.DirectoryName -Recurse -Force
     }
 }
+
+# A component the scene names is rarely self-contained: it calls helpers, and the scene
+# says nothing about those. Keeping only the named components fails to compile on the
+# first helper. So the retained set is closed over what the retained files actually
+# mention, one file name at a time, until it stops growing. A file is pulled in only
+# because a file already being kept names its type, which is the same reason the
+# compiler would need it.
+$classFiles = @{}
+foreach ($script in Get-ChildItem -LiteralPath $codebaseRoot -Recurse -Filter '*.cs') {
+    $className = [IO.Path]::GetFileNameWithoutExtension($script.Name)
+    if (-not $classFiles.ContainsKey($className)) { $classFiles[$className] = $script.FullName }
+}
+$retainedScriptClasses = [Collections.Generic.HashSet[string]]::new([string[]]$sceneNamedClasses)
+$pending = [Collections.Generic.Queue[string]]::new([string[]]$sceneNamedClasses)
+while ($pending.Count -gt 0) {
+    $className = $pending.Dequeue()
+    if (-not $classFiles.ContainsKey($className)) { continue }
+    $body = [IO.File]::ReadAllText($classFiles[$className])
+    foreach ($candidate in $classFiles.Keys) {
+        if ($retainedScriptClasses.Contains($candidate)) { continue }
+        if ($body -match ('(?<![A-Za-z0-9_])' + [regex]::Escape($candidate) + '(?![A-Za-z0-9_])')) {
+            [void]$retainedScriptClasses.Add($candidate)
+            $pending.Enqueue($candidate)
+        }
+    }
+}
+$retainedScriptClasses = @($retainedScriptClasses | Sort-Object)
+
 $retainedScripts = @()
 $removedScripts = @()
 foreach ($script in Get-ChildItem -LiteralPath $codebaseRoot -Recurse -Filter '*.cs') {
@@ -150,12 +178,13 @@ foreach ($script in Get-ChildItem -LiteralPath $codebaseRoot -Recurse -Filter '*
 }
 # A component the scene names but whose script is gone would fail at load with nothing
 # to point at, so it fails here instead, naming the file.
-foreach ($className in $retainedScriptClasses) {
+foreach ($className in $sceneNamedClasses) {
     if (-not ($retainedScripts | Where-Object { $_.EndsWith('/' + $className + '.cs') })) {
         throw "The scene names component '$className' but the project codebase has no $className.cs."
     }
 }
 [ordered]@{
+    sceneNamedClasses = $sceneNamedClasses
     retainedScriptClasses = $retainedScriptClasses
     retainedScripts = $retainedScripts
     removedScripts = $removedScripts
