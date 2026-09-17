@@ -53,6 +53,16 @@ uint32_t hel_heap_failed_allocations(void);
 void hel_heap_report(const char *label);
 void hel_heap_shutdown(void);
 
+/* Cooked content archive linked into the image (content.c). The archive is
+   built by tools/pack-content.py; an image with no staged content links an
+   empty one, so every lookup simply reports "not present". */
+int hel_content_init(void);
+int hel_content_open(const char *path, const uint8_t **data, uint32_t *size);
+uint32_t hel_content_count(void);
+uint32_t hel_content_lookups(void);
+uint32_t hel_content_misses(void);
+const char *hel_content_path_at(uint32_t index);
+
 /* C++ runtime support (cxx_runtime.cpp). hel_cxx_init runs the static
    constructors in .init_array and must run after hel_heap_init. */
 void hel_cxx_init(void);

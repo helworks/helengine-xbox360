@@ -25,6 +25,9 @@ int hel_core_draw(void);
 uint32_t hel_core_frames(void);
 void hel_core_shutdown(void);
 
+/* Cooked content archive check (src/demo/content_test.c). */
+uint32_t hel_content_test(void);
+
 /* Binary serialization check for this big-endian target
    (src/demo/endian_test.cpp): returns the number of failed checks. */
 uint32_t hel_endian_test(void);

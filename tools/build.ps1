@@ -13,6 +13,7 @@ param(
     [string]$OutDir = "build/xenia",
     [string]$CoreGenerated = "build/generated-core/generated",
     [string]$CoreLib = "build/core/libhelcore.a",
+    [string]$ContentRoot = "build/content-staging",
     [string[]]$Define = @()
 )
 $ErrorActionPreference = "Stop"
@@ -29,6 +30,19 @@ if (-not (Test-Path (Join-Path $repo $CoreLib))) {
 
 & (Join-Path $PSScriptRoot "build-shaders.ps1") -Config $Config | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "shader build failed" }
+
+# Cooked content travels inside the image; with nothing staged this writes an
+# empty archive so the image always links the same way.
+$contentFull = Join-Path $repo $ContentRoot
+# Capture rather than pipe: piping into Select-Object -First closes the
+# pipeline early, which kills the packer and reports a false failure.
+$contentLog = & $cfg.python (Join-Path $repo "tools/pack-content.py") `
+    --content-root $contentFull `
+    --out-bin (Join-Path $out "content.bin") `
+    --out-stub (Join-Path $out "content.S") `
+    --incbin-path "/work/$outRel/content.bin"
+if ($LASTEXITCODE -ne 0) { $contentLog; throw "content packing failed" }
+$contentLog | Select-Object -First 2 | ForEach-Object { Write-Host $_ }
 
 # Shared machine/ABI flags. -msdata=none keeps r13 (the KPCR in Xenia)
 # untouched; -mno-eabi drops the EABI helper calls no runtime provides here.
@@ -70,6 +84,7 @@ $sources = @(
     "src/platform/xenia_guest/platform.c",
     "src/platform/xenia_guest/runtime.c",
     "src/platform/xenia_guest/heap.c",
+    "src/platform/xenia_guest/content.c",
     "src/platform/xenia_guest/cxx_runtime.cpp",
     "src/platform/xenia_guest/video.c",
     "src/platform/xenia_guest/shader.c",
@@ -79,6 +94,7 @@ $sources = @(
     "src/demo/triangle.c",
     "src/demo/cube.c",
     "src/demo/cube_demo.c",
+    "src/demo/content_test.c",
     "src/demo/cxx_selftest.cpp",
     "src/demo/main.c"
 )
@@ -95,6 +111,10 @@ foreach ($s in ($sources + $coreSources)) {
         $compileLines += "powerpc-eabi-gcc $cflags -c /work/$s -o $obj"
     }
 }
+# The content stub lives in the output directory rather than the source tree,
+# because its archive is a build product.
+$compileLines += "powerpc-eabi-gcc $cflags -c `$OUT/content.S -o `$OUT/content.S.o"
+$objects += "`$OUT/content.S.o"
 $script = @"
 set -euo pipefail
 export PATH=/opt/devkitpro/devkitPPC/bin:`$PATH

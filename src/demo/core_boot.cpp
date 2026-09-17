@@ -18,6 +18,7 @@
 #include "Core.hpp"
 #include "CoreInitializationOptions.hpp"
 #include "IContentStreamSource.hpp"
+#include "system/io/file-stream.hpp"
 #include "PlatformInfo.hpp"
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
@@ -39,20 +40,28 @@ unsigned int hel_video_height(void);
 
 namespace {
 
-/* No cooked assets are packaged into the image yet, so every request is
-   reported and answered with "not present". Once content is embedded this
-   becomes the reader over that archive, which is where the PS1 and
-   Dreamcast ports put their own content sources. */
-class EmptyContentStreamSource : public ::IContentStreamSource {
+/* Serves the core from the archive linked into the image. The console has
+   no file system, so a cooked asset is a span of read-only data rather than
+   a file, and the generated FileStream has a constructor for exactly that.
+   A request for something not staged is reported and answered with null,
+   which is what the engine expects for a missing asset. */
+class X360ContentStreamSource : public ::IContentStreamSource {
 public:
     ::Stream *OpenRead(HeCppString assetPath) override {
-        hel_log("HEL core: content requested but none is packaged");
-        hel_log(assetPath.c_str());
-        requests++;
-        return nullptr;
+        const uint8_t *data = nullptr;
+        uint32_t size = 0;
+        if (hel_content_open(assetPath.c_str(), &data, &size) != HEL_OK) {
+            hel_log("HEL core: content not present in the image");
+            hel_log(assetPath.c_str());
+            misses++;
+            return nullptr;
+        }
+        opened++;
+        return new ::FileStream(data, (size_t)size);
     }
 
-    unsigned int requests = 0;
+    unsigned int opened = 0;
+    unsigned int misses = 0;
 };
 
 /* The 2D manager is still a stub: nothing draws through it yet. The 3D
@@ -101,7 +110,7 @@ public:
 
 helengine::x360::X360RenderManager3D *g_render3d;
 X360RenderManager2D *g_render2d;
-EmptyContentStreamSource *g_content;
+X360ContentStreamSource *g_content;
 ::Core *g_core;
 ::PlatformInfo *g_platform;
 ::CoreInitializationOptions *g_options;
@@ -114,7 +123,7 @@ extern "C" int hel_core_boot(void) {
     hel_log_u32("HEL core: heap allocations before", hel_heap_live_allocations());
 
     g_options = new ::CoreInitializationOptions();
-    g_content = new EmptyContentStreamSource();
+    g_content = new X360ContentStreamSource();
     g_options->set_ContentStreamSource(g_content);
     /* An empty catalog: no cooked scenes are packaged into the image yet. */
     g_options->set_SceneCatalog(
@@ -196,7 +205,8 @@ extern "C" void hel_core_shutdown(void) {
         return;
     }
     hel_log_u32("HEL core: frames run", g_frames);
-    hel_log_u32("HEL core: content requests", g_content ? g_content->requests : 0u);
+    hel_log_u32("HEL core: content opened", g_content ? g_content->opened : 0u);
+    hel_log_u32("HEL core: content missing", g_content ? g_content->misses : 0u);
     hel_log_u32("HEL core: 2D draw calls", g_render2d ? g_render2d->draws2d : 0u);
     g_core->Dispose();
     g_core = nullptr;

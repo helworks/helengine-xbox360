@@ -89,9 +89,22 @@ void hel_demo_main(void) {
         hel_log_u32("HEL demo: heap init failed", (uint32_t)err);
         return;
     }
+    /* The content archive is a platform service like the heap: bring it up
+       before anything that might read an asset. */
+    err = hel_content_init();
+    if (err) {
+        hel_log_u32("HEL demo: content archive rejected", (uint32_t)err);
+        hel_heap_shutdown();
+        return;
+    }
     hel_cxx_init();
     if (hel_cxx_selftest() != 0) {
         hel_log("HEL demo: C++ self-test failed, not submitting any frames");
+        hel_heap_shutdown();
+        return;
+    }
+    if (hel_content_test() != 0) {
+        hel_log("HEL demo: content archive check failed, not submitting any frames");
         hel_heap_shutdown();
         return;
     }

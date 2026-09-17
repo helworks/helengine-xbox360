@@ -33,6 +33,9 @@ checkout runs the first two commands once:
 # Failure-path build (unsupported video mode requested by the demo)
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-invalid -Define HEL_DEMO_INVALID_CONFIG=1
 
+# With cooked content staged into the image (empty archive when absent)
+./tools/build.ps1 -Config tools/config.local.json -ContentRoot build/content-staging
+
 # Without the transpiled core (backend and demo only)
 ./tools/build.ps1 -Config tools/config.local.json -OutDir build/xenia-nocore -Define HEL_CORE_BOOT=0
 

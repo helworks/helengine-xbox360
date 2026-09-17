@@ -226,9 +226,12 @@ The gaps below are listed in priority order, with what closing them buys, in
   report. Wiring them to `mesh.c` and `video.c` is what turns the engine's
   own scene into pixels.
 - **No input or audio backend.** `Initialize` receives null for both.
-- **No cooked content.** The scene is built in code. Packaging cooked assets
-  with a real scene catalog, as the PS1 and Dreamcast ports do, is the next
-  step.
+- **No cooked content yet, but the road into the image exists.**
+  `tools/pack-content.py` builds an archive of staged files,
+  `src/platform/xenia_guest/content.c` reads it on the console, and
+  `X360ContentStreamSource` serves the core from it. What is missing is a
+  builder that cooks and stages real assets, and a scene catalog; the scene
+  is still built in code.
 - **The 2D manager is still a stub.** Sprites and text report their calls
   and draw nothing.
 - **No materials.** A drawable with an empty material array is legal in the
