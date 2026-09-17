@@ -43,6 +43,16 @@ debug shading. Nothing in the backend animates anything, so that rotation is
 the project's `CubeTestSpinComponent` running as transpiled C++ on the
 console.
 
+## Reproduced from one command
+
+The steps above were first run separately while the failures were being found.
+They were then run again as a single invocation of `tools/build-authored.ps1`,
+which staged the project, pruned it, built the builder, published the codegen,
+ran the editor headlessly and linked the image with no manual step. That image
+boots to the same scene; `wrapper-capture.png` catches the cube face-on, on
+the +X face, whose colour is what the normal `(1,0,0)` maps to. Its hash is
+the second entry in `hashes.txt`.
+
 ## What this run does not show
 
 - **Textures.** None are uploaded. The log names the first cooked texture the
