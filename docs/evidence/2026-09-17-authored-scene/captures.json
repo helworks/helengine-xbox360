@@ -1,0 +1,38 @@
+[
+    {
+        "index":  0,
+        "time":  "16:15:52.069",
+        "file":  "capture-0.png",
+        "width":  1280,
+        "height":  720,
+        "avg_rgb":  [
+                        19,
+                        29,
+                        26
+                    ]
+    },
+    {
+        "index":  1,
+        "time":  "16:15:53.004",
+        "file":  "capture-1.png",
+        "width":  1280,
+        "height":  720,
+        "avg_rgb":  [
+                        42,
+                        29,
+                        29
+                    ]
+    },
+    {
+        "index":  2,
+        "time":  "16:15:53.937",
+        "file":  "capture-2.png",
+        "width":  1280,
+        "height":  720,
+        "avg_rgb":  [
+                        43,
+                        29,
+                        53
+                    ]
+    }
+]

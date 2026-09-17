@@ -1,0 +1,108 @@
+   F 8290059C 82001000 003 (   3)    DbgPrint
+HEL demo: start
+HEL demo: mode=00000000
+HEL platform: tick_frequency=02FAF080
+HEL platform: timebase_now_lo=032FB969
+HEL platform: alloc heap virt=BDCA0000 phys=1DCA0000 size=02000000
+HEL heap: bytes=02000000
+HEL heap: usable bytes=01FFFFF0
+HEL content: entries=00000024
+HEL content: bytes=007E7396
+HEL cxx: static initialisers=00000004
+HEL cxx: static initialisers complete
+HEL cxx: self-test start
+HEL cxx: static constructor ran=00000001
+HEL cxx: virtual dispatch=00000001
+HEL cxx: new used the guest heap=00000001
+HEL cxx: virtual dispatch on a heap object=00000001
+HEL cxx: delete released=00000001
+HEL cxx: array new=00000001
+HEL cxx: array delete ran destructors=00000001
+HEL cxx: function-local static=00000001
+HEL cxx: 64-bit division=00000001
+HEL cxx: float arithmetic=00000001
+HEL cxx: heap survived the self-test=00000001
+HEL cxx: self-test failures=00000000
+HEL content: archive check start
+HEL content: entries claimed=00000024
+HEL content: every entry opens=00000001
+HEL content: every entry has data=00000001
+HEL content: an absent asset is reported=00000001
+HEL content: failures=00000000
+HEL matrix: convention check start
+HEL matrix: perspective matches=00000001
+HEL matrix: rotation about Y matches=00000001
+HEL matrix: translation matches=00000001
+HEL matrix: composition order matches=00000001
+HEL matrix: failures=00000000
+HEL endian: binary serialization check start
+HEL endian: host is big-endian=00000001
+HEL endian: big-endian wire round trip=00000001
+HEL endian: little-endian wire round trip=00000001
+HEL endian: failures=00000000
+HEL video: mode width=00000500
+HEL video: mode height=000002D0
+HEL video: edram tiles per surface=000002D0
+HEL video: edram tiles total=000005A0
+HEL video: front buffer bytes needed=00398000
+HEL platform: alloc ring virt=BDC90000 phys=1DC90000 size=00010000
+HEL platform: alloc scratch virt=BDC80000 phys=1DC80000 size=00010000
+HEL platform: alloc frontbuffer virt=BD880000 phys=1D880000 size=00400000
+HEL video: ring initialised, bytes=00010000
+HEL video: allocations=00000004
+HEL video: allocated bytes=02420000
+HEL core: constructing
+HEL core: heap allocations before=00000035
+HEL core: authored scenes in the catalog=00000001
+HEL core: constructed
+HEL core: heap allocations after construction=00000056
+HEL core: initializing
+HEL core: ready
+HEL core: heap allocations after initialize=0000010F
+HEL core: heap bytes after initialize=00005E00
+HEL core: requesting the authored startup scene
+cube_test
+HEL core: authored scene load queued
+HEL core: heap allocations after the scene=00000113
+HEL core: first update returned
+HEL core: content opened=00000000
+HEL core: content missing=00000000
+HEL core: textures are described but not uploaded; this backend has no texture path
+cooked/imported/459853d786bc727a34bdc4c24bf19391804b7ec4a5582ab57911669db93a34c8
+HEL render3d: first cooked material; its colour is carried but the shader still shades from normals
+HEL render3d: first material colour RGBA=FFFFFFFF
+HEL platform: alloc mesh virt=BD870000 phys=1D870000 size=00010000
+HEL mesh: created handle=00000001
+HEL mesh: vertices=00000018
+HEL mesh: indices=00000024
+HEL mesh: vertex data physical=1D870000
+HEL mesh: index data physical=1D870300
+HEL render3d: model built, vertices=00000018
+HEL render3d: model built, indices=00000024
+HEL shader: unlit vertex
+HEL shader: dwords=0000001E
+HEL shader: unlit pixel
+HEL shader: dwords=00000006
+HEL draw: first draw, mesh=00000001
+HEL draw: indices=00000024
+HEL draw: vertices=00000018
+HEL render3d: first draw, cameras=00000003
+HEL render3d: first draw, drawables drawn=00000006
+HEL render3d: first draw, drawables skipped=00000000
+HEL core: first update and draw complete
+HEL core: drawables drawn in the first frame=00000006
+HEL core: drawables skipped in the first frame=00000000
+HEL core: engine recorded draw calls=00000006
+HEL core: heap allocations after first frame=00000403
+HEL video: first present complete
+HEL video: first frame ring dwords=0000030C
+HEL video: first frame gpu wait ms=00000010
+HEL video: first frame submit->done ticks=0012D298
+HEL frame: frames=0000003C
+HEL frame: avg cpu us per frame=00006DDB
+HEL frame: last 60 frames ms=00000697
+HEL frame: presented=0000003C
+HEL frame: allocations=00000005
+HEL frame: allocated bytes=02430000
+HEL frame: heap allocations=0000041D
+HEL frame: heap bytes=003711D0

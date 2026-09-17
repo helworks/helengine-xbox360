@@ -4,7 +4,7 @@ Written 2026-09-16, after the transpiled core booted and a scene built with
 the engine's own types drew through the Xenos backend. The order matters:
 the first item gates most of the rest.
 
-## 1. This target is not a platform the editor knows about (in progress)
+## 1. This target is not a platform the editor knows about (done 2026-09-17)
 
 Every other port has a builder project and an entry in the platform registry
 pointing at it. PlayStation 1, Dreamcast and N64 each have a `builder/`
@@ -39,18 +39,24 @@ itself. `tools/build-image.ps1` is the single entry point the builder calls,
 and it produces a bootable image from a generated core plus a staged content
 directory.
 
-**Still missing before the editor can drive a build:** an entry in the
-platform registry so the editor discovers the builder, the project's own
-supported-platform list, and guest-side consumption of the generated scene
-catalog so a cooked scene is actually loaded rather than the scene being
-built in code.
+**Closed.** The editor now builds this target end to end and the authored
+scene draws on the console; `evidence/2026-09-17-authored-scene` records the
+run. `tools/build-authored.ps1` is the single command, and it stages a copy of
+the project because the editor selects project code by module rather than by
+script, which pulls in code this exception-free target cannot transpile.
+
+Two limits of that route are worth knowing. The staged copy is pruned to the
+scripts the scene names plus what those reference, so a build proves the scene
+works and not that the whole project does. And the build is driven by a
+wrapper rather than from inside the editor, because the machine-local registry
+and the project's build settings both have to be written for it first.
 
 ## 2. What the scene needs before it looks like the scene
 
 | Gap | State today | What it needs |
 |---|---|---|
-| Materials | none; vertex colour is derived from the normal | a per-draw constant colour, which means a constant in the pixel shader |
-| Textures | `BuildTextureFromRaw` returns null | Xenos texture fetch constants, tiling and formats; the largest single piece left |
+| Materials | cooked colour is read and carried, never drawn with | a per-draw constant colour, which means a constant in the pixel shader |
+| Textures | described with real dimensions, no pixels uploaded | Xenos texture fetch constants, tiling and formats; the largest single piece left |
 | Lighting | unlit | the engine's ambient and directional lights, as the PS1 port did per-vertex through the engine's own light utility |
 | Two dimensional drawing | sprites and text report their calls and draw nothing | a 2D path, or the Dreamcast position of stripping the instruction UI on minimal targets |
 
@@ -92,6 +98,11 @@ assume.
 
 ## Recommendation
 
-Do the builder and content packaging first. It converts this from a
-demonstration that the path works into the actual game booting, and it is
-the prerequisite that makes materials and textures worth building.
+Materials next. The cooked colour already reaches the renderer and is thrown
+away at the last step, so wiring one pixel-shader constant turns the debug
+shading into the authored appearance. That is a small change with a visible
+result, and it is the shortest way to tell whether what is on screen is what
+the author asked for.
+
+Textures after that. They are the largest remaining piece and everything 2D
+waits behind them.
