@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <OutputType>Exe</OutputType>
+    <UseAppHost>false</UseAppHost>
+    <!-- Builds against the shared engine checkout by default. The PS1 builder
+         points at its own engine fork instead, which is what lets that platform
+         drift from the others; this target deliberately does not. -->
+    <HelengineRoot Condition="'$(HelengineRoot)' == '' and '$(HELENGINE_ROOT)' != ''">$(HELENGINE_ROOT)</HelengineRoot>
+    <HelengineRoot Condition="'$(HelengineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\helengine</HelengineRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj" />
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.core\helengine.core.csproj" />
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.files\helengine.files.csproj" />
+  </ItemGroup>
+  <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
+    <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj')" Text="helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT to the shared engine checkout." />
+  </Target>
+</Project>

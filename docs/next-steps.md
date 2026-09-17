@@ -4,7 +4,7 @@ Written 2026-09-16, after the transpiled core booted and a scene built with
 the engine's own types drew through the Xenos backend. The order matters:
 the first item gates most of the rest.
 
-## 1. This target is not a platform the editor knows about
+## 1. This target is not a platform the editor knows about (in progress)
 
 Every other port has a builder project and an entry in the platform registry
 pointing at it. PlayStation 1, Dreamcast and N64 each have a `builder/`
@@ -31,6 +31,19 @@ The shape to copy is the PS1 port: a C# builder plugin that cooks and stages,
 plus a native build script the builder calls. The Dreamcast port's content
 stager and cooked-content validator are the closest reference for the
 staging half.
+
+**Done so far:** `builder/` holds the platform definition, material cooker,
+scene validator, content stager, scene catalog writer and native build
+executor, and it compiles against the shared engine checkout and describes
+itself. `tools/build-image.ps1` is the single entry point the builder calls,
+and it produces a bootable image from a generated core plus a staged content
+directory.
+
+**Still missing before the editor can drive a build:** an entry in the
+platform registry so the editor discovers the builder, the project's own
+supported-platform list, and guest-side consumption of the generated scene
+catalog so a cooked scene is actually loaded rather than the scene being
+built in code.
 
 ## 2. What the scene needs before it looks like the scene
 

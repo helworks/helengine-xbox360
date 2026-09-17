@@ -18,3 +18,7 @@ __pycache__/
 .vscode/
 *.swp
 Thumbs.db
+
+# .NET build output from the platform builder.
+builder/bin/
+builder/obj/
