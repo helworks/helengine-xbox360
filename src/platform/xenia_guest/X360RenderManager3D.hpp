@@ -10,6 +10,13 @@
 #include "RenderManager3D.hpp"
 #include "RuntimeModel.hpp"
 #include "RuntimeMaterial.hpp"
+/* Says whether the generated core resolves materials as cooked platform-owned
+   payloads, which is what decides whether the cooked entry points below exist
+   to override. */
+#include "helcpp_config.hpp"
+
+class ObjectManager;
+class PlatformMaterialAsset;
 
 extern "C" {
 #include "../../engine/frame.h"
@@ -39,10 +46,9 @@ private:
 /// </summary>
 /// <remarks>
 /// The cooker rejects textures, lighting and transparency by name, so the base
-/// colour is all that survives cooking and all that is kept here. It is stored
-/// rather than used: the pixel shader has no constant for it yet, so geometry
-/// still draws with the debug shading derived from its normals. Keeping the
-/// value is what makes wiring the constant a change to the draw path alone.
+/// colour is all that survives cooking and all that is kept here. It reaches
+/// the GPU as a per-draw constant that the vertex shader multiplies the
+/// lighting by.
 /// </remarks>
 class X360RuntimeMaterial final : public ::RuntimeMaterial {
 public:
@@ -57,11 +63,17 @@ public:
     ::RuntimeModel *BuildModelFromCooked(
         HeCppString cookedAssetPath,
         ::IContentStreamSource *contentStreamSource) override;
+#if defined(HELENGINE_RUNTIME_MATERIAL_RESOLUTION_COOKED_PLATFORM_OWNED)
+    /* Present only when the core was generated with cooked platform-owned
+       materials. A core generated without them has no such entry point, and
+       declaring an override for a method that does not exist is an error, so
+       the guard is what lets one renderer serve both. */
     ::RuntimeMaterial *BuildMaterialFromCooked(
         ::PlatformMaterialAsset *materialAsset) override;
     ::RuntimeMaterial *BuildMaterialFromCooked(
         HeCppString cookedAssetPath,
         ::IContentStreamSource *contentStreamSource) override;
+#endif
     void Draw() override;
     void ReleaseModel(::RuntimeModel *model) override;
     /* The engine reads this to report how much the renderer drew. */
@@ -69,6 +81,17 @@ public:
 
     /// <summary>Records the first backend failure of the current frame.</summary>
     void recordDrawError(int error);
+
+    /// <summary>
+    /// The authored background colour, from the lowest-draw-order camera that
+    /// clears colour.
+    /// </summary>
+    /// <param name="rgba">Receives the colour; untouched when none is authored.</param>
+    /// <returns>True when a camera asked for a colour clear.</returns>
+    bool resolveClearColor(float *rgba);
+
+    /// <summary>Resolves the scene's lights into the constants a draw shades with.</summary>
+    HelDrawParams resolveLighting(::ObjectManager *objectManager);
 
     uint32_t modelCount() const { return models_; }
     uint32_t materialCount() const { return materials_; }
@@ -83,6 +106,7 @@ private:
     uint32_t lastSkippedCount_ = 0;
     int lastDrawError_ = 0;
     bool reportedFirstDraw_ = false;
+    bool reportedClearColor_ = false;
 };
 
 } // namespace helengine::x360

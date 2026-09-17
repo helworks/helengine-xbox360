@@ -9,14 +9,14 @@
  * projection, and hands the mesh and that matrix to the Xenos backend
  * (mesh.c).
  *
- * One deliberate simplification, visible in the log and with a clear
- * replacement:
+ * Shading is the cooked material's base colour under one directional light
+ * plus ambient, both read from the scene every frame so a light switched off
+ * while running takes effect. The lighting math runs in the vertex shader
+ * from the normal carried in the vertex stream, rather than being baked into
+ * vertex colours at upload, for the same reason.
  *
- *   Colour. A model carries positions, normals and texture coordinates but
- *   no vertex colours, and materials are not wired up yet, so each vertex
- *   takes a colour derived from its normal. That makes the faces of a mesh
- *   distinguishable and makes a wrong normal or a wrong winding obvious.
- *   When materials arrive, the colour comes from the material instead.
+ * What is still missing is named where it happens: textures, more than one
+ * directional light, and per-submesh materials.
  */
 #include "X360RenderManager3D.hpp"
 
@@ -25,10 +25,14 @@
 #include "IDrawable3D.hpp"
 #include "IRenderQueue3D.hpp"
 #include "IRenderVisitor3D.hpp"
+#include "CameraClearSettings.hpp"
 #include "CameraProjectionUtils.hpp"
 #include "ModelAsset.hpp"
 #include "ObjectManager.hpp"
+#include "AmbientLightComponent.hpp"
 #include "AssetSerializer.hpp"
+#include "DirectionalLightComponent.hpp"
+#include "LightDirectionUtility.hpp"
 #include "IContentStreamSource.hpp"
 #include "PlatformMaterialAsset.hpp"
 #include "X360EngineMath.hpp"
@@ -44,14 +48,12 @@ void hel_log_u32(const char *label, unsigned int value);
 
 namespace {
 
-/* Maps a unit normal to a colour, so each face of a mesh is visibly
-   different and a flipped normal shows up as a colour change. */
-void colour_from_normal(const ::float3 &normal, float *rgba) {
-    rgba[0] = 0.5f + 0.5f * normal.X;
-    rgba[1] = 0.5f + 0.5f * normal.Y;
-    rgba[2] = 0.5f + 0.5f * normal.Z;
-    rgba[3] = 1.0f;
-}
+/* A cooked model carries no vertex colours, so every vertex is white and the
+   visible colour comes from the material and the lighting. This used to be a
+   colour derived from the normal, which made a wrong normal or winding
+   obvious; the normal now reaches the GPU itself, so lighting shows the same
+   faults without standing in for the material. */
+const float kWhite[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
 } // namespace
 
@@ -61,9 +63,9 @@ namespace helengine::x360 {
 class DrawableVisitor final : public ::IRenderVisitor3D {
 public:
     DrawableVisitor(const HelMat4 &viewProjection, uint16_t cameraLayerMask,
-                    X360RenderManager3D &owner)
+                    const HelDrawParams &lighting, X360RenderManager3D &owner)
         : viewProjection_(viewProjection), cameraLayerMask_(cameraLayerMask),
-          owner_(owner) {}
+          lighting_(lighting), owner_(owner) {}
 
     void Visit(::IDrawable3D *drawable) override {
         if (drawable == nullptr) {
@@ -86,9 +88,23 @@ public:
         /* Column vectors in the backend, so view-projection comes first and
            the model transform last. */
         ::float4x4 world = entity->get_WorldTransformMatrix();
-        HelMat4 mvp = hel_mul(viewProjection_, hel_matrix_from_engine(world));
+        HelMat4 modelMatrix = hel_matrix_from_engine(world);
+        HelMat4 mvp = hel_mul(viewProjection_, modelMatrix);
 
-        const int error = hel_draw_unlit(model->mesh(), &mvp);
+        /* The scene's lighting, with this drawable's own material colour on
+           top. A drawable with no material draws white, which is what an
+           untextured, uncoloured surface is. */
+        HelDrawParams params = lighting_;
+        const X360RuntimeMaterial *material = firstMaterial(drawable);
+        if (material != nullptr) {
+            params.base_color[0] = (float)((material->baseColor >> 24) & 0xFFu) / 255.0f;
+            params.base_color[1] = (float)((material->baseColor >> 16) & 0xFFu) / 255.0f;
+            params.base_color[2] = (float)((material->baseColor >> 8) & 0xFFu) / 255.0f;
+            params.base_color[3] = (float)(material->baseColor & 0xFFu) / 255.0f;
+        }
+
+        const int error =
+            hel_draw_shaded(model->mesh(), &mvp, &modelMatrix, &params);
         if (error != HEL_OK) {
             owner_.recordDrawError(error);
             return;
@@ -100,8 +116,21 @@ public:
     uint32_t skipped() const { return skipped_; }
 
 private:
+    /// <summary>The drawable's first material, or null when it has none.</summary>
+    static const X360RuntimeMaterial *firstMaterial(::IDrawable3D *drawable) {
+        Array<::RuntimeMaterial *> *materials = drawable->get_Materials();
+        if (materials == nullptr || materials->get_Length() == 0) {
+            return nullptr;
+        }
+        /* Submesh materials are not drawn separately yet: the backend issues
+           one draw for the whole mesh, so only the first material can apply.
+           A mesh with several would need one draw per submesh. */
+        return dynamic_cast<const X360RuntimeMaterial *>((*materials)[0]);
+    }
+
     const HelMat4 &viewProjection_;
     uint16_t cameraLayerMask_;
+    const HelDrawParams &lighting_;
     X360RenderManager3D &owner_;
     uint32_t drawn_ = 0;
     uint32_t skipped_ = 0;
@@ -138,14 +167,23 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
         vertices[index].x = position.X;
         vertices[index].y = position.Y;
         vertices[index].z = position.Z;
-        float rgba[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        /* A model without normals is drawn facing the viewer rather than
+           refused, because its geometry is still correct; it just cannot be
+           lit. The count is reported once below. */
         if (hasNormals) {
-            colour_from_normal((*data->Normals)[index], rgba);
+            const ::float3 &normal = (*data->Normals)[index];
+            vertices[index].nx = normal.X;
+            vertices[index].ny = normal.Y;
+            vertices[index].nz = normal.Z;
+        } else {
+            vertices[index].nx = 0.0f;
+            vertices[index].ny = 0.0f;
+            vertices[index].nz = 1.0f;
         }
-        vertices[index].r = rgba[0];
-        vertices[index].g = rgba[1];
-        vertices[index].b = rgba[2];
-        vertices[index].a = rgba[3];
+        vertices[index].r = kWhite[0];
+        vertices[index].g = kWhite[1];
+        vertices[index].b = kWhite[2];
+        vertices[index].a = kWhite[3];
     }
 
     uint16_t *indices = new uint16_t[indexCount];
@@ -164,6 +202,9 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
     }
 
     models_++;
+    if (!hasNormals) {
+        hel_log("HEL render3d: model has no normals, it cannot be lit");
+    }
     hel_log_u32("HEL render3d: model built, vertices", (uint32_t)vertexCount);
     hel_log_u32("HEL render3d: model built, indices", (uint32_t)indexCount);
     X360RuntimeModel *runtimeModel = new X360RuntimeModel(
@@ -198,6 +239,7 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
     return BuildModelFromRaw(asset);
 }
 
+#if defined(HELENGINE_RUNTIME_MATERIAL_RESOLUTION_COOKED_PLATFORM_OWNED)
 ::RuntimeMaterial *
 X360RenderManager3D::BuildMaterialFromCooked(::PlatformMaterialAsset *materialAsset) {
     X360RuntimeMaterial *material = new X360RuntimeMaterial();
@@ -212,9 +254,7 @@ X360RenderManager3D::BuildMaterialFromCooked(::PlatformMaterialAsset *materialAs
                               (uint32_t)materialAsset->BaseColorA;
     }
     if (materials_ == 0) {
-        hel_log("HEL render3d: first cooked material; its colour is carried "
-                "but the shader still shades from normals");
-        hel_log_u32("HEL render3d: first material colour RGBA",
+        hel_log_u32("HEL render3d: first cooked material colour RGBA",
                     material->baseColor);
     }
     materials_++;
@@ -244,6 +284,130 @@ X360RenderManager3D::BuildMaterialFromCooked(::PlatformMaterialAsset *materialAs
     }
     return BuildMaterialFromCooked(asset);
 }
+#endif
+
+/* The background the scene asked for.
+
+   A scene has several cameras and each carries its own clear settings, so the
+   one that owns the background is the first to draw: the lowest draw order
+   that actually clears colour. The overlay cameras above it leave the colour
+   buffer alone, which is how they compose over it.
+
+   Depth is not read from here. The backend clears depth every frame because
+   its depth buffer is EDRAM that does not survive the resolve, so a camera
+   asking not to clear depth could not be honoured anyway. */
+bool X360RenderManager3D::resolveClearColor(float *rgba) {
+    ::Core *core = get_OwnerCore();
+    ::ObjectManager *objectManager =
+        core != nullptr ? core->get_ObjectManager() : nullptr;
+    List<::ICamera *> *cameras =
+        objectManager != nullptr ? objectManager->get_Cameras() : nullptr;
+    const int32_t cameraCount = cameras != nullptr ? cameras->get_Count() : 0;
+
+    ::ICamera *chosen = nullptr;
+    for (int32_t index = 0; index < cameraCount; ++index) {
+        ::ICamera *camera = cameras->get_Item(index);
+        if (camera == nullptr) {
+            continue;
+        }
+        ::CameraClearSettings settings = camera->get_ClearSettings();
+        if (!settings.get_ClearColorEnabled()) {
+            continue;
+        }
+        if (chosen == nullptr ||
+            camera->get_CameraDrawOrder() < chosen->get_CameraDrawOrder()) {
+            chosen = camera;
+        }
+    }
+    if (chosen == nullptr || rgba == nullptr) {
+        return false;
+    }
+    ::CameraClearSettings settings = chosen->get_ClearSettings();
+    const ::float4 colour = settings.get_ClearColor();
+    if (!reportedClearColor_) {
+        reportedClearColor_ = true;
+        /* Reported as 8-bit channels so the log line can be compared with a
+           pixel read straight from a capture. */
+        hel_log_u32("HEL render3d: authored clear colour RGBA",
+                    ((uint32_t)(colour.X * 255.0f + 0.5f) << 24) |
+                        ((uint32_t)(colour.Y * 255.0f + 0.5f) << 16) |
+                        ((uint32_t)(colour.Z * 255.0f + 0.5f) << 8) |
+                        (uint32_t)(colour.W * 255.0f + 0.5f));
+    }
+    rgba[0] = colour.X;
+    rgba[1] = colour.Y;
+    rgba[2] = colour.Z;
+    rgba[3] = colour.W;
+    return true;
+}
+
+/* Resolves the scene's lights into the constants one draw shades with.
+   Read fresh every frame, because a scene can switch a light off while
+   running and the cube scene does exactly that.
+
+   Only the first directional light is used: the shader has one light term.
+   Ambient lights are summed, which is what adding more of them means. No
+   light is invented when a scene has none; the result is then black, and the
+   count in the log says why rather than a made-up value hiding it. */
+HelDrawParams X360RenderManager3D::resolveLighting(::ObjectManager *objectManager) {
+    HelDrawParams params = {};
+    params.base_color[0] = 1.0f;
+    params.base_color[1] = 1.0f;
+    params.base_color[2] = 1.0f;
+    params.base_color[3] = 1.0f;
+    if (objectManager == nullptr) {
+        return params;
+    }
+
+    List<::AmbientLightComponent *> *ambientLights =
+        objectManager->get_AmbientLights();
+    const int32_t ambientCount =
+        ambientLights != nullptr ? ambientLights->get_Count() : 0;
+    for (int32_t index = 0; index < ambientCount; ++index) {
+        ::AmbientLightComponent *light = ambientLights->get_Item(index);
+        if (light == nullptr) {
+            continue;
+        }
+        const ::float4 colour = light->get_Color();
+        const float intensity = light->get_Intensity();
+        params.ambient[0] += colour.X * intensity;
+        params.ambient[1] += colour.Y * intensity;
+        params.ambient[2] += colour.Z * intensity;
+    }
+
+    List<::DirectionalLightComponent *> *directionalLights =
+        objectManager->get_DirectionalLights();
+    const int32_t directionalCount =
+        directionalLights != nullptr ? directionalLights->get_Count() : 0;
+    for (int32_t index = 0; index < directionalCount; ++index) {
+        ::DirectionalLightComponent *light = directionalLights->get_Item(index);
+        if (light == nullptr || light->get_Parent() == nullptr) {
+            continue;
+        }
+        /* The engine derives a directional light's world direction from its
+           entity's forward axis; use its own utility rather than repeating
+           that convention here, where it could drift. The utility returns the
+           direction the light travels, and shading wants the vector from the
+           surface towards it, which is the opposite. */
+        const ::float3 travel = ::LightDirectionUtility::GetLightDirection(light);
+        params.light_direction[0] = -travel.X;
+        params.light_direction[1] = -travel.Y;
+        params.light_direction[2] = -travel.Z;
+        const ::float4 colour = light->get_Color();
+        const float intensity = light->get_Intensity();
+        params.light_color[0] = colour.X * intensity;
+        params.light_color[1] = colour.Y * intensity;
+        params.light_color[2] = colour.Z * intensity;
+        break;
+    }
+
+    if (!reportedFirstDraw_) {
+        hel_log_u32("HEL render3d: ambient lights", (uint32_t)ambientCount);
+        hel_log_u32("HEL render3d: directional lights",
+                    (uint32_t)directionalCount);
+    }
+    return params;
+}
 
 void X360RenderManager3D::Draw() {
     lastDrawnCount_ = 0;
@@ -260,6 +424,8 @@ void X360RenderManager3D::Draw() {
         /* An empty scene draws nothing; that is not an error. */
         return;
     }
+
+    const HelDrawParams lighting = resolveLighting(objectManager);
 
     const float width = (float)hel_video_width();
     const float height = (float)hel_video_height();
@@ -303,7 +469,8 @@ void X360RenderManager3D::Draw() {
             hel_log("HEL render3d: camera has no render queue");
             continue;
         }
-        DrawableVisitor visitor(viewProjection, camera->get_LayerMask(), *this);
+        DrawableVisitor visitor(viewProjection, camera->get_LayerMask(),
+                                lighting, *this);
         queue->VisitOrdered(&visitor);
         lastDrawnCount_ += visitor.drawn();
         lastSkippedCount_ += visitor.skipped();

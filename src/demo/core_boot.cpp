@@ -306,6 +306,16 @@ extern "C" int hel_core_draw(void) {
     return 0;
 }
 
+/* The background the scene asked for, so the frame loop clears to the colour
+   the author chose rather than a constant this port picked. Returns 0 when no
+   camera clears colour, which leaves the caller's own value in place. */
+extern "C" int hel_core_clear_color(float *rgba) {
+    if (!g_render3d || !rgba) {
+        return 0;
+    }
+    return g_render3d->resolveClearColor(rgba) ? 1 : 0;
+}
+
 extern "C" unsigned int hel_core_frames(void) { return g_frames; }
 
 extern "C" void hel_core_shutdown(void) {

@@ -22,6 +22,9 @@ int hel_core_boot(void);
    geometry survives the clear. */
 int hel_core_update(double elapsed_seconds);
 int hel_core_draw(void);
+/* Writes the background colour the scene's camera asked for into rgba and
+   returns 1; returns 0 and leaves rgba alone when no camera clears colour. */
+int hel_core_clear_color(float *rgba);
 uint32_t hel_core_frames(void);
 void hel_core_shutdown(void);
 

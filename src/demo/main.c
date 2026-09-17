@@ -52,11 +52,18 @@ static int core_and_scene_frame(uint32_t frame, void *user) {
 static int clear_frame(uint32_t frame, void *user) {
     (void)user;
 #if HEL_CORE_BOOT
-    /* A steady background: the engine's scene is what this mode shows, and
-       the frame loop is not tied to the display refresh, so alternating the
-       clear colour flips several times a second and reads as flashing. */
+    /* The background is the one the scene's own camera asked for, so this
+       target shows the colour the author chose rather than one picked here.
+       The value below is only the fallback for a scene whose cameras all
+       leave the colour buffer alone.
+
+       It is a steady colour either way: the frame loop is not tied to the
+       display refresh, so a background that alternates per frame flips
+       several times a second and reads as flashing. */
     (void)frame;
-    int err = hel_frame_begin(0.02f, 0.02f, 0.08f, 1.0f);
+    float clear[4] = {0.02f, 0.02f, 0.08f, 1.0f};
+    hel_core_clear_color(clear);
+    int err = hel_frame_begin(clear[0], clear[1], clear[2], clear[3]);
     /* With no scene of its own to draw, this mode shows the engine's. */
     if (!err) {
         err = hel_core_draw();
