@@ -14,6 +14,10 @@ param(
     [string]$CoreGenerated = "build/generated-core/generated",
     [string]$CoreLib = "build/core/libhelcore.a",
     [string]$ContentRoot = "build/content-staging",
+    # Directory holding the scene catalog the platform builder generated. When
+    # it is empty the stub catalog is linked instead and the image falls back
+    # to the scene built in code.
+    [string]$CatalogRoot = "",
     [string[]]$Define = @()
 )
 $ErrorActionPreference = "Stop"
@@ -43,6 +47,23 @@ $contentLog = & $cfg.python (Join-Path $repo "tools/pack-content.py") `
     --incbin-path "/work/$outRel/content.bin"
 if ($LASTEXITCODE -ne 0) { $contentLog; throw "content packing failed" }
 $contentLog | Select-Object -First 2 | ForEach-Object { Write-Host $_ }
+
+# The scene catalog. Exactly one definition is linked: the builder's generated
+# one when a build supplied it, otherwise the stub. It is copied into the
+# output directory because the generated file lives in the editor's build
+# workspace, outside the tree the container mounts.
+$catalogSource = "src/demo/scene_catalog_stub.cpp"
+if ($CatalogRoot) {
+    $generatedCatalog = Join-Path $CatalogRoot "xbox360_runtime_scene_catalog.cpp"
+    if (-not (Test-Path -LiteralPath $generatedCatalog)) {
+        throw "A catalog root was given but holds no xbox360_runtime_scene_catalog.cpp: $CatalogRoot"
+    }
+    Copy-Item -LiteralPath $generatedCatalog -Destination (Join-Path $out "scene_catalog_generated.cpp") -Force
+    $catalogSource = "$outRel/scene_catalog_generated.cpp"
+    Write-Host "Scene catalog: generated, from $CatalogRoot"
+} else {
+    Write-Host "Scene catalog: stub (no authored scenes)"
+}
 
 # Shared machine/ABI flags. -msdata=none keeps r13 (the KPCR in Xenia)
 # untouched; -mno-eabi drops the EABI helper calls no runtime provides here.
@@ -96,7 +117,8 @@ $sources = @(
     "src/demo/cube_demo.c",
     "src/demo/content_test.c",
     "src/demo/cxx_selftest.cpp",
-    "src/demo/main.c"
+    "src/demo/main.c",
+    $catalogSource
 )
 $compileLines = @()
 $objects = @()
@@ -105,6 +127,10 @@ foreach ($s in ($sources + $coreSources)) {
     $objects += $obj
     if ($coreSources -contains $s) {
         $compileLines += "powerpc-eabi-g++ $coreCxxflags -c /work/$s -o $obj"
+    } elseif ($s -eq $catalogSource) {
+        # The generated catalog is compiled from the output directory, so it
+        # needs to be told where the declarations it defines live.
+        $compileLines += "powerpc-eabi-g++ $cxxflags -I/work/src/demo -c /work/$s -o $obj"
     } elseif ($s.EndsWith(".cpp")) {
         $compileLines += "powerpc-eabi-g++ $cxxflags -c /work/$s -o $obj"
     } else {

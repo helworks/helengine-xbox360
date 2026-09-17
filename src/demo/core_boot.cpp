@@ -25,8 +25,11 @@
 
 #include "../platform/xenia_guest/X360RenderManager3D.hpp"
 #include "core_host.hpp"
+#include "scene_catalog.hpp"
 #include "RuntimeSceneCatalog.hpp"
 #include "RuntimeSceneCatalogEntry.hpp"
+#include "SceneLoadMode.hpp"
+#include "SceneManager.hpp"
 #include "runtime/array.hpp"
 
 extern "C" {
@@ -108,6 +111,28 @@ public:
     unsigned int draws2d = 0;
 };
 
+/* Turns the table the builder compiled into the image into the catalog the
+   core resolves scene ids through. An image built without the editor links
+   the stub instead, which reports no entries; that is not a failure, it is
+   the case where the scene is built in code. */
+::RuntimeSceneCatalog *BuildSceneCatalog() {
+    std::size_t count = 0;
+    const HEX360SceneCatalogEntry *entries = he_x360_scene_catalog_entries(&count);
+    if (!entries || count == 0) {
+        hel_log("HEL core: no authored scenes in this image");
+        return new ::RuntimeSceneCatalog(new Array<::RuntimeSceneCatalogEntry *>(0));
+    }
+    hel_log_u32("HEL core: authored scenes in the catalog", (unsigned int)count);
+    Array<::RuntimeSceneCatalogEntry *> *table =
+        new Array<::RuntimeSceneCatalogEntry *>((int32_t)count);
+    for (std::size_t index = 0; index < count; index++) {
+        (*table)[(int32_t)index] = new ::RuntimeSceneCatalogEntry(
+            HeCppString(entries[index].SceneId),
+            HeCppString(entries[index].CookedRelativePath));
+    }
+    return new ::RuntimeSceneCatalog(table);
+}
+
 helengine::x360::X360RenderManager3D *g_render3d;
 X360RenderManager2D *g_render2d;
 X360ContentStreamSource *g_content;
@@ -125,9 +150,7 @@ extern "C" int hel_core_boot(void) {
     g_options = new ::CoreInitializationOptions();
     g_content = new X360ContentStreamSource();
     g_options->set_ContentStreamSource(g_content);
-    /* An empty catalog: no cooked scenes are packaged into the image yet. */
-    g_options->set_SceneCatalog(
-        new ::RuntimeSceneCatalog(new Array<::RuntimeSceneCatalogEntry *>(0)));
+    g_options->set_SceneCatalog(BuildSceneCatalog());
     g_platform = new ::PlatformInfo(HeCppString("xbox360"),
                                     HeCppString("core-boot"));
     g_core = new ::Core(g_options);
@@ -149,11 +172,28 @@ extern "C" int hel_core_boot(void) {
                 hel_heap_live_allocations());
     hel_log_u32("HEL core: heap bytes after initialize", hel_heap_used_bytes());
 
-    const int sceneError = hel_core_scene_build();
-    if (sceneError != 0) {
-        hel_log_u32("HEL core: scene build failed with",
-                    (unsigned int)sceneError);
-        return sceneError;
+    /* An authored scene wins over the one built in code. The code-built scene
+       exists so this target can be exercised without the editor; once the
+       builder has cooked a real scene into the image, loading both would put
+       two cameras in the object graph and draw the wrong one. */
+    const char *const startupSceneId = he_x360_startup_scene_id();
+    if (startupSceneId && startupSceneId[0] != '\0') {
+        hel_log("HEL core: loading the authored startup scene");
+        hel_log(startupSceneId);
+        g_core->get_SceneManager()->LoadScene(HeCppString(startupSceneId),
+                                              ::SceneLoadMode::Single);
+        hel_log("HEL core: authored scene loaded");
+        hel_log_u32("HEL core: content opened while loading it",
+                    g_content ? g_content->opened : 0u);
+        hel_log_u32("HEL core: content missing while loading it",
+                    g_content ? g_content->misses : 0u);
+    } else {
+        const int sceneError = hel_core_scene_build();
+        if (sceneError != 0) {
+            hel_log_u32("HEL core: scene build failed with",
+                        (unsigned int)sceneError);
+            return sceneError;
+        }
     }
     hel_log_u32("HEL core: heap allocations after the scene",
                 hel_heap_live_allocations());

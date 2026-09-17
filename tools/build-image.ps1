@@ -51,18 +51,22 @@ Write-Host "Compiling the generated core from $generatedRelative"
     Select-String "failed|archive" | ForEach-Object { Write-Host $_.Line }
 if ($LASTEXITCODE -ne 0) { throw "core compilation failed" }
 
-# The scene catalog is compiled beside the core so a regeneration never
-# overwrites it; it is not consumed by the guest yet.
-if ($CatalogRoot -and (Test-Path -LiteralPath $CatalogRoot)) {
-    Write-Host "Scene catalog supplied at $CatalogRoot"
+# The catalog is optional so this script can also build an image with no
+# authored scenes; the guest then falls back to the scene built in code.
+$catalogArguments = @{}
+if ($CatalogRoot) {
+    if (-not (Test-Path -LiteralPath $CatalogRoot)) {
+        throw "The scene catalog directory does not exist: $CatalogRoot"
+    }
+    $catalogArguments["CatalogRoot"] = (Resolve-Path -LiteralPath $CatalogRoot).Path
 }
 
 $imageDir = "build/image-staging"
 Write-Host "Linking the image with content from $contentRelative"
 & (Join-Path $PSScriptRoot "build.ps1") -Config $Config -OutDir $imageDir `
     -CoreGenerated $generatedRelative -CoreLib "$coreLibDir/libhelcore.a" `
-    -ContentRoot $contentRelative -Define $Define |
-    Select-String "content entries|Built|failure" | ForEach-Object { Write-Host $_.Line }
+    -ContentRoot $contentRelative -Define $Define @catalogArguments |
+    Select-String "content entries|Scene catalog|Built|failure" | ForEach-Object { Write-Host $_.Line }
 if ($LASTEXITCODE -ne 0) { throw "image link failed" }
 
 $built = Join-Path $repo "$imageDir/helengine.xex"
