@@ -92,8 +92,13 @@ public static class Xbox360PlatformDefinitionFactory {
             [
                 new PlatformComponentSupportRule("helengine.meshcomponent", PlatformComponentSupportKind.Transform, "Static triangle-list meshes with 16-bit indices are drawn.", "Remove meshes that need 32-bit indices."),
                 new PlatformComponentSupportRule("helengine.cameracomponent", PlatformComponentSupportKind.Transform, "Perspective cameras are supported and supply their own field of view.", "Keep at least one authored camera."),
-                new PlatformComponentSupportRule("helengine.lightcomponent", PlatformComponentSupportKind.Unsupported, "The renderer is unlit; lights do not affect shading yet.", "Remove lights or accept that they are ignored."),
-                new PlatformComponentSupportRule("helengine.directionallightcomponent", PlatformComponentSupportKind.Unsupported, "The renderer is unlit; directional lights do not affect shading yet.", "Remove directional lights or accept that they are ignored.")
+                // Lights package and are then ignored. Declaring them unsupported instead fails
+                // the build outright, and a scene that merely lights a cube it cannot light is
+                // still a scene this target can draw; refusing it would make every authored
+                // scene unbuildable until lighting exists. The description is what tells an
+                // author the light will have no effect.
+                new PlatformComponentSupportRule("helengine.lightcomponent", PlatformComponentSupportKind.Transform, "Packaged but ignored: the renderer is unlit.", "Expect no lighting until the renderer shades."),
+                new PlatformComponentSupportRule("helengine.directionallightcomponent", PlatformComponentSupportKind.Transform, "Packaged but ignored: the renderer is unlit.", "Expect no lighting until the renderer shades.")
             ],
             [codegen],
             [new PlatformStorageProfileDefinition("embedded-archive", "Embedded Archive", PlatformStorageProfileKind.LooseFiles, "x360-embedded-archive", false)],
