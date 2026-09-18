@@ -26,6 +26,7 @@
 #include "RenderManager2D.hpp"
 #include "RenderManager3D.hpp"
 
+#include "../platform/xenia_guest/X360RenderManager2D.hpp"
 #include "../platform/xenia_guest/X360RenderManager3D.hpp"
 #include "core_host.hpp"
 #include "scene_catalog.hpp"
@@ -70,108 +71,6 @@ public:
     unsigned int misses = 0;
 };
 
-/* The 2D manager is still a stub: nothing draws through it yet. The 3D
-   manager is the real one (X360RenderManager3D), which walks the engine's
-   cameras and render queues and draws through the Xenos backend.
-
-   Textures are described but never uploaded. There is no texture path on this
-   backend yet, so no pixels reach the GPU and nothing samples them: the 2D
-   path draws nothing, and 3D materials are untextured. What the engine does
-   need is a texture object with real dimensions, because layout and sprite
-   sizing divide by them. Returning null instead makes the engine treat the
-   renderer as unable to create textures at all, which stops an authored scene
-   from loading even when everything it draws is geometry.
-
-   Every texture is counted and the first is named, so a scene that wanted
-   textures says so rather than appearing to have worked. */
-class X360RenderManager2D : public ::RenderManager2D {
-public:
-    ::RuntimeTexture *BuildTextureFromRaw(::TextureAsset *data) override {
-        if (!data) {
-            return nullptr;
-        }
-        return Describe((int32_t)data->Width, (int32_t)data->Height, nullptr);
-    }
-
-    /* The cooked path: the payload is a serialized TextureAsset in the
-       archive, so the engine's own deserializer reads its dimensions rather
-       than this guessing at them. */
-    ::RuntimeTexture *BuildTextureFromCooked(
-        HeCppString cookedAssetPath,
-        ::IContentStreamSource *contentStreamSource) override {
-        if (!contentStreamSource) {
-            return Describe(1, 1, cookedAssetPath.c_str());
-        }
-        ::Stream *stream = contentStreamSource->OpenRead(cookedAssetPath);
-        if (!stream) {
-            hel_log("HEL core: cooked texture is not in the image");
-            hel_log(cookedAssetPath.c_str());
-            return Describe(1, 1, cookedAssetPath.c_str());
-        }
-        ::TextureAsset *asset =
-            dynamic_cast<::TextureAsset *>(::AssetSerializer::Deserialize(stream));
-        if (!asset) {
-            hel_log("HEL core: cooked texture did not deserialize");
-            hel_log(cookedAssetPath.c_str());
-            return Describe(1, 1, cookedAssetPath.c_str());
-        }
-        ::RuntimeTexture *texture = Describe((int32_t)asset->Width,
-                                             (int32_t)asset->Height,
-                                             cookedAssetPath.c_str());
-        return texture;
-    }
-
-    void DrawRoundedRect(::IRoundedRectDrawable2D *shape) override {
-        (void)shape;
-        draws2d++;
-    }
-
-    void DrawSprite(::ISpriteDrawable2D *sprite) override {
-        (void)sprite;
-        draws2d++;
-    }
-
-    void DrawText(::ITextDrawable2D *text) override {
-        (void)text;
-        draws2d++;
-    }
-
-    void UpdateTextureRegionCore(::RuntimeTexture *texture, int32_t x,
-                                 int32_t y, int32_t width, int32_t height,
-                                 Array<uint8_t> *rgba8,
-                                 int32_t sourceRowPitch) override {
-        (void)texture;
-        (void)x;
-        (void)y;
-        (void)width;
-        (void)height;
-        (void)rgba8;
-        (void)sourceRowPitch;
-    }
-
-    unsigned int textures = 0;
-    unsigned int draws2d = 0;
-
-private:
-    /* A texture object carrying only its size. IsEngineOwned stays false so the
-       engine releases it through this manager, the same as a real one. */
-    ::RuntimeTexture *Describe(int32_t width, int32_t height, const char *path) {
-        if (textures == 0) {
-            hel_log("HEL core: textures are described but not uploaded; "
-                    "this backend has no texture path");
-            if (path) {
-                hel_log(path);
-            }
-        }
-        textures++;
-        ::RuntimeTexture *texture = new ::RuntimeTexture();
-        texture->set_Width(width > 0 ? width : 1);
-        texture->set_Height(height > 0 ? height : 1);
-        texture->set_IsEngineOwned(false);
-        return texture;
-    }
-};
-
 /* Turns the table the builder compiled into the image into the catalog the
    core resolves scene ids through. An image built without the editor links
    the stub instead, which reports no entries; that is not a failure, it is
@@ -195,7 +94,7 @@ private:
 }
 
 helengine::x360::X360RenderManager3D *g_render3d;
-X360RenderManager2D *g_render2d;
+helengine::x360::X360RenderManager2D *g_render2d;
 X360ContentStreamSource *g_content;
 ::Core *g_core;
 ::PlatformInfo *g_platform;
@@ -226,7 +125,7 @@ extern "C" int hel_core_boot(void) {
     /* The engine reads the window size from the render manager. */
     g_render3d->AddWindow(0, (int32_t)hel_video_width(),
                           (int32_t)hel_video_height());
-    g_render2d = new X360RenderManager2D();
+    g_render2d = new helengine::x360::X360RenderManager2D();
     g_core->Initialize(g_render3d, g_render2d, nullptr, g_platform, g_options);
     hel_log("HEL core: ready");
     hel_log_u32("HEL core: heap allocations after initialize",
@@ -325,7 +224,14 @@ extern "C" void hel_core_shutdown(void) {
     hel_log_u32("HEL core: frames run", g_frames);
     hel_log_u32("HEL core: content opened", g_content ? g_content->opened : 0u);
     hel_log_u32("HEL core: content missing", g_content ? g_content->misses : 0u);
-    hel_log_u32("HEL core: 2D draw calls", g_render2d ? g_render2d->draws2d : 0u);
+    hel_log_u32("HEL core: 2D shapes drawn",
+                g_render2d ? g_render2d->shapesDrawn() : 0u);
+    hel_log_u32("HEL core: 2D shapes skipped",
+                g_render2d ? g_render2d->shapesSkipped() : 0u);
+    hel_log_u32("HEL core: 2D sprites not drawn",
+                g_render2d ? g_render2d->spriteRequests() : 0u);
+    hel_log_u32("HEL core: 2D text runs not drawn",
+                g_render2d ? g_render2d->textRequests() : 0u);
     g_core->Dispose();
     g_core = nullptr;
     hel_log("HEL core: disposed");
