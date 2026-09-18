@@ -16,7 +16,7 @@ Source format (one statement per line, `#` or `;` starts a comment):
 
     exec                      start a control-flow exec block
     exece                     start the final exec block (ends the shader)
-    alloc position | alloc interpolators | alloc colors
+    alloc position | alloc colors | alloc interpolators[, COUNT]
     [serialize] vfetch_full DEST, SRC, vfN, stride=S, offset=O, format=F [, rounded]
     [serialize] vfetch_mini DEST, offset=O, format=F
     [serialize] tfetch DEST, SRC[.swizzle], tfN
@@ -263,11 +263,19 @@ def assemble(source):
             if head in ("exec", "exece"):
                 blocks.append({"cf": (head, None), "instrs": []})
             elif head == "alloc":
-                kind = rest.strip()
+                # "alloc interpolators" or "alloc interpolators, N", where N
+                # is how many are exported. The encoded field is that count
+                # minus one, which is why a single export encodes as zero.
+                pieces = [piece.strip() for piece in rest.split(",")]
+                kind = pieces[0]
+                count = int(pieces[1], 0) if len(pieces) > 1 else 1
+                if not 1 <= count <= 8:
+                    raise AsmError("alloc count must be 1 to 8")
                 alloc_type = {"position": ALLOC_POSITION,
                               "interpolators": ALLOC_INTERPOLATORS,
                               "colors": ALLOC_COLORS}[kind]
-                blocks.append({"cf": ("alloc", (alloc_type, kind)), "instrs": []})
+                blocks.append({"cf": ("alloc", (alloc_type, kind, count - 1)),
+                               "instrs": []})
             else:
                 serialize = False
                 if head == "serialize":
@@ -346,8 +354,8 @@ def assemble(source):
     for block in blocks:
         kind, data = block["cf"]
         if kind == "alloc":
-            cfs.append(cf_alloc(data[0]))
-            listing.append("cf alloc %s" % data[1])
+            cfs.append(cf_alloc(data[0], data[2]))
+            listing.append("cf alloc %s count=%d" % (data[1], data[2] + 1))
             continue
         sequence = 0
         for i, (itype, serialize, _code, _line) in enumerate(block["instrs"]):

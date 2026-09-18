@@ -48,6 +48,10 @@ static uint32_t g_draw_count;
  * hel_frame_present blocks until the fence retires, so the GPU has finished
  * reading a frame's geometry before the next frame overwrites it. If frames
  * are ever allowed to overlap, this needs one arena per frame in flight. */
+/* The texture the next interface draw samples, or zero for none. It is set
+   immediately before the draw and cleared by it, rather than being a mode the
+   caller has to remember to turn off. */
+static HelTexture g_pending_texture;
 static HelPhysBlock g_ui_arena;
 static uint32_t g_ui_used;
 static uint32_t g_ui_peak;
@@ -230,12 +234,21 @@ int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
 int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
                 const uint16_t *indices, uint32_t index_count,
                 const HelMat4 *transform, const HelDrawParams *params) {
+    return hel_draw_ui_textured(vertices, vertex_count, indices, index_count,
+                                transform, params, 0);
+}
+
+int hel_draw_ui_textured(const HelVertex *vertices, uint32_t vertex_count,
+                         const uint16_t *indices, uint32_t index_count,
+                         const HelMat4 *transform, const HelDrawParams *params,
+                         HelTexture texture) {
     HelMeshSlot slot;
     int err = ui_arena_write(vertices, vertex_count, indices, index_count,
                              &slot);
     if (err) {
         return err;
     }
+    g_pending_texture = texture;
     /* Interface geometry is submitted in the order the queues hand it over and
        composes over the scene, so it neither tests nor writes depth. Testing
        it against a scene that was already resolved would hide the interface
@@ -264,7 +277,11 @@ static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
     uint32_t height = hel_video_height();
     const int shaded = (model != 0 && params != 0);
 
-    hel_shaders_emit_kind(shaded ? HEL_SHADER_SHADED : HEL_SHADER_UNLIT);
+    const HelTexture texture = g_pending_texture;
+    g_pending_texture = 0;
+    hel_shaders_emit_kind(texture != 0   ? HEL_SHADER_TEXTURED
+                          : shaded       ? HEL_SHADER_SHADED
+                                         : HEL_SHADER_UNLIT);
 
     /* Viewport: NDC -> pixels, Direct3D 0..1 depth, clipping enabled. */
     hel_ring_put(XE_PACKET_TYPE0(XE_GPU_REG_PA_CL_VPORT_XSCALE, 6));
@@ -335,6 +352,10 @@ static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
         for (uint32_t i = 0; i < 4u; ++i) {
             hel_ring_put(float_bits(0.0f));
         }
+    }
+
+    if (texture != 0) {
+        hel_texture_bind(texture);
     }
 
     /* Vertex fetch constant 0 -> the mesh's vertex data. */

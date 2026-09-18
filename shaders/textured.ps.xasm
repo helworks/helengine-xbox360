@@ -1,0 +1,18 @@
+# Textured pixel shader: sample the bound texture at the interpolated
+# coordinates and multiply by the interpolated colour.
+#
+# On entry a pixel shader holds interpolator N in rN, so r0 is the colour the
+# vertex shader exported and r1 the texture coordinates.
+#
+# Texture fetch constant 1 is sampled, not 0. The fetch register file is
+# shared: one group of six dwords is either a texture fetch constant or three
+# vertex fetch constants, and the vertex stream already occupies vertex
+# constant 0, which is the same storage as texture constant 0.
+#
+# Every filter setting comes from that constant rather than from here, so the
+# sampler state lives in one place.
+exec
+  tfetch r2.xyzw, r1.xy, tf1
+alloc colors
+exece
+  mul oC0, r2, r0

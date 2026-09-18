@@ -17,6 +17,8 @@
 #include "xenos_regs.h"
 
 #include "shaded_vs.h"
+#include "textured_ps.h"
+#include "textured_vs.h"
 #include "unlit_ps.h"
 #include "unlit_vs.h"
 
@@ -61,8 +63,14 @@ int hel_shaders_validate(void) {
     err = validate_ucode("HEL shader: shaded vertex", hel_shader_shaded_vs,
                          HEL_SHADER_SHADED_VS_DWORDS);
     if (err) return err;
+    err = validate_ucode("HEL shader: textured vertex", hel_shader_textured_vs,
+                         HEL_SHADER_TEXTURED_VS_DWORDS);
+    if (err) return err;
     err = validate_ucode("HEL shader: unlit pixel", hel_shader_unlit_ps,
                          HEL_SHADER_UNLIT_PS_DWORDS);
+    if (err) return err;
+    err = validate_ucode("HEL shader: textured pixel", hel_shader_textured_ps,
+                         HEL_SHADER_TEXTURED_PS_DWORDS);
     if (err) return err;
     g_validated = 1;
     return HEL_OK;
@@ -81,15 +89,35 @@ static void emit_shader(uint32_t shader_type, const uint32_t *dwords,
 void hel_shaders_emit(void) { hel_shaders_emit_kind(HEL_SHADER_UNLIT); }
 
 void hel_shaders_emit_kind(HelShaderKind kind) {
-    const int shaded = (kind == HEL_SHADER_SHADED);
-    emit_shader(0u, shaded ? hel_shader_shaded_vs : hel_shader_unlit_vs,
-                shaded ? HEL_SHADER_SHADED_VS_DWORDS
-                       : HEL_SHADER_UNLIT_VS_DWORDS);
-    emit_shader(1u, hel_shader_unlit_ps, HEL_SHADER_UNLIT_PS_DWORDS);
-    /* Highest register the vertex shader uses, then the pixel shader, then the
-       interpolator count. The shaded shader needs r0 through r9. */
+    const uint32_t *vertex = hel_shader_unlit_vs;
+    uint32_t vertex_dwords = HEL_SHADER_UNLIT_VS_DWORDS;
+    const uint32_t *pixel = hel_shader_unlit_ps;
+    uint32_t pixel_dwords = HEL_SHADER_UNLIT_PS_DWORDS;
+    /* Highest register each program uses, and how many interpolators travel
+       between them. A register count that is too low truncates the register
+       file the shader was compiled against, which shows as geometry or
+       colours going wrong rather than as a failure. */
+    uint32_t vertex_registers = 3u;
+    uint32_t pixel_registers = 0u;
+    uint32_t interpolators = 0u;
+    if (kind == HEL_SHADER_SHADED) {
+        vertex = hel_shader_shaded_vs;
+        vertex_dwords = HEL_SHADER_SHADED_VS_DWORDS;
+        vertex_registers = 9u;
+    } else if (kind == HEL_SHADER_TEXTURED) {
+        vertex = hel_shader_textured_vs;
+        vertex_dwords = HEL_SHADER_TEXTURED_VS_DWORDS;
+        pixel = hel_shader_textured_ps;
+        pixel_dwords = HEL_SHADER_TEXTURED_PS_DWORDS;
+        vertex_registers = 5u;
+        pixel_registers = 2u;
+        interpolators = 1u; /* two, encoded as the count minus one */
+    }
+    emit_shader(0u, vertex, vertex_dwords);
+    emit_shader(1u, pixel, pixel_dwords);
     hel_ring_reg(XE_GPU_REG_SQ_PROGRAM_CNTL,
-                 (shaded ? 9u : 3u) | (0u << 8) | (0u << 20));
+                 vertex_registers | (pixel_registers << 8) |
+                     (interpolators << 20));
     hel_ring_reg(XE_GPU_REG_SQ_CONTEXT_MISC, 0u);
     hel_ring_reg(XE_GPU_REG_SQ_INTERPOLATOR_CNTL, 0u);
     hel_ring_reg(XE_GPU_REG_SQ_VS_CONST, 0x000FF000u);

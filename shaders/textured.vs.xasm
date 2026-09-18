@@ -1,0 +1,35 @@
+# Textured vertex shader: clip position = transform * position, colour =
+# vertex colour times the per-draw base colour, texture coordinates passed
+# through for the pixel shader to sample with.
+#
+# Inputs:  vf0 = HelVertex stream, 12 dwords per vertex, big-endian floats
+#          (fetch constant endian k8in32): xyz at dword 0, the normal at
+#          dword 3, texture coordinates at dword 6, rgba at dword 8.
+#          r0.x = vertex index (hardware convention).
+# Constants: c0..c3 = the transform, column by column.
+#            c8     = per-draw base colour RGBA.
+# Outputs: oPos = clip position; o0 = colour; o1 = texture coordinates.
+#
+# Nothing here is lit. Interface geometry is the only thing that samples a
+# texture so far, and an interface is drawn in the colours it was authored in
+# rather than shaded by the scene's lights.
+#
+# The normal is fetched and discarded rather than skipped, because a mini
+# fetch continues from the previous one and the offsets are absolute; reading
+# it keeps the two coordinate fetches honest about where they are.
+exec
+  vfetch_full r1.xyz1, r0.x, vf0, stride=12, offset=0, format=32_32_32_FLOAT
+  vfetch_mini r2.xy01, offset=6, format=32_32_FLOAT
+  vfetch_mini r3.xyzw, offset=8, format=32_32_32_32_FLOAT
+alloc position
+exec
+  serialize mul r4, c0, r1.xxxx
+  mad r4, c1, r1.yyyy, r4
+  mad r4, c2, r1.zzzz, r4
+  mad oPos, c3, r1.wwww, r4
+exec
+  mul r5, r3, c8
+alloc interpolators, 2
+exece
+  max o0, r5, r5
+  max o1, r2, r2

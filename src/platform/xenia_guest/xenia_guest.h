@@ -41,7 +41,11 @@ void hel_mesh_release_all(void);
 
 /* Shader binaries (shader.c): validated once, then emitted per draw. */
 /* Which vertex shader a draw uses; both share the pixel shader. */
-typedef enum { HEL_SHADER_UNLIT = 0, HEL_SHADER_SHADED = 1 } HelShaderKind;
+typedef enum {
+    HEL_SHADER_UNLIT = 0,
+    HEL_SHADER_SHADED = 1,
+    HEL_SHADER_TEXTURED = 2
+} HelShaderKind;
 
 int hel_shaders_validate(void);
 void hel_shaders_emit(void);

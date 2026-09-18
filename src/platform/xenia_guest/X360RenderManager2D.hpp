@@ -18,8 +18,9 @@
  *
  * What this draws and what it does not:
  *   Rounded rectangles are triangulated and drawn, blended over the scene.
- *   Sprites and text are counted and not drawn, because both are textured and
- *   this backend has no texture path yet.
+ *   Sprites are drawn when their texture was in a format this backend
+ *   converts; text is still counted and not drawn, because it additionally
+ *   needs a glyph atlas.
  */
 #pragma once
 
@@ -36,9 +37,25 @@ extern "C" {
 
 class ICamera;
 class TextureAsset;
+class ISpriteDrawable2D;
 class IContentStreamSource;
 
 namespace helengine::x360 {
+
+/// <summary>
+/// A texture the engine holds, and the backend handle its pixels were
+/// uploaded to.
+/// </summary>
+/// <remarks>
+/// A handle of zero means the pixels never reached the hardware, because the
+/// cooked format was one this backend does not convert. The size is still
+/// real, so layout and sprite sizing work; what is missing is only the
+/// picture, and the log says which format it was.
+/// </remarks>
+class X360RuntimeTexture final : public ::RuntimeTexture {
+public:
+    HelTexture handle = 0;
+};
 
 /// <summary>Draws the engine's 2D content through the Xenos backend.</summary>
 class X360RenderManager2D final : public ::RenderManager2D,
@@ -71,19 +88,30 @@ public:
                                  int32_t sourceRowPitch) override;
 
     uint32_t textureCount() const { return textures_; }
+    uint32_t texturesUploaded() const { return texturesUploaded_; }
+    uint32_t spritesDrawn() const { return spritesDrawn_; }
     uint32_t shapesDrawn() const { return shapesDrawn_; }
     uint32_t shapesSkipped() const { return shapesSkipped_; }
     uint32_t spriteRequests() const { return sprites_; }
     uint32_t textRequests() const { return texts_; }
 
 private:
-    /// <summary>A texture object carrying only its size, with no pixels.</summary>
-    ::RuntimeTexture *describeTexture(int32_t width, int32_t height,
-                                      const char *path);
+    /// <summary>Builds the engine's texture object, uploading pixels when it can.</summary>
+    /// <param name="width">Texture width in pixels.</param>
+    /// <param name="height">Texture height in pixels.</param>
+    /// <param name="rgba">Pixels, or null when the format was not convertible.</param>
+    /// <param name="path">Asset path, for the log; may be null.</param>
+    ::RuntimeTexture *buildTexture(int32_t width, int32_t height,
+                                   const uint8_t *rgba, const char *path);
+
+    /// <summary>Converts a cooked texture's pixels, or reports why it cannot.</summary>
+    ::RuntimeTexture *buildFromAsset(::TextureAsset *asset, const char *path);
 
     /// <summary>Submits one batch of pixel-space geometry for the current viewport.</summary>
+    /// <param name="texture">Backend texture to sample, or zero for none.</param>
     void submit(const HelVertex *vertices, uint32_t vertexCount,
-                const uint16_t *indices, uint32_t indexCount);
+                const uint16_t *indices, uint32_t indexCount,
+                HelTexture texture = 0);
 
     /* The viewport being drawn into, in pixels. Set once per camera so the
        drawables visited under it convert to clip space against the right
@@ -94,9 +122,11 @@ private:
     float viewportHeight_ = 0.0f;
 
     uint32_t textures_ = 0;
+    uint32_t texturesUploaded_ = 0;
     uint32_t shapesDrawn_ = 0;
     uint32_t shapesSkipped_ = 0;
     uint32_t sprites_ = 0;
+    uint32_t spritesDrawn_ = 0;
     uint32_t texts_ = 0;
     bool reportedFirstDraw_ = false;
     bool reportedNoTexturePath_ = false;

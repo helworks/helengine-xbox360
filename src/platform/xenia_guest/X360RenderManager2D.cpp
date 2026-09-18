@@ -13,6 +13,7 @@
 #include "ObjectManager.hpp"
 #include "RoundedRectCorners.hpp"
 #include "TextureAsset.hpp"
+#include "TextureAssetColorFormat.hpp"
 #include "byte4.hpp"
 #include "float3.hpp"
 #include "float4.hpp"
@@ -186,7 +187,9 @@ void X360RenderManager2D::endFrame() {
     reportedFirstDraw_ = true;
     hel_log_u32("HEL render2d: first draw, shapes drawn", shapesDrawn_);
     hel_log_u32("HEL render2d: first draw, shapes skipped", shapesSkipped_);
-    hel_log_u32("HEL render2d: first draw, sprites not drawn", sprites_);
+    hel_log_u32("HEL render2d: first draw, sprites drawn", spritesDrawn_);
+    hel_log_u32("HEL render2d: first draw, sprites requested", sprites_);
+    hel_log_u32("HEL render2d: textures uploaded", texturesUploaded_);
     hel_log_u32("HEL render2d: first draw, text runs not drawn", texts_);
     hel_log_u32("HEL render2d: interface arena peak bytes", hel_ui_peak_bytes());
 }
@@ -203,7 +206,7 @@ void X360RenderManager2D::Visit(::IDrawable2D *drawable) {
 
 void X360RenderManager2D::submit(const HelVertex *vertices,
                                  uint32_t vertexCount, const uint16_t *indices,
-                                 uint32_t indexCount) {
+                                 uint32_t indexCount, HelTexture texture) {
     /* Pixels to clip space for the viewport being drawn: X left to right, Y
        top to bottom, which is why the Y row is negated. The backend composes
        with column vectors, so this is stored column by column. */
@@ -226,8 +229,9 @@ void X360RenderManager2D::submit(const HelVertex *vertices,
     params.ambient[1] = 1.0f;
     params.ambient[2] = 1.0f;
 
-    const int error = hel_draw_ui(vertices, vertexCount, indices, indexCount,
-                                  &transform, &params);
+    const int error =
+        hel_draw_ui_textured(vertices, vertexCount, indices, indexCount,
+                             &transform, &params, texture);
     if (error != HEL_OK) {
         shapesSkipped_++;
         return;
@@ -326,12 +330,58 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
 }
 
 void X360RenderManager2D::DrawSprite(::ISpriteDrawable2D *sprite) {
-    (void)sprite;
-    if (!reportedNoTexturePath_) {
-        reportedNoTexturePath_ = true;
-        hel_log("HEL render2d: sprites and text need textures, none drawn");
-    }
     sprites_++;
+    if (sprite == nullptr || sprite->get_Parent() == nullptr) {
+        shapesSkipped_++;
+        return;
+    }
+    const X360RuntimeTexture *texture =
+        dynamic_cast<const X360RuntimeTexture *>(sprite->get_Texture());
+    if (texture == nullptr || texture->handle == 0) {
+        /* The engine has a texture object but its pixels never reached the
+           hardware, so there is nothing to sample. The format was named when
+           the texture was built. */
+        shapesSkipped_++;
+        return;
+    }
+
+    const ::float3 position = sprite->get_Parent()->get_Position();
+    const ::int2 size = sprite->get_Size();
+    if (size.X <= 0 || size.Y <= 0) {
+        shapesSkipped_++;
+        return;
+    }
+    const float left = position.X;
+    const float top = position.Y;
+    const float right = left + (float)size.X;
+    const float bottom = top + (float)size.Y;
+
+    /* The source rectangle is already in texture coordinates, and holds an
+       origin and a size rather than two corners. An empty one means the whole
+       texture, which is what a sprite that never set it wants. */
+    ::float4 source = sprite->get_SourceRect();
+    float u0 = source.X;
+    float v0 = source.Y;
+    float u1 = source.X + source.Z;
+    float v1 = source.Y + source.W;
+    if (source.Z <= 0.0f || source.W <= 0.0f) {
+        u0 = 0.0f;
+        v0 = 0.0f;
+        u1 = 1.0f;
+        v1 = 1.0f;
+    }
+
+    float tint[4];
+    colour_from_byte4(sprite->get_Color(), tint);
+
+    HelVertex vertices[4];
+    fill_vertex(&vertices[0], left, top, tint, u0, v0);
+    fill_vertex(&vertices[1], right, top, tint, u1, v0);
+    fill_vertex(&vertices[2], right, bottom, tint, u1, v1);
+    fill_vertex(&vertices[3], left, bottom, tint, u0, v1);
+    static const uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
+    submit(vertices, 4, indices, 6, texture->handle);
+    spritesDrawn_++;
 }
 
 void X360RenderManager2D::DrawText(::ITextDrawable2D *text) {
@@ -343,51 +393,91 @@ void X360RenderManager2D::DrawText(::ITextDrawable2D *text) {
     texts_++;
 }
 
-::RuntimeTexture *X360RenderManager2D::describeTexture(int32_t width,
-                                                       int32_t height,
-                                                       const char *path) {
-    if (textures_ == 0) {
-        hel_log("HEL render2d: textures are described but not uploaded; "
-                "this backend has no texture path");
-        if (path != nullptr) {
-            hel_log(path);
-        }
-    }
+::RuntimeTexture *X360RenderManager2D::buildTexture(int32_t width,
+                                                    int32_t height,
+                                                    const uint8_t *rgba,
+                                                    const char *path) {
     textures_++;
-    ::RuntimeTexture *texture = new ::RuntimeTexture();
+    X360RuntimeTexture *texture = new X360RuntimeTexture();
+    /* The size is reported even when no pixels are uploaded, because layout
+       and sprite sizing divide by it. A texture with no handle simply does
+       not draw. */
     texture->set_Width(width > 0 ? width : 1);
     texture->set_Height(height > 0 ? height : 1);
     texture->set_IsEngineOwned(false);
+    if (rgba != nullptr && width > 0 && height > 0) {
+        const int error = hel_texture_create(rgba, (uint32_t)width,
+                                             (uint32_t)height,
+                                             &texture->handle);
+        if (error != HEL_OK) {
+            texture->handle = 0;
+            hel_log_u32("HEL render2d: texture upload failed with",
+                        (uint32_t)error);
+            if (path != nullptr) {
+                hel_log(path);
+            }
+        } else {
+            texturesUploaded_++;
+        }
+    }
     return texture;
+}
+
+::RuntimeTexture *X360RenderManager2D::buildFromAsset(::TextureAsset *asset,
+                                                      const char *path) {
+    if (asset == nullptr) {
+        return buildTexture(1, 1, nullptr, path);
+    }
+    const int32_t width = (int32_t)asset->Width;
+    const int32_t height = (int32_t)asset->Height;
+    /* Only the format that matches the hardware's 32-bit texture byte for
+       byte is uploaded. The others are named rather than approximated: a
+       wrong conversion is a picture that looks almost right, which is harder
+       to find than one that is missing. */
+    if (asset->ColorFormat != ::TextureAssetColorFormat::Rgba32 ||
+        asset->Colors == nullptr ||
+        asset->Colors->get_Length() < width * height * 4) {
+        if (!reportedNoTexturePath_) {
+            reportedNoTexturePath_ = true;
+            hel_log("HEL render2d: cooked texture is not 32-bit RGBA, so its "
+                    "pixels are not uploaded");
+            hel_log_u32("HEL render2d: its colour format",
+                        (uint32_t)asset->ColorFormat);
+            if (path != nullptr) {
+                hel_log(path);
+            }
+        }
+        return buildTexture(width, height, nullptr, path);
+    }
+    return buildTexture(width, height, &(*asset->Colors)[0], path);
 }
 
 ::RuntimeTexture *X360RenderManager2D::BuildTextureFromRaw(::TextureAsset *data) {
     if (data == nullptr) {
         return nullptr;
     }
-    return describeTexture((int32_t)data->Width, (int32_t)data->Height, nullptr);
+    return buildFromAsset(data, nullptr);
 }
 
 ::RuntimeTexture *X360RenderManager2D::BuildTextureFromCooked(
     HeCppString cookedAssetPath, ::IContentStreamSource *contentStreamSource) {
     if (contentStreamSource == nullptr) {
-        return describeTexture(1, 1, cookedAssetPath.c_str());
+        return buildTexture(1, 1, nullptr, cookedAssetPath.c_str());
     }
     ::Stream *stream = contentStreamSource->OpenRead(cookedAssetPath);
     if (stream == nullptr) {
         hel_log("HEL render2d: cooked texture is not in the image");
         hel_log(cookedAssetPath.c_str());
-        return describeTexture(1, 1, cookedAssetPath.c_str());
+        return buildTexture(1, 1, nullptr, cookedAssetPath.c_str());
     }
     ::TextureAsset *asset =
         dynamic_cast<::TextureAsset *>(::AssetSerializer::Deserialize(stream));
     if (asset == nullptr) {
         hel_log("HEL render2d: cooked texture did not deserialize");
         hel_log(cookedAssetPath.c_str());
-        return describeTexture(1, 1, cookedAssetPath.c_str());
+        return buildTexture(1, 1, nullptr, cookedAssetPath.c_str());
     }
-    return describeTexture((int32_t)asset->Width, (int32_t)asset->Height,
-                           cookedAssetPath.c_str());
+    return buildFromAsset(asset, cookedAssetPath.c_str());
 }
 
 void X360RenderManager2D::UpdateTextureRegionCore(
