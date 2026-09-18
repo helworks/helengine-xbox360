@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 
+/* For HelTexture and HelVertex; frame.h is the public surface and includes
+   nothing from here, so this does not close a cycle. */
+#include "../../engine/frame.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,6 +46,11 @@ typedef enum { HEL_SHADER_UNLIT = 0, HEL_SHADER_SHADED = 1 } HelShaderKind;
 int hel_shaders_validate(void);
 void hel_shaders_emit(void);
 void hel_shaders_emit_kind(HelShaderKind kind);
+
+/* Writes the texture fetch constant a sampling draw reads. Valid only between
+   hel_frame_begin and hel_frame_present, like everything else that writes the
+   ring. */
+void hel_texture_bind(HelTexture texture);
 
 /* General-purpose heap (heap.c): the C++ runtime and the transpiled engine
    core allocate from here. GPU-visible memory uses hel_phys_alloc instead. */

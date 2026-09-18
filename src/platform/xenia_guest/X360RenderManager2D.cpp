@@ -122,7 +122,8 @@ void build_outline(float left, float top, float right, float bottom,
     }
 }
 
-void fill_vertex(HelVertex *vertex, float x, float y, const float *rgba) {
+void fill_vertex(HelVertex *vertex, float x, float y, const float *rgba,
+                 float u = 0.0f, float v = 0.0f) {
     vertex->x = x;
     vertex->y = y;
     vertex->z = 0.0f;
@@ -131,6 +132,8 @@ void fill_vertex(HelVertex *vertex, float x, float y, const float *rgba) {
     vertex->nx = 0.0f;
     vertex->ny = 0.0f;
     vertex->nz = 1.0f;
+    vertex->u = u;
+    vertex->v = v;
     vertex->r = rgba[0];
     vertex->g = rgba[1];
     vertex->b = rgba[2];

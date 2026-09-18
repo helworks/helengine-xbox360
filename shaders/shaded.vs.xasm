@@ -1,9 +1,9 @@
 # Shaded vertex shader: clip position = MVP * position, colour = material base
 # colour times one directional light plus ambient, times the vertex colour.
 #
-# Inputs:  vf0 = HelVertex stream, 10 dwords per vertex, big-endian floats
+# Inputs:  vf0 = HelVertex stream, 12 dwords per vertex, big-endian floats
 #          (fetch constant endian k8in32): xyz at dword 0, normal at dword 3,
-#          rgba at dword 6. r0.x = vertex index (hardware convention).
+#          texture coordinates at dword 6 and rgba at dword 8. r0.x = vertex index (hardware convention).
 # Constants: c0..c3  = MVP columns (column-major HelMat4, 16 floats).
 #            c4..c7  = model transform columns, used for the normal. Normals
 #                      take the model transform and not the full MVP because
@@ -27,9 +27,9 @@
 # the same way the unlit shaders do it. The ALU work is split across exec
 # blocks because one block holds at most six instructions.
 exec
-  vfetch_full r1.xyz1, r0.x, vf0, stride=10, offset=0, format=32_32_32_FLOAT
+  vfetch_full r1.xyz1, r0.x, vf0, stride=12, offset=0, format=32_32_32_FLOAT
   vfetch_mini r2.xyz0, offset=3, format=32_32_32_FLOAT
-  vfetch_mini r3.xyzw, offset=6, format=32_32_32_32_FLOAT
+  vfetch_mini r3.xyzw, offset=8, format=32_32_32_32_FLOAT
 alloc position
 exec
   serialize mul r4, c0, r1.xxxx

@@ -38,6 +38,7 @@
 #include "IContentStreamSource.hpp"
 #include "PlatformMaterialAsset.hpp"
 #include "X360EngineMath.hpp"
+#include "float2.hpp"
 #include "float3.hpp"
 #include "float4.hpp"
 #include "float4x4.hpp"
@@ -162,6 +163,8 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
     }
     const bool hasNormals = data->Normals != nullptr &&
                             data->Normals->get_Length() == vertexCount;
+    const bool hasTexCoords = data->TexCoords != nullptr &&
+                              data->TexCoords->get_Length() == vertexCount;
 
     HelVertex *vertices = new HelVertex[vertexCount];
     for (int32_t index = 0; index < vertexCount; ++index) {
@@ -181,6 +184,17 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
             vertices[index].nx = 0.0f;
             vertices[index].ny = 0.0f;
             vertices[index].nz = 1.0f;
+        }
+        /* Texture coordinates travel with every vertex now. Scene materials
+           are untextured, so a cooked model's own coordinates are carried
+           when it has them and zero otherwise; nothing samples them yet. */
+        if (hasTexCoords) {
+            const ::float2 &uv = (*data->TexCoords)[index];
+            vertices[index].u = uv.X;
+            vertices[index].v = uv.Y;
+        } else {
+            vertices[index].u = 0.0f;
+            vertices[index].v = 0.0f;
         }
         vertices[index].r = kWhite[0];
         vertices[index].g = kWhite[1];

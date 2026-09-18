@@ -18,7 +18,7 @@ typedef struct { float m[16]; } HelMat4;           /* column-major */
 /* Position, normal and colour. The normal is carried to the GPU rather than
    consumed at upload, because the scene can switch a light off while running
    and shading baked into the colour could not follow it. */
-typedef struct { float x, y, z, nx, ny, nz, r, g, b, a; } HelVertex;
+typedef struct { float x, y, z, nx, ny, nz, u, v, r, g, b, a; } HelVertex;
 
 /* What a draw shades with. The colour is the cooked material's; the light is
    whatever the scene has switched on, already resolved to world space. A
@@ -81,6 +81,24 @@ int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
                 const HelMat4 *transform, const HelDrawParams *params);
 /* Reserves the interface arena; safe to call more than once. */
 int hel_ui_arena_init(void);
+
+/* Textures. A handle of zero means "no texture", which is what an untextured
+   draw passes. Pixels are 8 bits a channel in red, green, blue, alpha order,
+   row by row with no padding; the backend pads rows to the alignment the
+   hardware needs. */
+typedef uint32_t HelTexture;
+int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
+                       HelTexture *out_texture);
+/* Releases every texture. Called at shutdown, like meshes. */
+void hel_texture_release_all(void);
+uint32_t hel_texture_count(void);
+
+/* Draws one batch of interface geometry sampled from a texture. A handle of
+   zero draws the vertex colours alone, which is what hel_draw_ui does. */
+int hel_draw_ui_textured(const HelVertex *vertices, uint32_t vertex_count,
+                         const uint16_t *indices, uint32_t index_count,
+                         const HelMat4 *transform, const HelDrawParams *params,
+                         HelTexture texture);
 /* Frees the whole arena for reuse. Called when a frame begins. */
 void hel_ui_frame_reset(void);
 /* The most arena bytes any one frame has used. */

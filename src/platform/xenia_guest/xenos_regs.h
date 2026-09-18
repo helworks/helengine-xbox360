@@ -35,6 +35,40 @@
 #define XE_GPU_REG_RB_BLENDCONTROL0 0x2201u
 #define XE_GPU_REG_RB_COLORCONTROL 0x2202u
 
+/* Texture fetch constant fields, from xenia-canary src/xenia/gpu/xenos.h
+   (xe_gpu_texture_fetch_t). The fetch register file is shared: one group of
+   six dwords is either a single texture fetch constant or three vertex fetch
+   constants. Texture constant N therefore starts at dword N * 6, and using
+   texture constant 1 leaves vertex constant 0, which the mesh draw writes,
+   untouched. */
+#define XE_TEXTURE_FETCH_DWORDS 6u
+#define XE_FETCH_TYPE_TEXTURE 2u
+#define XE_FETCH_TYPE_VERTEX 3u
+
+/* ClampMode */
+#define XE_TEX_CLAMP_REPEAT 0u
+#define XE_TEX_CLAMP_TO_EDGE 2u
+
+/* TextureFormat; only the one this backend uploads. */
+#define XE_TEX_FORMAT_8_8_8_8 0u
+
+/* Endian. Texel bytes need no swap: each channel is one byte, and the format
+   is loaded as a straight byte copy. */
+#define XE_ENDIAN_NONE 0u
+
+/* TextureFilter and AnisoFilter. */
+#define XE_TEX_FILTER_POINT 0u
+#define XE_TEX_FILTER_LINEAR 1u
+#define XE_TEX_FILTER_BASEMAP 2u
+#define XE_TEX_ANISO_DISABLED 0u
+
+/* DataDimension */
+#define XE_TEX_DIMENSION_2D 1u
+
+/* Channel swizzle, three bits a component: 0=x 1=y 2=z 3=w. Identity, so the
+   data's own red, green, blue and alpha reach the shader in that order. */
+#define XE_TEX_SWIZZLE_RGBA (0u | (1u << 3) | (2u << 6) | (3u << 9))
+
 /* RB_BLENDCONTROL fields, as the emulator's own register definitions give them
    (src/xenia/gpu/registers.h, RB_BLENDCONTROL). There is no blend enable bit:
    blending is on whenever the factors are not one, zero and add, which is what

@@ -23,7 +23,7 @@
    thousand quads, well past what a screen of interface needs, and it is a
    single allocation rather than one per shape. */
 #define HEL_UI_ARENA_BYTES 0x40000u
-#define HEL_VERTEX_DWORDS 10u
+#define HEL_VERTEX_DWORDS 12u
 #ifndef HEL_CULL_MODE
 #define HEL_CULL_MODE (1u << 1) /* cull back faces, CCW front */
 #endif
@@ -112,10 +112,12 @@ static int ui_arena_write(const HelVertex *vertices, uint32_t vertex_count,
         dst[v * HEL_VERTEX_DWORDS + 3u] = float_bits(src->nx);
         dst[v * HEL_VERTEX_DWORDS + 4u] = float_bits(src->ny);
         dst[v * HEL_VERTEX_DWORDS + 5u] = float_bits(src->nz);
-        dst[v * HEL_VERTEX_DWORDS + 6u] = float_bits(src->r);
-        dst[v * HEL_VERTEX_DWORDS + 7u] = float_bits(src->g);
-        dst[v * HEL_VERTEX_DWORDS + 8u] = float_bits(src->b);
-        dst[v * HEL_VERTEX_DWORDS + 9u] = float_bits(src->a);
+        dst[v * HEL_VERTEX_DWORDS + 6u] = float_bits(src->u);
+        dst[v * HEL_VERTEX_DWORDS + 7u] = float_bits(src->v);
+        dst[v * HEL_VERTEX_DWORDS + 8u] = float_bits(src->r);
+        dst[v * HEL_VERTEX_DWORDS + 9u] = float_bits(src->g);
+        dst[v * HEL_VERTEX_DWORDS + 10u] = float_bits(src->b);
+        dst[v * HEL_VERTEX_DWORDS + 11u] = float_bits(src->a);
     }
     volatile uint16_t *idx =
         (volatile uint16_t *)(uintptr_t)(g_ui_arena.virt + index_offset);
@@ -181,10 +183,12 @@ int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
         dst[v * HEL_VERTEX_DWORDS + 3u] = float_bits(src->nx);
         dst[v * HEL_VERTEX_DWORDS + 4u] = float_bits(src->ny);
         dst[v * HEL_VERTEX_DWORDS + 5u] = float_bits(src->nz);
-        dst[v * HEL_VERTEX_DWORDS + 6u] = float_bits(src->r);
-        dst[v * HEL_VERTEX_DWORDS + 7u] = float_bits(src->g);
-        dst[v * HEL_VERTEX_DWORDS + 8u] = float_bits(src->b);
-        dst[v * HEL_VERTEX_DWORDS + 9u] = float_bits(src->a);
+        dst[v * HEL_VERTEX_DWORDS + 6u] = float_bits(src->u);
+        dst[v * HEL_VERTEX_DWORDS + 7u] = float_bits(src->v);
+        dst[v * HEL_VERTEX_DWORDS + 8u] = float_bits(src->r);
+        dst[v * HEL_VERTEX_DWORDS + 9u] = float_bits(src->g);
+        dst[v * HEL_VERTEX_DWORDS + 10u] = float_bits(src->b);
+        dst[v * HEL_VERTEX_DWORDS + 11u] = float_bits(src->a);
     }
     volatile uint16_t *idx =
         (volatile uint16_t *)(uintptr_t)(slot->block.virt + index_offset);

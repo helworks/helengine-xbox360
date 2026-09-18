@@ -111,6 +111,7 @@ $sources = @(
     "src/platform/xenia_guest/video.c",
     "src/platform/xenia_guest/shader.c",
     "src/platform/xenia_guest/mesh.c",
+    "src/platform/xenia_guest/texture.c",
     "src/engine/frame.c",
     "src/engine/math.c",
     "src/demo/triangle.c",
