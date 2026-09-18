@@ -233,6 +233,11 @@ int hel_video_init(const HelVideoConfig *config) {
     if (err) goto fail;
     err = hel_phys_alloc("frontbuffer", HEL_FRONT_BYTES, &g.front);
     if (err) goto fail;
+    /* The interface arena, allocated here so a scene that draws no
+       interface still pays for it once rather than on first use, where a
+       failure would arrive mid-frame. */
+    err = hel_ui_arena_init();
+    if (err) goto fail;
     if ((g.front.phys & 0xFFFu) != 0 || (g.ring.phys & 0xFFFu) != 0) {
         hel_log("HEL video: allocation alignment unexpected");
         err = HEL_ERR_VIDEO_LAYOUT;
@@ -266,6 +271,10 @@ int hel_frame_begin(float r, float g_, float b, float a) {
         return HEL_ERR_VIDEO_NOT_READY;
     }
     ring_frame_start();
+    /* The previous frame's interface geometry has been consumed by now:
+       this function is only reached after hel_frame_present blocked on
+       that frame's fence, so the whole arena is free again. */
+    hel_ui_frame_reset();
     g.clear_color = pack_8888(r, g_, b, a);
     emit_frame_state();
     emit_resolve(XE_COPY_COLOR_CLEAR_ENABLE | XE_COPY_DEPTH_CLEAR_ENABLE);

@@ -19,6 +19,10 @@
 #define HEL_MAX_MESHES 64u
 #define HEL_MAX_VERTICES 4096u
 #define HEL_MAX_INDICES 65535u
+/* One frame of interface geometry. At 40 bytes a vertex this is a few
+   thousand quads, well past what a screen of interface needs, and it is a
+   single allocation rather than one per shape. */
+#define HEL_UI_ARENA_BYTES 0x40000u
 #define HEL_VERTEX_DWORDS 10u
 #ifndef HEL_CULL_MODE
 #define HEL_CULL_MODE (1u << 1) /* cull back faces, CCW front */
@@ -35,10 +39,101 @@ static HelMeshSlot g_meshes[HEL_MAX_MESHES];
 static uint32_t g_mesh_count;
 static uint32_t g_draw_count;
 
+/* Interface geometry is rebuilt every frame: a panel moves, resizes and comes
+   and goes, so it cannot own a mesh slot. Each slot costs a 64 KiB physical
+   allocation that is never released, and there are only 64, so a few seconds
+   of interface would exhaust them.
+ *
+ * Instead one arena is filled from the start each frame. That is safe because
+ * hel_frame_present blocks until the fence retires, so the GPU has finished
+ * reading a frame's geometry before the next frame overwrites it. If frames
+ * are ever allowed to overlap, this needs one arena per frame in flight. */
+static HelPhysBlock g_ui_arena;
+static uint32_t g_ui_used;
+static uint32_t g_ui_peak;
+static int g_ui_reported_overflow;
+
 static uint32_t float_bits(float value) {
     union { float f; uint32_t u; } cast;
     cast.f = value;
     return cast.u;
+}
+
+int hel_ui_arena_init(void) {
+    if (g_ui_arena.virt != 0) {
+        return HEL_OK;
+    }
+    return hel_phys_alloc("ui", HEL_UI_ARENA_BYTES, &g_ui_arena);
+}
+
+void hel_ui_frame_reset(void) { g_ui_used = 0; }
+
+uint32_t hel_ui_peak_bytes(void) { return g_ui_peak; }
+
+/* Copies one batch into the arena and describes it the way a mesh slot does,
+   so the shared draw path does not care where geometry came from. */
+static int ui_arena_write(const HelVertex *vertices, uint32_t vertex_count,
+                          const uint16_t *indices, uint32_t index_count,
+                          HelMeshSlot *out_slot) {
+    if (!vertices || !indices || !out_slot || vertex_count == 0 ||
+        index_count == 0 || vertex_count > HEL_MAX_VERTICES ||
+        index_count > HEL_MAX_INDICES) {
+        return HEL_ERR_MESH_INVALID;
+    }
+    if (g_ui_arena.virt == 0) {
+        return HEL_ERR_VIDEO_NOT_READY;
+    }
+    for (uint32_t i = 0; i < index_count; ++i) {
+        if (indices[i] >= vertex_count) {
+            return HEL_ERR_MESH_INVALID;
+        }
+    }
+
+    /* The fetch constant addresses vertices from the block base, so each batch
+       starts on a four-byte boundary and its indices after them. */
+    const uint32_t vertex_bytes = vertex_count * HEL_VERTEX_DWORDS * 4u;
+    const uint32_t index_offset = (g_ui_used + vertex_bytes + 3u) & ~3u;
+    const uint32_t end = index_offset + index_count * 2u;
+    if (end > HEL_UI_ARENA_BYTES) {
+        if (!g_ui_reported_overflow) {
+            g_ui_reported_overflow = 1;
+            hel_log_u32("HEL ui: arena full, batch dropped at byte", g_ui_used);
+        }
+        return HEL_ERR_MESH_LIMIT;
+    }
+
+    volatile uint32_t *dst =
+        (volatile uint32_t *)(uintptr_t)(g_ui_arena.virt + g_ui_used);
+    for (uint32_t v = 0; v < vertex_count; ++v) {
+        const HelVertex *src = &vertices[v];
+        dst[v * HEL_VERTEX_DWORDS + 0u] = float_bits(src->x);
+        dst[v * HEL_VERTEX_DWORDS + 1u] = float_bits(src->y);
+        dst[v * HEL_VERTEX_DWORDS + 2u] = float_bits(src->z);
+        dst[v * HEL_VERTEX_DWORDS + 3u] = float_bits(src->nx);
+        dst[v * HEL_VERTEX_DWORDS + 4u] = float_bits(src->ny);
+        dst[v * HEL_VERTEX_DWORDS + 5u] = float_bits(src->nz);
+        dst[v * HEL_VERTEX_DWORDS + 6u] = float_bits(src->r);
+        dst[v * HEL_VERTEX_DWORDS + 7u] = float_bits(src->g);
+        dst[v * HEL_VERTEX_DWORDS + 8u] = float_bits(src->b);
+        dst[v * HEL_VERTEX_DWORDS + 9u] = float_bits(src->a);
+    }
+    volatile uint16_t *idx =
+        (volatile uint16_t *)(uintptr_t)(g_ui_arena.virt + index_offset);
+    for (uint32_t i = 0; i < index_count; ++i) {
+        idx[i] = indices[i];
+    }
+
+    out_slot->block.virt = g_ui_arena.virt + g_ui_used;
+    out_slot->block.phys = g_ui_arena.phys + g_ui_used;
+    out_slot->block.size = end - g_ui_used;
+    out_slot->vertex_count = vertex_count;
+    out_slot->index_count = index_count;
+    out_slot->index_offset = index_offset - g_ui_used;
+    g_ui_used = (end + 3u) & ~3u;
+    if (g_ui_used > g_ui_peak) {
+        g_ui_peak = g_ui_used;
+    }
+    return HEL_OK;
 }
 
 int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
@@ -109,35 +204,55 @@ int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
     return HEL_OK;
 }
 
-static int draw(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
-                const HelDrawParams *params);
+static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
+                const HelMat4 *model, const HelDrawParams *params,
+                int depth_tested);
 
 int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp) {
-    return draw(mesh, mvp, 0, 0);
+    if (mesh == 0 || mesh > g_mesh_count) {
+        return HEL_ERR_MESH_INVALID;
+    }
+    return draw(&g_meshes[mesh - 1u], mvp, 0, 0, 1);
 }
 
 int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
                     const HelDrawParams *params) {
-    if (!model || !params) {
+    if (mesh == 0 || mesh > g_mesh_count || !model || !params) {
         return HEL_ERR_MESH_INVALID;
     }
-    return draw(mesh, mvp, model, params);
+    return draw(&g_meshes[mesh - 1u], mvp, model, params, 1);
 }
 
-/* One draw path for both shaders. The only differences are which vertex
-   shader is emitted and how many constants follow the MVP, so splitting them
-   into two functions would duplicate every piece of pipeline state and let
-   the two drift. */
-static int draw(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
-                const HelDrawParams *params) {
-    if (mesh == 0 || mesh > g_mesh_count || !mvp) {
+int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
+                const uint16_t *indices, uint32_t index_count,
+                const HelMat4 *transform, const HelDrawParams *params) {
+    HelMeshSlot slot;
+    int err = ui_arena_write(vertices, vertex_count, indices, index_count,
+                             &slot);
+    if (err) {
+        return err;
+    }
+    /* Interface geometry is submitted in the order the queues hand it over and
+       composes over the scene, so it neither tests nor writes depth. Testing
+       it against a scene that was already resolved would hide the interface
+       behind whatever happened to be in front. */
+    return draw(&slot, transform, transform, params, 0);
+}
+
+/* One draw path for every shader and both geometry sources. The differences
+   are which vertex shader is emitted, how many constants follow, and whether
+   depth applies; splitting them would duplicate every piece of pipeline state
+   and let the copies drift. */
+static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
+                const HelMat4 *model, const HelDrawParams *params,
+                int depth_tested) {
+    if (!slot || !mvp) {
         return HEL_ERR_MESH_INVALID;
     }
     int err = hel_shaders_validate();
     if (err) {
         return err;
     }
-    const HelMeshSlot *slot = &g_meshes[mesh - 1u];
     uint32_t width = hel_video_width();
     uint32_t height = hel_video_height();
     const int shaded = (model != 0 && params != 0);
@@ -159,11 +274,17 @@ static int draw(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
     hel_ring_reg(XE_GPU_REG_PA_CL_CLIP_CNTL, 1u << 19); /* dx_clip_space_def */
     /* Back-face culling with counter-clockwise front faces (face bit = 0);
        the cube's fixed-angle captures verify the winding convention. */
-    hel_ring_reg(XE_GPU_REG_PA_SU_SC_MODE_CNTL, HEL_CULL_MODE);
+    /* Interface quads are built here and face the viewer by construction, but
+       a negative scale or a rotation past 180 degrees flips their winding, so
+       they are not culled. Scene geometry keeps back-face culling. */
+    hel_ring_reg(XE_GPU_REG_PA_SU_SC_MODE_CNTL,
+                 depth_tested ? HEL_CULL_MODE : 0u);
     hel_ring_reg(XE_GPU_REG_PA_SC_AA_CONFIG, 0u);
     hel_ring_reg(XE_GPU_REG_PA_SC_AA_MASK, 0xFFFFu);
-    /* Depth test less, depth writes on; no stencil, no alpha test, no blend. */
-    hel_ring_reg(XE_GPU_REG_RB_DEPTHCONTROL, (1u << 1) | (1u << 2) | (1u << 4));
+    /* Depth test less and depth writes on for the scene; both off for
+       interface geometry. No stencil, no alpha test, no blend either way. */
+    hel_ring_reg(XE_GPU_REG_RB_DEPTHCONTROL,
+                 depth_tested ? ((1u << 1) | (1u << 2) | (1u << 4)) : 0u);
     hel_ring_reg(XE_GPU_REG_RB_COLORCONTROL, 0u);
     hel_ring_reg(XE_GPU_REG_RB_BLENDCONTROL0, 0x00010001u); /* one/zero */
     hel_ring_reg(XE_GPU_REG_RB_COLOR_MASK, 0xFu);
@@ -223,7 +344,7 @@ static int draw(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
     hel_ring_put(slot->index_count | (XE_ENDIAN_8IN16 << 30));
 
     if (g_draw_count == 0) {
-        hel_log_u32("HEL draw: first draw, mesh", mesh);
+        hel_log_u32("HEL draw: first draw, physical address", slot->block.phys);
         hel_log_u32("HEL draw: indices", slot->index_count);
         hel_log_u32("HEL draw: vertices", slot->vertex_count);
     }

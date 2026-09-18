@@ -72,6 +72,19 @@ int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp);
    lighting with it. */
 int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
                     const HelDrawParams *params);
+/* Draws one batch of interface geometry from the per-frame arena, with the
+   positions already in the space `transform` maps to clip space. Depth is
+   neither tested nor written, so batches compose in submission order over the
+   scene. The data is copied, so the caller's buffers can be reused at once. */
+int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
+                const uint16_t *indices, uint32_t index_count,
+                const HelMat4 *transform, const HelDrawParams *params);
+/* Reserves the interface arena; safe to call more than once. */
+int hel_ui_arena_init(void);
+/* Frees the whole arena for reuse. Called when a frame begins. */
+void hel_ui_frame_reset(void);
+/* The most arena bytes any one frame has used. */
+uint32_t hel_ui_peak_bytes(void);
 int hel_frame_present(void);
 void hel_video_shutdown(void);
 uint32_t hel_frame_count(void);
