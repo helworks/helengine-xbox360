@@ -53,15 +53,24 @@ and the project's build settings both have to be written for it first.
 
 ## 2. What the scene needs before it looks like the scene
 
+Updated 2026-09-18, after materials, lighting, the authored background and
+rounded rectangles all landed and were seen on screen.
+
 | Gap | State today | What it needs |
 |---|---|---|
-| Materials | cooked colour is read and carried, never drawn with | a per-draw constant colour, which means a constant in the pixel shader |
+| Materials | done: the cooked base colour is a per-draw constant | |
+| Lighting | done: one directional light plus ambient, read from the scene each frame | more than one directional light, and point and spot lights |
+| Background | done: the clear colour of the camera that owns it | |
+| Rounded rectangles | done: triangulated, drawn, confirmed on screen | |
+| Alpha blending | none; a shape authored translucent draws opaque | the blend registers, which this port's register header does not yet document |
 | Textures | described with real dimensions, no pixels uploaded | Xenos texture fetch constants, tiling and formats; the largest single piece left |
-| Lighting | unlit | the engine's ambient and directional lights, as the PS1 port did per-vertex through the engine's own light utility |
-| Two dimensional drawing | sprites and text report their calls and draw nothing | a 2D path, or the Dreamcast position of stripping the instruction UI on minimal targets |
+| Sprites and text | counted and not drawn | the texture path above, and for text a glyph atlas |
 
-The colour-from-normal shading is a debugging aid, not a renderer: it makes
-a wrong normal or a wrong winding obvious, which is what it was for.
+Two smaller notes on what is drawn today. A rounded rectangle's Rotation is
+ignored, which matches the reference renderer: it is authored but unused
+there too. And only a drawable's first material is applied, because the
+backend issues one draw for a whole mesh; a mesh with per-submesh materials
+would need one draw per submesh.
 
 ## 3. The risk worth naming
 
@@ -98,11 +107,14 @@ assume.
 
 ## Recommendation
 
-Materials next. The cooked colour already reaches the renderer and is thrown
-away at the last step, so wiring one pixel-shader constant turns the debug
-shading into the authored appearance. That is a small change with a visible
-result, and it is the shortest way to tell whether what is on screen is what
-the author asked for.
+Alpha blending next, then textures.
 
-Textures after that. They are the largest remaining piece and everything 2D
-waits behind them.
+Blending is small and it is in the way: the instruction panel is authored
+translucent and currently draws opaque over the scene. It needs the blend
+registers, and the right move is to document their encoding in this port's
+register header rather than guess it, since a wrong guess produces wrong
+colours instead of an error.
+
+Textures are the largest remaining piece and both sprites and text wait
+behind them. Text needs a glyph atlas on top of that, so sprites are the
+shorter half and worth doing first.
