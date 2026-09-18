@@ -1,11 +1,14 @@
 /*
  * The engine's 2D renderer for this console.
  *
- * RenderManager2D::Draw is an empty virtual in the engine, so the platform
- * owns the traversal, the same as in 3D. This walks the cameras the object
- * manager holds in draw order, visits each one's 2D queue in order, and lets
- * each drawable call back into the DrawRoundedRect, DrawSprite and DrawText
- * below.
+ * The engine never calls RenderManager2D::Draw. Its own frame calls only the
+ * 3D manager, so a 2D pass has to be driven from there: X360RenderManager3D
+ * calls renderCamera below once per camera, after it has drawn that camera's
+ * 3D content, which is what the Windows backend does and what makes the
+ * interface compose over the scene in the right order.
+ *
+ * renderCamera visits the camera's 2D queue in order and lets each drawable
+ * call back into the DrawRoundedRect, DrawSprite and DrawText below.
  *
  * A 2D drawable needs no layout work here. The anchor system and the viewport
  * component have already written their results into the entity's position and
@@ -31,6 +34,7 @@ extern "C" {
 #include "xenia_guest.h"
 }
 
+class ICamera;
 class TextureAsset;
 class IContentStreamSource;
 
@@ -40,7 +44,16 @@ namespace helengine::x360 {
 class X360RenderManager2D final : public ::RenderManager2D,
                                   public ::IRenderVisitor2D {
 public:
-    void Draw() override;
+    /// <summary>Draws one camera's 2D queue. Called by the 3D manager.</summary>
+    /// <param name="camera">Camera whose queue and viewport to use.</param>
+    void renderCamera(::ICamera *camera);
+
+    /// <summary>Clears the per-frame counters. Called once before the cameras.</summary>
+    void beginFrame();
+
+    /// <summary>Reports the first frame's counters. Called once after the cameras.</summary>
+    void endFrame();
+
     void Visit(::IDrawable2D *drawable) override;
 
     void DrawRoundedRect(::IRoundedRectDrawable2D *shape) override;

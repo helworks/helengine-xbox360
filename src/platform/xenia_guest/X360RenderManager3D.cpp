@@ -20,6 +20,8 @@
  */
 #include "X360RenderManager3D.hpp"
 
+#include "X360RenderManager2D.hpp"
+
 #include "Entity.hpp"
 #include "ICamera.hpp"
 #include "IDrawable3D.hpp"
@@ -409,6 +411,50 @@ HelDrawParams X360RenderManager3D::resolveLighting(::ObjectManager *objectManage
     return params;
 }
 
+/* One camera's 3D content. Returns without drawing when the camera cannot
+   describe a view, which is not an error: a camera that carries only an
+   interface is exactly that. */
+void X360RenderManager3D::drawCamera3D(::ICamera *camera,
+                                       const HelDrawParams &lighting,
+                                       float aspect) {
+    ::Entity *cameraEntity = camera->get_Parent();
+    if (cameraEntity == nullptr) {
+        return;
+    }
+
+    /* The view matrix is the inverse of the camera's world transform. The
+       generated matrix type exposes the inverse transpose rather than the
+       inverse, so transposing that gives the inverse. */
+    ::float4x4 worldFromCamera = cameraEntity->get_WorldTransformMatrix();
+    ::float4x4 inverseTranspose;
+    if (!::float4x4::TryInverseTranspose__ref0_out1(worldFromCamera,
+                                                    inverseTranspose)) {
+        hel_log("HEL render3d: camera transform is not invertible");
+        return;
+    }
+    ::float4x4 view;
+    ::float4x4::Transpose__ref0_out1(inverseTranspose, view);
+    /* The field of view comes from the authored camera, so a scene frames the
+       same way here as on any other platform. */
+    ::float4x4 projection =
+        ::CameraProjectionUtils::CreatePerspectiveProjection(camera, aspect);
+
+    /* The backend composes with column vectors, so projection comes first;
+       the conversion transposes each engine matrix. */
+    HelMat4 viewProjection = hel_mul(hel_matrix_from_engine(projection),
+                                     hel_matrix_from_engine(view));
+
+    ::IRenderQueue3D *queue = camera->get_RenderQueue3D();
+    if (queue == nullptr) {
+        return;
+    }
+    DrawableVisitor visitor(viewProjection, camera->get_LayerMask(), lighting,
+                            *this);
+    queue->VisitOrdered(&visitor);
+    lastDrawnCount_ += visitor.drawn();
+    lastSkippedCount_ += visitor.skipped();
+}
+
 void X360RenderManager3D::Draw() {
     lastDrawnCount_ = 0;
     lastSkippedCount_ = 0;
@@ -431,49 +477,63 @@ void X360RenderManager3D::Draw() {
     const float height = (float)hel_video_height();
     const float aspect = height > 0.0f ? width / height : 1.0f;
 
-    for (int32_t index = 0; index < cameraCount; ++index) {
+    /* The engine's frame calls only reach the 3D manager, so the 2D pass is
+       driven from here, per camera, right after that camera's 3D content. The
+       Windows backend does the same. Without it an authored interface reaches
+       the console and is never drawn. */
+    X360RenderManager2D *render2d = dynamic_cast<X360RenderManager2D *>(
+        core != nullptr ? core->get_RenderManager2D() : nullptr);
+    if (render2d != nullptr) {
+        render2d->beginFrame();
+    }
+
+    /* Draw order decides what covers what, and the camera list is not in that
+       order, so each pass takes the lowest order not yet drawn. The counts are
+       small enough that this costs nothing worth avoiding. */
+    int32_t visited = 0;
+    int32_t previousOrder = -1;
+    while (visited < cameraCount) {
+        int32_t nextOrder = -1;
+        for (int32_t index = 0; index < cameraCount; ++index) {
+            ::ICamera *candidate = cameras->get_Item(index);
+            if (candidate == nullptr) {
+                visited++;
+                continue;
+            }
+            const int32_t order = (int32_t)candidate->get_CameraDrawOrder();
+            if (order <= previousOrder) {
+                continue;
+            }
+            if (nextOrder < 0 || order < nextOrder) {
+                nextOrder = order;
+            }
+        }
+        if (nextOrder < 0) {
+            break;
+        }
+        previousOrder = nextOrder;
+        for (int32_t index = 0; index < cameraCount; ++index) {
         ::ICamera *camera = cameras->get_Item(index);
         if (camera == nullptr) {
             continue;
         }
-        ::Entity *cameraEntity = camera->get_Parent();
-        if (cameraEntity == nullptr) {
-            hel_log("HEL render3d: camera has no entity, skipped");
+        if ((int32_t)camera->get_CameraDrawOrder() != nextOrder) {
             continue;
         }
-
-        /* The view matrix is the inverse of the camera's world transform.
-           The generated matrix type exposes the inverse transpose rather
-           than the inverse, so transposing that gives the inverse. */
-        ::float4x4 worldFromCamera = cameraEntity->get_WorldTransformMatrix();
-        ::float4x4 inverseTranspose;
-        if (!::float4x4::TryInverseTranspose__ref0_out1(worldFromCamera,
-                                                        inverseTranspose)) {
-            hel_log("HEL render3d: camera transform is not invertible");
-            continue;
+        visited++;
+        drawCamera3D(camera, lighting, aspect);
+        /* Always, even when the 3D pass above returned early. A camera that
+           carries only an interface has no 3D queue and no transform worth
+           inverting, and skipping its 2D content because of that is exactly
+           how an authored interface goes missing. */
+        if (render2d != nullptr) {
+            render2d->renderCamera(camera);
         }
-        ::float4x4 view;
-        ::float4x4::Transpose__ref0_out1(inverseTranspose, view);
-        /* The field of view comes from the authored camera, so a scene frames
-           the same way here as on any other platform. */
-        ::float4x4 projection = ::CameraProjectionUtils::CreatePerspectiveProjection(
-            camera, aspect);
-
-        /* The backend composes with column vectors, so projection comes
-           first; the conversion transposes each engine matrix. */
-        HelMat4 viewProjection = hel_mul(hel_matrix_from_engine(projection),
-                                         hel_matrix_from_engine(view));
-
-        ::IRenderQueue3D *queue = camera->get_RenderQueue3D();
-        if (queue == nullptr) {
-            hel_log("HEL render3d: camera has no render queue");
-            continue;
         }
-        DrawableVisitor visitor(viewProjection, camera->get_LayerMask(),
-                                lighting, *this);
-        queue->VisitOrdered(&visitor);
-        lastDrawnCount_ += visitor.drawn();
-        lastSkippedCount_ += visitor.skipped();
+    }
+
+    if (render2d != nullptr) {
+        render2d->endFrame();
     }
 
     if (!reportedFirstDraw_) {

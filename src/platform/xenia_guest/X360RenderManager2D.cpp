@@ -148,83 +148,44 @@ void colour_from_byte4(const ::byte4 &colour, float *rgba) {
 
 namespace helengine::x360 {
 
-void X360RenderManager2D::Draw() {
+void X360RenderManager2D::beginFrame() {
     shapesDrawn_ = 0;
     shapesSkipped_ = 0;
+}
 
-    ::Core *core = get_OwnerCore();
-    ::ObjectManager *objectManager =
-        core != nullptr ? core->get_ObjectManager() : nullptr;
-    List<::ICamera *> *cameras =
-        objectManager != nullptr ? objectManager->get_Cameras() : nullptr;
-    const int32_t cameraCount = cameras != nullptr ? cameras->get_Count() : 0;
-    if (cameraCount == 0) {
+void X360RenderManager2D::renderCamera(::ICamera *camera) {
+    if (camera == nullptr) {
         return;
     }
-
+    ::IRenderQueue2D *queue = camera->get_RenderQueue2D();
+    if (queue == nullptr || queue->get_Count() == 0) {
+        return;
+    }
+    /* The camera's viewport is a fraction of the render target; the engine's
+       default is the whole of it. */
     const float screenWidth = (float)hel_video_width();
     const float screenHeight = (float)hel_video_height();
-
-    /* Draw order decides what covers what, and the list is not in that order,
-       so each pass picks the lowest order not yet drawn. The counts here are
-       small enough that this costs nothing worth avoiding. */
-    int32_t drawnCameras = 0;
-    int32_t previousOrder = -1;
-    while (drawnCameras < cameraCount) {
-        int32_t nextOrder = -1;
-        for (int32_t index = 0; index < cameraCount; ++index) {
-            ::ICamera *camera = cameras->get_Item(index);
-            if (camera == nullptr) {
-                continue;
-            }
-            const int32_t order = (int32_t)camera->get_CameraDrawOrder();
-            if (order <= previousOrder) {
-                continue;
-            }
-            if (nextOrder < 0 || order < nextOrder) {
-                nextOrder = order;
-            }
-        }
-        if (nextOrder < 0) {
-            break;
-        }
-        for (int32_t index = 0; index < cameraCount; ++index) {
-            ::ICamera *camera = cameras->get_Item(index);
-            if (camera == nullptr) {
-                continue;
-            }
-            if ((int32_t)camera->get_CameraDrawOrder() != nextOrder) {
-                continue;
-            }
-            drawnCameras++;
-            ::IRenderQueue2D *queue = camera->get_RenderQueue2D();
-            if (queue == nullptr || queue->get_Count() == 0) {
-                continue;
-            }
-            /* The camera's viewport is a fraction of the render target; the
-               engine's default is the whole of it. */
-            const ::float4 viewport = camera->get_Viewport();
-            viewportX_ = viewport.X * screenWidth;
-            viewportY_ = viewport.Y * screenHeight;
-            viewportWidth_ = viewport.Z * screenWidth;
-            viewportHeight_ = viewport.W * screenHeight;
-            if (viewportWidth_ <= 0.0f || viewportHeight_ <= 0.0f) {
-                continue;
-            }
-            queue->VisitOrdered(this);
-        }
-        previousOrder = nextOrder;
+    const ::float4 viewport = camera->get_Viewport();
+    viewportX_ = viewport.X * screenWidth;
+    viewportY_ = viewport.Y * screenHeight;
+    viewportWidth_ = viewport.Z * screenWidth;
+    viewportHeight_ = viewport.W * screenHeight;
+    if (viewportWidth_ <= 0.0f || viewportHeight_ <= 0.0f) {
+        return;
     }
+    queue->VisitOrdered(this);
+}
 
-    if (!reportedFirstDraw_) {
-        reportedFirstDraw_ = true;
-        hel_log_u32("HEL render2d: first draw, shapes drawn", shapesDrawn_);
-        hel_log_u32("HEL render2d: first draw, shapes skipped", shapesSkipped_);
-        hel_log_u32("HEL render2d: first draw, sprites not drawn", sprites_);
-        hel_log_u32("HEL render2d: first draw, text runs not drawn", texts_);
-        hel_log_u32("HEL render2d: interface arena peak bytes",
-                    hel_ui_peak_bytes());
+void X360RenderManager2D::endFrame() {
+    if (reportedFirstDraw_) {
+        return;
     }
+    reportedFirstDraw_ = true;
+    hel_log_u32("HEL render2d: first draw, shapes drawn", shapesDrawn_);
+    hel_log_u32("HEL render2d: first draw, shapes skipped", shapesSkipped_);
+    hel_log_u32("HEL render2d: first draw, sprites not drawn", sprites_);
+    hel_log_u32("HEL render2d: first draw, text runs not drawn", texts_);
+    hel_log_u32("HEL render2d: interface arena peak bytes", hel_ui_peak_bytes());
 }
 
 void X360RenderManager2D::Visit(::IDrawable2D *drawable) {

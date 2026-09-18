@@ -15,6 +15,7 @@
    to override. */
 #include "helcpp_config.hpp"
 
+class ICamera;
 class ObjectManager;
 class PlatformMaterialAsset;
 
@@ -89,6 +90,13 @@ public:
     /// <param name="rgba">Receives the colour; untouched when none is authored.</param>
     /// <returns>True when a camera asked for a colour clear.</returns>
     bool resolveClearColor(float *rgba);
+
+    /// <summary>Draws one camera's 3D content.</summary>
+    /// <param name="camera">Camera to draw.</param>
+    /// <param name="lighting">Lighting constants resolved for this frame.</param>
+    /// <param name="aspect">Render target aspect ratio.</param>
+    void drawCamera3D(::ICamera *camera, const HelDrawParams &lighting,
+                      float aspect);
 
     /// <summary>Resolves the scene's lights into the constants a draw shades with.</summary>
     HelDrawParams resolveLighting(::ObjectManager *objectManager);
