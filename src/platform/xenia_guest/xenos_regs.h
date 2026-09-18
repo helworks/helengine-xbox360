@@ -34,6 +34,35 @@
 #define XE_GPU_REG_RB_DEPTHCONTROL 0x2200u
 #define XE_GPU_REG_RB_BLENDCONTROL0 0x2201u
 #define XE_GPU_REG_RB_COLORCONTROL 0x2202u
+
+/* RB_BLENDCONTROL fields, as the emulator's own register definitions give them
+   (src/xenia/gpu/registers.h, RB_BLENDCONTROL). There is no blend enable bit:
+   blending is on whenever the factors are not one, zero and add, which is what
+   the emulator checks before it turns host blending on. The opaque setting is
+   therefore ONE/ZERO/ADD rather than a cleared enable. */
+#define XE_BLEND_COLOR_SRC_SHIFT 0u
+#define XE_BLEND_COLOR_OP_SHIFT 5u
+#define XE_BLEND_COLOR_DST_SHIFT 8u
+#define XE_BLEND_ALPHA_SRC_SHIFT 16u
+#define XE_BLEND_ALPHA_OP_SHIFT 21u
+#define XE_BLEND_ALPHA_DST_SHIFT 24u
+
+/* BlendFactor values; the gaps are deliberate and match the hardware enum. */
+#define XE_BLEND_ZERO 0u
+#define XE_BLEND_ONE 1u
+#define XE_BLEND_SRC_ALPHA 6u
+#define XE_BLEND_ONE_MINUS_SRC_ALPHA 7u
+
+/* BlendOp values. */
+#define XE_BLEND_OP_ADD 0u
+
+#define XE_BLEND_CONTROL(color_src, color_op, color_dst, alpha_src, alpha_op,                           alpha_dst)                                               (((color_src) << XE_BLEND_COLOR_SRC_SHIFT) |                                   ((color_op) << XE_BLEND_COLOR_OP_SHIFT) |                                     ((color_dst) << XE_BLEND_COLOR_DST_SHIFT) |                                   ((alpha_src) << XE_BLEND_ALPHA_SRC_SHIFT) |                                   ((alpha_op) << XE_BLEND_ALPHA_OP_SHIFT) |                                     ((alpha_dst) << XE_BLEND_ALPHA_DST_SHIFT))
+
+/* Source alpha over destination, the usual way to compose an interface. */
+#define XE_BLEND_ALPHA_OVER                                                       XE_BLEND_CONTROL(XE_BLEND_SRC_ALPHA, XE_BLEND_OP_ADD,                                          XE_BLEND_ONE_MINUS_SRC_ALPHA, XE_BLEND_SRC_ALPHA,                             XE_BLEND_OP_ADD, XE_BLEND_ONE_MINUS_SRC_ALPHA)
+
+/* Replace the destination: what an opaque draw wants. */
+#define XE_BLEND_OPAQUE                                                           XE_BLEND_CONTROL(XE_BLEND_ONE, XE_BLEND_OP_ADD, XE_BLEND_ZERO,                                 XE_BLEND_ONE, XE_BLEND_OP_ADD, XE_BLEND_ZERO)
 #define XE_GPU_REG_PA_CL_CLIP_CNTL 0x2204u
 #define XE_GPU_REG_PA_SU_SC_MODE_CNTL 0x2205u
 #define XE_GPU_REG_PA_CL_VTE_CNTL 0x2206u

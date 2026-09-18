@@ -237,11 +237,6 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
         shapesSkipped_++;
         return;
     }
-    if (!reportedNoAlphaBlend_) {
-        reportedNoAlphaBlend_ = true;
-        hel_log("HEL render2d: no alpha blending yet, shapes draw opaque");
-    }
-
     /* The anchor system and the viewport component have already written their
        results into the entity's position and this shape's size, so no layout
        work is needed here. */

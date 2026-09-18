@@ -122,6 +122,53 @@ class ControlFlow(unittest.TestCase):
         cf5_w1 = dwords[8] >> 16
         self.assertEqual(bits(cf5_w1, 12, 4), 0)      # padding nop
 
+    def test_texture_fetch_fields(self):
+        """Pins every field of a texture fetch against the documented layout.
+
+        The layout is TextureFetchInstruction::Data in the emulator's ucode.h.
+        A wrong field here does not fail a build: it samples the wrong
+        constant, or with the wrong filter, and shows up as a texture that is
+        subtly or completely wrong on screen. That is why each field is
+        checked rather than the three words compared against a recorded blob,
+        which would say only that something changed.
+        """
+        dwords, _listing = xa.assemble(
+            "exec\n tfetch r2.xyzw, r1.xy, tf3\nalloc colors\nexece\n"
+            " max oC0, r2, r2\n")
+        # Three control-flow entries plus a padding nop pack into two pairs,
+        # which is six dwords, so the first instruction starts at dword 6.
+        word0, word1, word2 = dwords[6], dwords[7], dwords[8]
+        self.assertEqual(bits(word0, 0, 5), 1)      # opcode: texture fetch
+        self.assertEqual(bits(word0, 5, 6), 1)      # source register r1
+        self.assertEqual(bits(word0, 11, 1), 0)     # no loop addressing
+        self.assertEqual(bits(word0, 12, 6), 2)     # destination register r2
+        self.assertEqual(bits(word0, 18, 1), 0)     # no loop addressing
+        self.assertEqual(bits(word0, 19, 1), 1)     # fetch_valid_only
+        self.assertEqual(bits(word0, 20, 5), 3)     # fetch constant tf3
+        self.assertEqual(bits(word0, 25, 1), 0)     # coordinates normalized
+        # The source swizzle is three components of two bits. The caller named
+        # two, so the third takes z rather than whatever the register holds.
+        self.assertEqual(bits(word0, 26, 6), 0 | (1 << 2) | (2 << 4))
+        # The destination swizzle is four components of three bits.
+        self.assertEqual(bits(word1, 0, 12), 0 | (1 << 3) | (2 << 6) | (3 << 9))
+        for shift in (12, 14, 16, 24, 26):          # every texture filter
+            self.assertEqual(bits(word1, shift, 2), 3)  # defer to the constant
+        self.assertEqual(bits(word1, 18, 3), 7)     # anisotropic: defer
+        self.assertEqual(bits(word1, 21, 3), 7)     # arbitrary: defer
+        self.assertEqual(bits(word1, 28, 1), 1)     # use_comp_lod
+        self.assertEqual(bits(word1, 29, 1), 0)     # use_reg_lod
+        self.assertEqual(bits(word1, 31, 1), 0)     # not predicated
+        self.assertEqual(bits(word2, 0, 1), 0)      # no register gradients
+        self.assertEqual(bits(word2, 2, 7), 0)      # no level-of-detail bias
+        self.assertEqual(bits(word2, 14, 2), 1)     # two-dimensional
+        self.assertEqual(bits(word2, 16, 5), 0)     # no texel offset in x
+        self.assertEqual(bits(word2, 21, 5), 0)     # no texel offset in y
+
+    def test_rejects_out_of_range_texture_constant(self):
+        with self.assertRaises(xa.AsmError):
+            xa.assemble("exec\n tfetch r0, r0.xy, tf32\nalloc colors\n"
+                        "exece\n max oC0, r0, r0\n")
+
     def test_rejects_missing_exece(self):
         with self.assertRaises(xa.AsmError):
             xa.assemble("exec\n mul r0, r0, r0\n")

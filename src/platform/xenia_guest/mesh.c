@@ -206,13 +206,13 @@ int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
 
 static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
                 const HelMat4 *model, const HelDrawParams *params,
-                int depth_tested);
+                int depth_tested, int blended);
 
 int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp) {
     if (mesh == 0 || mesh > g_mesh_count) {
         return HEL_ERR_MESH_INVALID;
     }
-    return draw(&g_meshes[mesh - 1u], mvp, 0, 0, 1);
+    return draw(&g_meshes[mesh - 1u], mvp, 0, 0, 1, 0);
 }
 
 int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
@@ -220,7 +220,7 @@ int hel_draw_shaded(HelMesh mesh, const HelMat4 *mvp, const HelMat4 *model,
     if (mesh == 0 || mesh > g_mesh_count || !model || !params) {
         return HEL_ERR_MESH_INVALID;
     }
-    return draw(&g_meshes[mesh - 1u], mvp, model, params, 1);
+    return draw(&g_meshes[mesh - 1u], mvp, model, params, 1, 0);
 }
 
 int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
@@ -236,7 +236,10 @@ int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
        composes over the scene, so it neither tests nor writes depth. Testing
        it against a scene that was already resolved would hide the interface
        behind whatever happened to be in front. */
-    return draw(&slot, transform, transform, params, 0);
+    /* Blended, because an interface is authored with translucency and a
+       panel drawn opaque hides the scene behind it. Batches are submitted in
+       queue order and do not write depth, so they compose in that order. */
+    return draw(&slot, transform, transform, params, 0, 1);
 }
 
 /* One draw path for every shader and both geometry sources. The differences
@@ -245,7 +248,7 @@ int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
    and let the copies drift. */
 static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
                 const HelMat4 *model, const HelDrawParams *params,
-                int depth_tested) {
+                int depth_tested, int blended) {
     if (!slot || !mvp) {
         return HEL_ERR_MESH_INVALID;
     }
@@ -286,7 +289,8 @@ static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
     hel_ring_reg(XE_GPU_REG_RB_DEPTHCONTROL,
                  depth_tested ? ((1u << 1) | (1u << 2) | (1u << 4)) : 0u);
     hel_ring_reg(XE_GPU_REG_RB_COLORCONTROL, 0u);
-    hel_ring_reg(XE_GPU_REG_RB_BLENDCONTROL0, 0x00010001u); /* one/zero */
+    hel_ring_reg(XE_GPU_REG_RB_BLENDCONTROL0,
+                 blended ? XE_BLEND_ALPHA_OVER : XE_BLEND_OPAQUE);
     hel_ring_reg(XE_GPU_REG_RB_COLOR_MASK, 0xFu);
     hel_ring_reg(XE_GPU_REG_RB_MODECONTROL, XE_EDRAM_MODE_COLOR_DEPTH);
 

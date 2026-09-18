@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Minimal Xenos (Xbox 360 GPU) microcode assembler.
 
-Encodes the small subset of the shader ISA the unlit cube needs: exec /
-exece / alloc control flow, vertex fetch (full and mini), and vector ALU
+Encodes the subset of the shader ISA this backend needs: exec / exece / alloc
+control flow, vertex fetch (full and mini), texture fetch, and vector ALU
 operations (add, mul, max, min, mad, dp3, dp4) with register, constant and
-export destinations. Field layouts follow xenia-canary f21ebd49e
+export destinations. A texture fetch defers every filter setting to the fetch
+constant the backend writes, so sampling state lives in one place rather than
+half in the shader and half in the register. Field layouts follow xenia-canary f21ebd49e
 src/xenia/gpu/ucode.h (BSD-licensed emulator source, itself derived from the
 public freedreno instr-a2xx.h and the IPR2015-00325 R400 documents); the
 encoding is verified by the emulator's own disassembly of the loaded shader
@@ -17,6 +19,7 @@ Source format (one statement per line, `#` or `;` starts a comment):
     alloc position | alloc interpolators | alloc colors
     [serialize] vfetch_full DEST, SRC, vfN, stride=S, offset=O, format=F [, rounded]
     [serialize] vfetch_mini DEST, offset=O, format=F
+    [serialize] tfetch DEST, SRC[.swizzle], tfN
     [serialize] OP DEST, SRC1[, SRC2[, SRC3]]      OP in add mul max min mad dp3 dp4
 
     DEST: rN[.mask] | oPos[.mask] | oN[.mask] | oCN[.mask]   (mask from xyzw)
@@ -45,6 +48,8 @@ VERTEX_FORMATS = {
 }
 VECTOR_OPS = {"add": (0, 2), "mul": (1, 2), "max": (2, 2), "min": (3, 2),
               "mad": (11, 3), "dp4": (15, 2), "dp3": (16, 2)}
+FETCH_OP_VERTEX = 0
+FETCH_OP_TEXTURE = 1
 SCALAR_RETAIN_PREV = 50
 EXPORT_POSITION = 62
 COMPONENT_INDEX = {"x": 0, "y": 1, "z": 2, "w": 3}
@@ -140,6 +145,63 @@ def encode_vfetch(dest_reg, dest_swz, src_reg, src_component, fetch_constant,
     d1 = dest_swz | (0 << 12) | (0 << 13) | (0 << 14) | (int(rounded) << 15) | \
         (fmt << 16) | (0 << 24) | (int(mini) << 30)
     d2 = stride | ((offset & 0x7FFFFF) << 8)
+    return [d0 & 0xFFFFFFFF, d1 & 0xFFFFFFFF, d2 & 0xFFFFFFFF]
+
+
+# Texture fetch fields, from xenia-canary src/xenia/gpu/ucode.h
+# TextureFetchInstruction::Data. The three filter fields and the anisotropic
+# one each have a "use the fetch constant's own setting" value, which is what
+# this emits: the sampler state then lives in the fetch constant the backend
+# writes, in one place, rather than half here and half there.
+TEXTURE_FILTER_USE_FETCH_CONST = 3
+ANISO_FILTER_USE_FETCH_CONST = 7
+ARBITRARY_FILTER_USE_FETCH_CONST = 7
+FETCH_DIMENSION_2D = 1
+
+
+def encode_tfetch(dest_reg, dest_swz, src_reg, src_swz, fetch_constant,
+                  dimension=FETCH_DIMENSION_2D):
+    """Encodes one texture fetch. Sampling state comes from the fetch constant."""
+    if not 0 <= fetch_constant < 32:
+        raise AsmError("texture fetch constant out of range")
+    # Word 0: opcode, source register and its three-component swizzle, the
+    # destination register, and which of the 32 texture fetch constants to
+    # sample. fetch_valid_only is set, which is the documented default.
+    d0 = (FETCH_OP_TEXTURE
+          | (src_reg << 5)
+          | (0 << 11)              # src_reg_am: no loop addressing
+          | (dest_reg << 12)
+          | (0 << 18)              # dst_reg_am: no loop addressing
+          | (1 << 19)              # fetch_valid_only
+          | (fetch_constant << 20)
+          | (0 << 25)              # tx_coord_denorm: coordinates are normalized
+          | (src_swz << 26))
+    # Word 1: destination swizzle, then every filter field set to defer to the
+    # fetch constant. use_comp_lod is on, which is the documented default and
+    # what a pixel shader sampling a plain 2D texture wants.
+    d1 = (dest_swz
+          | (TEXTURE_FILTER_USE_FETCH_CONST << 12)   # mag
+          | (TEXTURE_FILTER_USE_FETCH_CONST << 14)   # min
+          | (TEXTURE_FILTER_USE_FETCH_CONST << 16)   # mip
+          | (ANISO_FILTER_USE_FETCH_CONST << 18)
+          | (ARBITRARY_FILTER_USE_FETCH_CONST << 21)
+          | (TEXTURE_FILTER_USE_FETCH_CONST << 24)   # volume mag
+          | (TEXTURE_FILTER_USE_FETCH_CONST << 26)   # volume min
+          | (1 << 28)              # use_comp_lod
+          | (0 << 29)              # use_reg_lod
+          | (0 << 30)              # unknown, zero in shaders seen
+          | (0 << 31))             # not predicated
+    # Word 2: no register gradients, centroid sampling, no level-of-detail
+    # bias, and no texel offsets.
+    d2 = (0
+          | (0 << 1)               # sample_location: centroid
+          | (0 << 2)               # lod_bias
+          | (0 << 9)               # unused
+          | (dimension << 14)
+          | (0 << 16)              # offset_x
+          | (0 << 21)              # offset_y
+          | (0 << 26)              # offset_z
+          | (0 << 31))             # pred_condition
     return [d0 & 0xFFFFFFFF, d1 & 0xFFFFFFFF, d2 & 0xFFFFFFFF]
 
 
@@ -239,6 +301,26 @@ def assemble(source):
                         dest_reg, dest_swz, 0, 0, 0, 0,
                         int(parse_keyword(args, "offset", "0"), 0), fmt, True,
                         False)
+                    blocks[-1]["instrs"].append(("fetch", serialize, code, line))
+                elif head == "tfetch":
+                    dest_reg, dest_swz = parse_fetch_dest(args[0])
+                    src = re.fullmatch(r"r(\d+)(?:\.([xyzw]{1,3}))?", args[1])
+                    if not src:
+                        raise AsmError("tfetch source must be r# or r#.swizzle")
+                    # Three components are always encoded; a 2D fetch reads the
+                    # first two and the third is written anyway, so it is given
+                    # a defined value rather than left to whatever the register
+                    # happens to hold.
+                    swz = (src.group(2) or "xyz")
+                    swz = swz + "xyz"[len(swz):]
+                    src_swz = 0
+                    for i, component in enumerate(swz[:3]):
+                        src_swz |= COMPONENT_INDEX[component] << (2 * i)
+                    tf = re.fullmatch(r"tf(\d+)", args[2])
+                    if not tf:
+                        raise AsmError("texture fetch constant must be tf#")
+                    code = encode_tfetch(dest_reg, dest_swz, int(src.group(1)),
+                                         src_swz, int(tf.group(1)))
                     blocks[-1]["instrs"].append(("fetch", serialize, code, line))
                 elif head in VECTOR_OPS:
                     dest = parse_dest(args[0])

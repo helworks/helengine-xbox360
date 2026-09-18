@@ -17,7 +17,7 @@
  * at the top left and Y increasing downwards.
  *
  * What this draws and what it does not:
- *   Rounded rectangles are triangulated and drawn.
+ *   Rounded rectangles are triangulated and drawn, blended over the scene.
  *   Sprites and text are counted and not drawn, because both are textured and
  *   this backend has no texture path yet.
  */
@@ -100,7 +100,6 @@ private:
     uint32_t texts_ = 0;
     bool reportedFirstDraw_ = false;
     bool reportedNoTexturePath_ = false;
-    bool reportedNoAlphaBlend_ = false;
 };
 
 } // namespace helengine::x360
