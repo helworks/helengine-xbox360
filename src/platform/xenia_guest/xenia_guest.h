@@ -50,6 +50,9 @@ typedef enum {
 int hel_shaders_validate(void);
 void hel_shaders_emit(void);
 void hel_shaders_emit_kind(HelShaderKind kind);
+/* Forgets which program pair the ring carries, so the next draw uploads it
+   again. Called when a frame begins. */
+void hel_shaders_frame_reset(void);
 
 /* Writes the texture fetch constant a sampling draw reads. Valid only between
    hel_frame_begin and hel_frame_present, like everything else that writes the

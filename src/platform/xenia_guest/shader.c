@@ -86,9 +86,29 @@ static void emit_shader(uint32_t shader_type, const uint32_t *dwords,
     }
 }
 
+/* Which program pair the ring last carried this frame. Re-uploading microcode
+   before every draw is what overflowed a 64 KiB ring once an interface with
+   dozens of batches arrived: a single shaded pair is 66 dwords, so fifty
+   draws spend more than twenty thousand dwords saying the same thing. The
+   pair is uploaded when it changes instead.
+
+   Reset at the start of a frame rather than trusted across frames, because
+   the ring is rewritten each frame and what the GPU still holds from the last
+   one is not this code's to assume. */
+static HelShaderKind g_emitted_kind;
+static int g_emitted_valid;
+
+void hel_shaders_frame_reset(void) { g_emitted_valid = 0; }
+
 void hel_shaders_emit(void) { hel_shaders_emit_kind(HEL_SHADER_UNLIT); }
 
 void hel_shaders_emit_kind(HelShaderKind kind) {
+    if (g_emitted_valid && g_emitted_kind == kind) {
+        return;
+    }
+    g_emitted_valid = 1;
+    g_emitted_kind = kind;
+
     const uint32_t *vertex = hel_shader_unlit_vs;
     uint32_t vertex_dwords = HEL_SHADER_UNLIT_VS_DWORDS;
     const uint32_t *pixel = hel_shader_unlit_ps;
@@ -112,6 +132,12 @@ void hel_shaders_emit_kind(HelShaderKind kind) {
         vertex_registers = 5u;
         pixel_registers = 2u;
         interpolators = 1u; /* two, encoded as the count minus one */
+    }
+    static int reported_textured;
+    if (kind == HEL_SHADER_TEXTURED && !reported_textured) {
+        reported_textured = 1;
+        hel_log_u32("HEL shader: emitting the textured pair, vertex dwords",
+                    vertex_dwords);
     }
     emit_shader(0u, vertex, vertex_dwords);
     emit_shader(1u, pixel, pixel_dwords);

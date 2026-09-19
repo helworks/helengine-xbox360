@@ -52,6 +52,7 @@ static uint32_t g_draw_count;
    immediately before the draw and cleared by it, rather than being a mode the
    caller has to remember to turn off. */
 static HelTexture g_pending_texture;
+static int g_reported_ui_draw;
 static HelPhysBlock g_ui_arena;
 static uint32_t g_ui_used;
 static uint32_t g_ui_peak;
@@ -279,6 +280,12 @@ static int draw(const HelMeshSlot *slot, const HelMat4 *mvp,
 
     const HelTexture texture = g_pending_texture;
     g_pending_texture = 0;
+    if (texture != 0 && !g_reported_ui_draw) {
+        g_reported_ui_draw = 1;
+        hel_log_u32("HEL draw: first textured draw, handle", texture);
+        hel_log_u32("HEL draw: first textured draw, vertices",
+                    slot->vertex_count);
+    }
     hel_shaders_emit_kind(texture != 0   ? HEL_SHADER_TEXTURED
                           : shaded       ? HEL_SHADER_SHADED
                                          : HEL_SHADER_UNLIT);

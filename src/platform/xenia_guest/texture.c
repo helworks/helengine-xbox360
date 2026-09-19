@@ -95,6 +95,20 @@ int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
     hel_log_u32("HEL texture: height", height);
     hel_log_u32("HEL texture: row pitch pixels", pitch_pixels);
     hel_log_u32("HEL texture: physical address", slot->block.phys);
+    /* The first and a middle texel, as they now sit in memory, so a texture
+       that samples black can be told apart from one that was uploaded black.
+       Read back through the same pointer that wrote them. */
+    {
+        const volatile uint8_t *first = dst;
+        const volatile uint8_t *middle =
+            dst + ((uintptr_t)(height / 2u) * pitch_pixels + width / 2u) * 4u;
+        hel_log_u32("HEL texture: first texel RGBA",
+                    ((uint32_t)first[0] << 24) | ((uint32_t)first[1] << 16) |
+                        ((uint32_t)first[2] << 8) | (uint32_t)first[3]);
+        hel_log_u32("HEL texture: middle texel RGBA",
+                    ((uint32_t)middle[0] << 24) | ((uint32_t)middle[1] << 16) |
+                        ((uint32_t)middle[2] << 8) | (uint32_t)middle[3]);
+    }
     return HEL_OK;
 }
 

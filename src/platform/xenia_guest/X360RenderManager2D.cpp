@@ -380,6 +380,26 @@ void X360RenderManager2D::DrawSprite(::ISpriteDrawable2D *sprite) {
     fill_vertex(&vertices[2], right, bottom, tint, u1, v1);
     fill_vertex(&vertices[3], left, bottom, tint, u0, v1);
     static const uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
+    if (spritesDrawn_ == 0) {
+        hel_log_u32("HEL render2d: first sprite, texture handle",
+                    texture->handle);
+        hel_log_u32("HEL render2d: first sprite, width", (uint32_t)size.X);
+        /* The pixel shader multiplies the sampled texel by this. A black tint
+           produces a black sprite however well the sampling works, so it is
+           worth seeing before blaming the fetch. */
+        const ::byte4 tintColour = sprite->get_Color();
+        hel_log_u32("HEL render2d: first sprite, tint RGBA",
+                    ((uint32_t)tintColour.X << 24) |
+                        ((uint32_t)tintColour.Y << 16) |
+                        ((uint32_t)tintColour.Z << 8) |
+                        (uint32_t)tintColour.W);
+        hel_log_u32("HEL render2d: first sprite, u0 and v0 thousandths",
+                    ((uint32_t)(u0 * 1000.0f) << 16) |
+                        (uint32_t)(v0 * 1000.0f));
+        hel_log_u32("HEL render2d: first sprite, u1 and v1 thousandths",
+                    ((uint32_t)(u1 * 1000.0f) << 16) |
+                        (uint32_t)(v1 * 1000.0f));
+    }
     submit(vertices, 4, indices, 6, texture->handle);
     spritesDrawn_++;
 }

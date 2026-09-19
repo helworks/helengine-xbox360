@@ -275,6 +275,7 @@ int hel_frame_begin(float r, float g_, float b, float a) {
        this function is only reached after hel_frame_present blocked on
        that frame's fence, so the whole arena is free again. */
     hel_ui_frame_reset();
+    hel_shaders_frame_reset();
     g.clear_color = pack_8888(r, g_, b, a);
     emit_frame_state();
     emit_resolve(XE_COPY_COLOR_CLEAR_ENABLE | XE_COPY_DEPTH_CLEAR_ENABLE);
