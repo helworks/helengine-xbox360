@@ -18,9 +18,8 @@
  *
  * What this draws and what it does not:
  *   Rounded rectangles are triangulated and drawn, blended over the scene.
- *   Sprites are drawn when their texture was in a format this backend
- *   converts; text is still counted and not drawn, because it additionally
- *   needs a glyph atlas.
+ *   Sprites and text are drawn when their textures were in a format this
+ *   backend converts. Text uses the glyph atlas already cooked into FontAsset.
  */
 #pragma once
 
@@ -94,8 +93,18 @@ public:
     uint32_t shapesSkipped() const { return shapesSkipped_; }
     uint32_t spriteRequests() const { return sprites_; }
     uint32_t textRequests() const { return texts_; }
+    uint32_t textRunsSubmitted() const { return textRunsSubmitted_; }
+    uint32_t textRunsSkipped() const { return textRunsSkipped_; }
+    uint32_t textGlyphsSubmitted() const { return textGlyphsSubmitted_; }
 
 private:
+    static constexpr uint32_t kTextBatchGlyphLimit = 32;
+    static constexpr uint32_t kTextBatchMaxPasses = 6;
+    static constexpr uint32_t kTextBatchVertexCapacity =
+        kTextBatchGlyphLimit * kTextBatchMaxPasses * 4;
+    static constexpr uint32_t kTextBatchIndexCapacity =
+        kTextBatchGlyphLimit * kTextBatchMaxPasses * 6;
+
     /// <summary>Builds the engine's texture object, uploading pixels when it can.</summary>
     /// <param name="width">Texture width in pixels.</param>
     /// <param name="height">Texture height in pixels.</param>
@@ -109,9 +118,13 @@ private:
 
     /// <summary>Submits one batch of pixel-space geometry for the current viewport.</summary>
     /// <param name="texture">Backend texture to sample, or zero for none.</param>
-    void submit(const HelVertex *vertices, uint32_t vertexCount,
+    /// <returns>True when the batch reached the ring.</returns>
+    bool submit(const HelVertex *vertices, uint32_t vertexCount,
                 const uint16_t *indices, uint32_t indexCount,
                 HelTexture texture = 0);
+
+    /// <summary>Submits pending consecutive text runs before painter order changes.</summary>
+    bool flushTextBatch();
 
     /* The viewport being drawn into, in pixels. Set once per camera so the
        drawables visited under it convert to clip space against the right
@@ -128,8 +141,20 @@ private:
     uint32_t sprites_ = 0;
     uint32_t spritesDrawn_ = 0;
     uint32_t texts_ = 0;
+    uint32_t textRunsSubmitted_ = 0;
+    uint32_t textRunsSkipped_ = 0;
+    uint32_t textGlyphsSubmitted_ = 0;
+    uint32_t textBatchGlyphs_ = 0;
+    uint32_t textBatchRuns_ = 0;
+    uint32_t textBatchVertexCount_ = 0;
+    uint32_t textBatchIndexCount_ = 0;
+    HelTexture textBatchTexture_ = 0;
+    HelVertex textVertices_[kTextBatchVertexCapacity] = {};
+    uint16_t textIndices_[kTextBatchIndexCapacity] = {};
     bool reportedFirstDraw_ = false;
     bool reportedNoTexturePath_ = false;
+    bool reportedMissingTextFont_ = false;
+    bool reportedOrder_ = false;
 };
 
 } // namespace helengine::x360

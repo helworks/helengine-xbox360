@@ -228,10 +228,18 @@ extern "C" void hel_core_shutdown(void) {
                 g_render2d ? g_render2d->shapesDrawn() : 0u);
     hel_log_u32("HEL core: 2D shapes skipped",
                 g_render2d ? g_render2d->shapesSkipped() : 0u);
-    hel_log_u32("HEL core: 2D sprites not drawn",
+    hel_log_u32("HEL core: 2D sprite requests",
                 g_render2d ? g_render2d->spriteRequests() : 0u);
-    hel_log_u32("HEL core: 2D text runs not drawn",
+    hel_log_u32("HEL core: 2D sprites submitted",
+                g_render2d ? g_render2d->spritesDrawn() : 0u);
+    hel_log_u32("HEL core: 2D text runs requested",
                 g_render2d ? g_render2d->textRequests() : 0u);
+    hel_log_u32("HEL core: 2D text runs submitted",
+                g_render2d ? g_render2d->textRunsSubmitted() : 0u);
+    hel_log_u32("HEL core: 2D text runs skipped",
+                g_render2d ? g_render2d->textRunsSkipped() : 0u);
+    hel_log_u32("HEL core: 2D text glyphs submitted",
+                g_render2d ? g_render2d->textGlyphsSubmitted() : 0u);
     g_core->Dispose();
     g_core = nullptr;
     hel_log("HEL core: disposed");

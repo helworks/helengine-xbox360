@@ -50,7 +50,7 @@
 #define XE_TEX_CLAMP_TO_EDGE 2u
 
 /* TextureFormat; only the one this backend uploads. */
-#define XE_TEX_FORMAT_8_8_8_8 0u
+#define XE_TEX_FORMAT_8_8_8_8 6u
 
 /* Endian. Texel bytes need no swap: each channel is one byte, and the format
    is loaded as a straight byte copy. */

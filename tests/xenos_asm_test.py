@@ -3,6 +3,8 @@
 xenia-canary f21ebd49e src/xenia/gpu/ucode.h."""
 
 import os
+import pathlib
+import re
 import sys
 import unittest
 
@@ -60,6 +62,69 @@ class AluEncoding(unittest.TestCase):
 
 
 class FetchEncoding(unittest.TestCase):
+    def test_uploaded_rgba8888_texture_uses_xenos_format_six(self):
+        header = pathlib.Path(__file__).resolve().parents[1] / (
+            "src/platform/xenia_guest/xenos_regs.h"
+        )
+        contents = header.read_text(encoding="utf-8")
+        match = re.search(
+            r"^#define XE_TEX_FORMAT_8_8_8_8 (\d+)u$",
+            contents,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "RGBA8888 texture format constant is missing")
+        self.assertEqual(int(match.group(1)), 6)
+
+    def test_long_text_batch_counts_each_glyph_before_chunk_flush(self):
+        source = pathlib.Path(__file__).resolve().parents[1] / (
+            "src/platform/xenia_guest/X360RenderManager2D.cpp"
+        )
+        contents = source.read_text(encoding="utf-8")
+        draw_text = contents.split(
+            "void X360RenderManager2D::DrawText(", 1
+        )[1].split("::RuntimeTexture *X360RenderManager2D::buildTexture(", 1)[0]
+        self.assertRegex(
+            draw_text,
+            r"\+\+batchGlyphs;\s*\+\+textBatchGlyphs_;",
+            "every glyph, including glyphs in long text runs, must be counted "
+            "before the chunk flush",
+        )
+
+    def test_frame_ring_budget_stays_below_full_wrap_distance(self):
+        source = pathlib.Path(__file__).resolve().parents[1] / (
+            "src/platform/xenia_guest/video.c"
+        )
+        contents = source.read_text(encoding="utf-8")
+        match = re.search(
+            r"^#define HEL_MAX_FRAME_DWORDS \(([^\r\n]+)\)$",
+            contents,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "frame ring budget definition is missing")
+        self.assertEqual(
+            match.group(1),
+            "HEL_RING_DWORDS / 2u",
+            "keep a half-ring per-frame bound so wrapping cannot advance the "
+            "write pointer a full ring back to the same fence position",
+        )
+
+    def test_text_batches_use_32_glyphs_to_reduce_ring_draw_overhead(self):
+        source = pathlib.Path(__file__).resolve().parents[1] / (
+            "src/platform/xenia_guest/X360RenderManager2D.hpp"
+        )
+        contents = source.read_text(encoding="utf-8")
+        match = re.search(
+            r"kTextBatchGlyphLimit = (\d+);",
+            contents,
+        )
+        self.assertIsNotNone(match, "text batch glyph limit is missing")
+        self.assertEqual(
+            int(match.group(1)),
+            32,
+            "32-glyph chunks reduce per-draw command-ring overhead while "
+            "remaining inside the existing fenced-frame budget",
+        )
+
     def test_full_fetch(self):
         reg, swz = xa.parse_fetch_dest("r1.xyz1")
         d0, d1, d2 = xa.encode_vfetch(reg, swz, 0, 0, 0, 7, 0, 57, False, False)

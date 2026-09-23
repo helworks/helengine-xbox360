@@ -3,6 +3,9 @@
 #include "AssetSerializer.hpp"
 #include "Core.hpp"
 #include "Entity.hpp"
+#include "FontAsset.hpp"
+#include "FontChar.hpp"
+#include "FontInfo.hpp"
 #include "ICamera.hpp"
 #include "IContentStreamSource.hpp"
 #include "IDrawable2D.hpp"
@@ -10,6 +13,12 @@
 #include "IRoundedRectDrawable2D.hpp"
 #include "ISpriteDrawable2D.hpp"
 #include "ITextDrawable2D.hpp"
+#include "TextLayoutUtils.hpp"
+#include "TextLineOffsets2D.hpp"
+#include "TextRenderEffectPass.hpp"
+#include "TextRenderEffectPassBuilder.hpp"
+#include "TextAlignment.hpp"
+#include "system/math.hpp"
 #include "ObjectManager.hpp"
 #include "RoundedRectCorners.hpp"
 #include "TextureAsset.hpp"
@@ -158,6 +167,7 @@ void X360RenderManager2D::beginFrame() {
 }
 
 void X360RenderManager2D::renderCamera(::ICamera *camera) {
+    flushTextBatch();
     if (camera == nullptr) {
         return;
     }
@@ -178,9 +188,11 @@ void X360RenderManager2D::renderCamera(::ICamera *camera) {
         return;
     }
     queue->VisitOrdered(this);
+    flushTextBatch();
 }
 
 void X360RenderManager2D::endFrame() {
+    flushTextBatch();
     if (reportedFirstDraw_) {
         return;
     }
@@ -190,7 +202,13 @@ void X360RenderManager2D::endFrame() {
     hel_log_u32("HEL render2d: first draw, sprites drawn", spritesDrawn_);
     hel_log_u32("HEL render2d: first draw, sprites requested", sprites_);
     hel_log_u32("HEL render2d: textures uploaded", texturesUploaded_);
-    hel_log_u32("HEL render2d: first draw, text runs not drawn", texts_);
+    hel_log_u32("HEL render2d: first draw, text runs requested", texts_);
+    hel_log_u32("HEL render2d: first draw, text runs submitted",
+                textRunsSubmitted_);
+    hel_log_u32("HEL render2d: first draw, text runs skipped",
+                textRunsSkipped_);
+    hel_log_u32("HEL render2d: first draw, text glyphs submitted",
+                textGlyphsSubmitted_);
     hel_log_u32("HEL render2d: interface arena peak bytes", hel_ui_peak_bytes());
 }
 
@@ -204,7 +222,7 @@ void X360RenderManager2D::Visit(::IDrawable2D *drawable) {
     drawable->Draw();
 }
 
-void X360RenderManager2D::submit(const HelVertex *vertices,
+bool X360RenderManager2D::submit(const HelVertex *vertices,
                                  uint32_t vertexCount, const uint16_t *indices,
                                  uint32_t indexCount, HelTexture texture) {
     /* Pixels to clip space for the viewport being drawn: X left to right, Y
@@ -234,12 +252,36 @@ void X360RenderManager2D::submit(const HelVertex *vertices,
                              &transform, &params, texture);
     if (error != HEL_OK) {
         shapesSkipped_++;
-        return;
+        return false;
     }
     shapesDrawn_++;
+    return true;
+}
+
+bool X360RenderManager2D::flushTextBatch() {
+    if (textBatchGlyphs_ == 0) {
+        return true;
+    }
+
+    const bool accepted = submit(textVertices_, textBatchVertexCount_,
+                                 textIndices_, textBatchIndexCount_,
+                                 textBatchTexture_);
+    if (accepted) {
+        textRunsSubmitted_ += textBatchRuns_;
+        textGlyphsSubmitted_ += textBatchGlyphs_;
+    } else {
+        textRunsSkipped_ += textBatchRuns_;
+    }
+    textBatchGlyphs_ = 0;
+    textBatchRuns_ = 0;
+    textBatchVertexCount_ = 0;
+    textBatchIndexCount_ = 0;
+    textBatchTexture_ = 0;
+    return accepted;
 }
 
 void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
+    flushTextBatch();
     if (shape == nullptr || shape->get_Parent() == nullptr) {
         shapesSkipped_++;
         return;
@@ -331,6 +373,7 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
 
 void X360RenderManager2D::DrawSprite(::ISpriteDrawable2D *sprite) {
     sprites_++;
+    flushTextBatch();
     if (sprite == nullptr || sprite->get_Parent() == nullptr) {
         shapesSkipped_++;
         return;
@@ -405,12 +448,205 @@ void X360RenderManager2D::DrawSprite(::ISpriteDrawable2D *sprite) {
 }
 
 void X360RenderManager2D::DrawText(::ITextDrawable2D *text) {
-    (void)text;
-    if (!reportedNoTexturePath_) {
-        reportedNoTexturePath_ = true;
-        hel_log("HEL render2d: sprites and text need textures, none drawn");
-    }
     texts_++;
+    if (text == nullptr || text->get_Parent() == nullptr) {
+        textRunsSkipped_++;
+        shapesSkipped_++;
+        return;
+    }
+
+    ::FontAsset *font = text->get_Font();
+    const X360RuntimeTexture *texture =
+        font == nullptr
+            ? nullptr
+            : dynamic_cast<const X360RuntimeTexture *>(font->get_Texture());
+    if (font == nullptr || font->get_FontInfo() == nullptr ||
+        font->get_Characters() == nullptr || font->get_AtlasWidth() <= 0 ||
+        font->get_AtlasHeight() <= 0 || texture == nullptr ||
+        texture->handle == 0) {
+        textRunsSkipped_++;
+        shapesSkipped_++;
+        if (!reportedMissingTextFont_) {
+            reportedMissingTextFont_ = true;
+            hel_log("HEL render2d: text font atlas unavailable; text skipped");
+        }
+        return;
+    }
+
+    const double fontScale =
+        ::Math::Max(static_cast<double>(text->get_FontScale()), 0.0001);
+    HeCppString content = text->get_Text();
+    if (text->get_WrapText()) {
+        const int32_t wrapWidth = static_cast<int32_t>(::Math::Max(
+            1, static_cast<int32_t>(::Math::Round(
+                   text->get_Size().X / fontScale))));
+        content = ::TextLayoutUtils::WrapText(content, font, wrapWidth);
+    }
+    if (content.empty()) {
+        textRunsSkipped_++;
+        return;
+    }
+
+    uint32_t visibleGlyphs = 0;
+    for (size_t index = 0; index < content.size(); ++index) {
+        const char character = content[index];
+        if (character == '\r' || character == '\n' || character == ' ') {
+            continue;
+        }
+        ::FontChar glyph;
+        if (font->get_Characters()->TryGetValue(character, glyph)) {
+            ++visibleGlyphs;
+        }
+    }
+    if (visibleGlyphs == 0) {
+        textRunsSkipped_++;
+        return;
+    }
+
+    const bool canShareBatch = visibleGlyphs <= kTextBatchGlyphLimit;
+    if (canShareBatch) {
+        if (textBatchGlyphs_ != 0 &&
+            (textBatchTexture_ != texture->handle ||
+             textBatchGlyphs_ + visibleGlyphs > kTextBatchGlyphLimit)) {
+            flushTextBatch();
+        }
+        if (textBatchGlyphs_ == 0) {
+            textBatchTexture_ = texture->handle;
+        }
+    } else {
+        flushTextBatch();
+        textBatchTexture_ = texture->handle;
+    }
+
+    ::Array<double> *lineOffsets = ::TextLineOffsets2D::Build(
+        text, font, content, fontScale, font->get_AtlasWidth());
+    ::List<::TextRenderEffectPass *> *effectPasses =
+        ::TextRenderEffectPassBuilder::Build(text);
+    if (lineOffsets == nullptr || effectPasses == nullptr ||
+        effectPasses->get_Count() <= 0 ||
+        static_cast<uint32_t>(effectPasses->get_Count()) >
+            kTextBatchMaxPasses) {
+        delete effectPasses;
+        delete lineOffsets;
+        textRunsSkipped_++;
+        shapesSkipped_++;
+        return;
+    }
+    if (canShareBatch) {
+        textBatchRuns_++;
+    }
+
+    const ::float3 ownerPosition = text->get_Parent()->get_Position();
+    const double baseX = ::Math::Round(ownerPosition.X);
+    const double baseY = ::Math::Round(ownerPosition.Y);
+    const double lineHeight = ::Math::Max(
+        static_cast<double>(font->get_LineHeight()) * fontScale, 1.0);
+    double offsetX = 0.0;
+    double offsetY = 0.0;
+    int32_t lineIndex = 0;
+    double lineOriginX = baseX + ::TextLineOffsets2D::Resolve(
+                                      lineOffsets, lineIndex);
+    uint32_t batchGlyphs = 0;
+    bool runAccepted = false;
+
+    for (size_t characterIndex = 0; characterIndex < content.size();
+         ++characterIndex) {
+        const char character = content[characterIndex];
+        if (character == '\r') {
+            continue;
+        }
+        if (character == '\n') {
+            offsetY += lineHeight;
+            offsetX = 0.0;
+            ++lineIndex;
+            lineOriginX = baseX +
+                ::TextLineOffsets2D::Resolve(lineOffsets, lineIndex);
+            continue;
+        }
+        if (character == ' ') {
+            offsetX += font->get_FontInfo()->get_SpaceWidth() * fontScale;
+            continue;
+        }
+
+        ::FontChar glyph;
+        if (!font->get_Characters()->TryGetValue(character, glyph)) {
+            continue;
+        }
+
+        const double glyphWidth = glyph.SourceRect.Z *
+                                  font->get_AtlasWidth() * fontScale;
+        const double glyphHeight = glyph.SourceRect.W *
+                                   font->get_AtlasHeight() * fontScale;
+        const double snappedLineOffsetY = ::Math::Round(offsetY);
+        for (int32_t passIndex = 0;
+             passIndex < effectPasses->get_Count(); ++passIndex) {
+            ::TextRenderEffectPass *pass =
+                effectPasses->get_Item(passIndex);
+            const uint32_t firstVertex = textBatchVertexCount_;
+            const float left = static_cast<float>(
+                lineOriginX + offsetX + pass->get_Offset().X);
+            const float top = static_cast<float>(
+                baseY + snappedLineOffsetY + glyph.OffsetY * fontScale +
+                pass->get_Offset().Y);
+            const float right = left + static_cast<float>(glyphWidth);
+            const float bottom = top + static_cast<float>(glyphHeight);
+            float tint[4];
+            colour_from_byte4(pass->get_Color(), tint);
+            fill_vertex(&textVertices_[textBatchVertexCount_++], left, top, tint,
+                        glyph.SourceRect.X, glyph.SourceRect.Y);
+            fill_vertex(&textVertices_[textBatchVertexCount_++], right, top, tint,
+                        glyph.SourceRect.X + glyph.SourceRect.Z,
+                        glyph.SourceRect.Y);
+            fill_vertex(&textVertices_[textBatchVertexCount_++], right, bottom, tint,
+                        glyph.SourceRect.X + glyph.SourceRect.Z,
+                        glyph.SourceRect.Y + glyph.SourceRect.W);
+            fill_vertex(&textVertices_[textBatchVertexCount_++], left, bottom, tint,
+                        glyph.SourceRect.X,
+                        glyph.SourceRect.Y + glyph.SourceRect.W);
+            textIndices_[textBatchIndexCount_++] = static_cast<uint16_t>(firstVertex);
+            textIndices_[textBatchIndexCount_++] =
+                static_cast<uint16_t>(firstVertex + 1);
+            textIndices_[textBatchIndexCount_++] =
+                static_cast<uint16_t>(firstVertex + 2);
+            textIndices_[textBatchIndexCount_++] = static_cast<uint16_t>(firstVertex);
+            textIndices_[textBatchIndexCount_++] =
+                static_cast<uint16_t>(firstVertex + 2);
+            textIndices_[textBatchIndexCount_++] =
+                static_cast<uint16_t>(firstVertex + 3);
+        }
+        ++batchGlyphs;
+        ++textBatchGlyphs_;
+        if (canShareBatch) {
+            if (textBatchGlyphs_ == kTextBatchGlyphLimit) {
+                flushTextBatch();
+            }
+        } else if (batchGlyphs == kTextBatchGlyphLimit) {
+            const bool accepted = flushTextBatch();
+            runAccepted = runAccepted || accepted;
+            batchGlyphs = 0;
+            textBatchTexture_ = texture->handle;
+        }
+        offsetX += glyph.AdvanceWidth > 0.0f
+                       ? glyph.AdvanceWidth * fontScale
+                       : glyphWidth;
+    }
+    if (canShareBatch) {
+        if (textBatchGlyphs_ == kTextBatchGlyphLimit) {
+            flushTextBatch();
+        }
+    } else {
+        if (batchGlyphs > 0) {
+            const bool accepted = flushTextBatch();
+            runAccepted = runAccepted || accepted;
+        }
+        if (runAccepted) {
+            textRunsSubmitted_++;
+        } else {
+            textRunsSkipped_++;
+        }
+    }
+    delete effectPasses;
+    delete lineOffsets;
 }
 
 ::RuntimeTexture *X360RenderManager2D::buildTexture(int32_t width,

@@ -48,9 +48,12 @@ one textured quad for each glyph and effect pass. UVs come directly from
 `FontChar.SourceRect`; destination bounds use the reference layout equations.
 
 Glyph quads will be submitted through the existing textured UI batch function
-in chunks of at most 16 visible glyphs. Each glyph can emit at most six quads
-(shadow, four outline sides, and fill), so a full chunk contains at most 384
-vertices and 576 indices, within the backend limits of 4096 vertices and
+in chunks of at most 32 visible glyphs. Consecutive text drawables using the
+same atlas may share a chunk; the renderer flushes before a non-text drawable
+or viewport change, preserving the camera queue's painter order. Each glyph
+can emit at most six quads
+(shadow, four outline sides, and fill), so a full chunk contains at most 768
+vertices and 1152 indices, within the backend limits of 4096 vertices and
 65535 indices. The renderer will reuse bounded scratch storage between
 submissions. It will not reorder glyphs, effects, or text drawables; the
 camera's existing ordered queue remains authoritative.
@@ -68,17 +71,19 @@ line breaks, wrapping, alignment, tint, shadow, and outline use the same
 semantics as the engine reference renderer. Rotation remains unused, as in the
 current engine reference path.
 
-The frame arena and command ring remain finite. Chunking bounds temporary
-geometry and individual submissions; if a complete frame exceeds the existing
-arena or ring budget, the backend's current failure reporting applies. This
-work does not add dynamic arena growth or a separate text-specific ring.
+The frame arena and command ring remain finite. Text batches are sized to keep
+the authored HUD within the existing half-ring frame budget while reducing
+per-draw command overhead. Chunking bounds temporary geometry and individual
+submissions; if a complete frame exceeds the existing arena or ring budget,
+the backend's current failure reporting applies. This work does not add
+dynamic arena growth or a separate text-specific ring.
 
 ## Verification
 
 Build the authored-scene XEX against the matching generated core, content
-archive, and scene catalog, then run it in the pinned Xenia build with a
-capture. Confirm that text requests produce submitted glyphs, the scene's
-labels are visible, frame presentation continues, and no text batch reports an
-arena or ring failure. The capture should also show that text stays in front
-of its intended panel background. Do not use the generic generated core or
-probe catalog for this run; those inputs do not describe the authored scene.
+archive, and scene catalog, then run it in the pinned Xenia build. Do not
+capture or automate the emulator UI. Confirm from the log that text runs and
+glyphs are submitted, presentation continues beyond the first frames, and no
+text batch reports an arena or ring failure; verify the visible result
+manually. Do not use the generic generated core or probe catalog for this run;
+those inputs do not describe the authored scene.
