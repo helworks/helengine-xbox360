@@ -2,7 +2,7 @@
  * Texture storage for the Xenia guest backend.
  *
  * A texture is uploaded once into a backend-owned physical allocation that
- * lives until shutdown, and described to the hardware by a texture fetch
+ * lives until its owner retires it and the GPU fence completes, and is described by a texture fetch
  * constant written into the ring before a draw that samples it.
  *
  * Two hardware requirements shape the copy, and both are silent if broken:
@@ -41,12 +41,20 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t pitch_pixels;
+    /* Retired allocations remain readable until the submitted frame completes. */
+    uint32_t retired;
 } HelTextureSlot;
 
 static HelTextureSlot g_textures[HEL_MAX_TEXTURES];
 static uint32_t g_texture_count;
 
-uint32_t hel_texture_count(void) { return g_texture_count; }
+uint32_t hel_texture_count(void) {
+    uint32_t live = 0;
+    for (uint32_t index = 0; index < g_texture_count; ++index) {
+        if (g_textures[index].block.virt && !g_textures[index].retired) ++live;
+    }
+    return live;
+}
 
 int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
                        HelTexture *out_texture) {
@@ -55,11 +63,13 @@ int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
         height > HEL_TEXTURE_MAX_DIMENSION) {
         return HEL_ERR_MESH_INVALID;
     }
-    if (g_texture_count >= HEL_MAX_TEXTURES) {
+    uint32_t slot_index = 0;
+    while (slot_index < g_texture_count && g_textures[slot_index].block.virt) ++slot_index;
+    if (slot_index >= HEL_MAX_TEXTURES) {
         return HEL_ERR_MESH_LIMIT;
     }
 
-    HelTextureSlot *slot = &g_textures[g_texture_count];
+    HelTextureSlot *slot = &g_textures[slot_index];
     const uint32_t pitch_pixels =
         (width + HEL_TEXTURE_ROW_PIXELS - 1u) & ~(HEL_TEXTURE_ROW_PIXELS - 1u);
     const uint32_t bytes = pitch_pixels * height * 4u;
@@ -88,8 +98,9 @@ int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
     slot->width = width;
     slot->height = height;
     slot->pitch_pixels = pitch_pixels;
-    g_texture_count++;
-    *out_texture = g_texture_count; /* handles start at 1 */
+    slot->retired = 0;
+    if (slot_index == g_texture_count) ++g_texture_count;
+    *out_texture = slot_index + 1u; /* handles start at 1; fenced slots can be reused */
     hel_log_u32("HEL texture: created handle", *out_texture);
     hel_log_u32("HEL texture: width", width);
     hel_log_u32("HEL texture: height", height);
@@ -117,6 +128,7 @@ void hel_texture_bind(HelTexture texture) {
         return;
     }
     const HelTextureSlot *slot = &g_textures[texture - 1u];
+    if (!slot->block.virt || slot->retired) return;
 
     /* Sizes are stored with one subtracted from each component, and the base
        address is shifted right by twelve, which is why a page-aligned
@@ -152,9 +164,29 @@ void hel_texture_bind(HelTexture texture) {
     }
 }
 
+void hel_texture_release(HelTexture texture) {
+    if (texture == 0 || texture > g_texture_count) return;
+    HelTextureSlot *slot = &g_textures[texture - 1u];
+    if (!slot->block.virt || slot->retired) return;
+    slot->retired = 1;
+    hel_log_u32("HEL texture: retired handle", texture);
+}
+
+void hel_texture_collect_retired(void) {
+    for (uint32_t i = 0; i < g_texture_count; ++i) {
+        if (!g_textures[i].block.virt || !g_textures[i].retired) continue;
+        hel_phys_free(&g_textures[i].block);
+        g_textures[i].retired = 0;
+        g_textures[i].width = g_textures[i].height = g_textures[i].pitch_pixels = 0;
+        hel_log_u32("HEL texture: fenced release handle", i + 1u);
+    }
+}
+
 void hel_texture_release_all(void) {
     for (uint32_t i = 0; i < g_texture_count; ++i) {
-        hel_phys_free(&g_textures[i].block);
+        if (g_textures[i].block.virt) hel_phys_free(&g_textures[i].block);
+        g_textures[i].retired = 0;
+        g_textures[i].width = g_textures[i].height = g_textures[i].pitch_pixels = 0;
     }
     g_texture_count = 0;
 }

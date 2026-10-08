@@ -1,0 +1,952 @@
+"""Focused tests for the deliberately bounded SPIR-V to Xenos compiler."""
+
+import json
+import os
+import pathlib
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools" / "shader-probe"))
+sys.path.insert(0, str(ROOT / "tools"))
+
+import shader_probe  # noqa: E402
+import xenos_asm  # noqa: E402
+from backend_layout import reflect_layout  # noqa: E402
+from spirv_parser import SpirvError, parse_spirv  # noqa: E402
+from lower_xenos import LoweringError, Vector, _Lowerer, lower_spirv  # noqa: E402
+
+
+SHADERC = pathlib.Path(
+    r"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows"
+    r"\runtimes\win-x64\native\shaderc_shared.dll"
+)
+FIXTURES = ROOT / "tests" / "shaders" / "fixtures"
+
+
+def compile_fixture(name, stage):
+    library, _path = shader_probe.load_shaderc(SHADERC)
+    return shader_probe.compile_hlsl(library, FIXTURES / name, stage, "main")
+
+
+def _field(word, shift, width):
+    return (word >> shift) & ((1 << width) - 1)
+
+
+def _f32(value):
+    return struct.unpack("<f", struct.pack("<f", float(value)))[0]
+
+
+def _add_volatile_to_first_load(binary):
+    words = list(struct.unpack("<%dI" % (len(binary) // 4), binary))
+    cursor = 5
+    while cursor < len(words):
+        count, opcode = words[cursor] >> 16, words[cursor] & 0xFFFF
+        if opcode == 61:
+            words[cursor] = ((count + 1) << 16) | opcode
+            words.insert(cursor + count, 1)  # Volatile memory-access bit
+            return struct.pack("<%dI" % len(words), *words)
+        cursor += count
+    raise AssertionError("fixture has no OpLoad")
+
+
+def _remove_location_literal(binary):
+    words = list(struct.unpack("<%dI" % (len(binary) // 4), binary))
+    cursor = 5
+    while cursor < len(words):
+        count, opcode = words[cursor] >> 16, words[cursor] & 0xFFFF
+        if opcode == 71 and count >= 4 and words[cursor + 2] == 30:
+            words[cursor] = ((count - 1) << 16) | opcode
+            del words[cursor + count - 1]
+            return struct.pack("<%dI" % len(words), *words)
+        cursor += count
+    raise AssertionError("fixture has no Location OpDecorate")
+
+
+def execute_xenos(binary, constants, vertex_buffers=None, input_registers=None,
+                  pixel=False, textures=None):
+    """Narrow algebraic executor with ordinary finite float32 rounding.
+
+    Decodes control flow, fetch destinations, ALU selectors/swizzles, masks,
+    and export fields from the binary. It intentionally knows no lowerer IR.
+    MAD rounds the product before addition, following the current Xenia
+    translator reference; this is not a bit-exact hardware precision model.
+    """
+    words = struct.unpack(">%dI" % (len(binary) // 4), binary)
+    cf = []
+    cursor = 0
+    while cursor + 2 < len(words):
+        a0 = words[cursor]
+        a1 = words[cursor + 1] & 0xFFFF
+        b0 = (words[cursor + 1] >> 16) | ((words[cursor + 2] & 0xFFFF) << 16)
+        b1 = words[cursor + 2] >> 16
+        pair = [(a0, a1), (b0, b1)]
+        cf.extend(pair)
+        cursor += 3
+        if any(_field(w1, 12, 4) == 2 for _w0, w1 in pair):
+            break
+    else:
+        raise AssertionError("binary has no exece control-flow instruction")
+
+    cf_dwords = cursor
+    pair_count = cursor // 3
+    registers = {i: [0.0] * 4 for i in range(64)}
+    for index, value in (input_registers or {}).items():
+        registers[int(index)] = list(map(_f32, value))
+    exports = {}
+    vertex_buffers = vertex_buffers or {}
+    textures = textures or {}
+
+    def source(register_selector, register_index, swizzle, negate):
+        source_vec = (registers[register_index] if register_selector
+                      else list(map(_f32, constants[register_index])))
+        result = []
+        for lane in range(4):
+            delta = _field(swizzle, lane * 2, 2)
+            component = (lane + delta) & 3
+            value = source_vec[component]
+            result.append(-value if negate else value)
+        return result
+
+    for w0, w1 in cf:
+        opcode = _field(w1, 12, 4)
+        if opcode not in (1, 2):
+            continue
+        address, count = _field(w0, 0, 12), _field(w0, 12, 3)
+        sequence = _field(w0, 16, 12)
+        for slot in range(count):
+            offset = cf_dwords + (address - pair_count + slot) * 3
+            d0, d1, d2 = words[offset:offset + 3]
+            if _field(sequence, slot * 2, 1):
+                if _field(d0, 0, 5) == 1:
+                    dest = _field(d0, 12, 6)
+                    fetch_constant = _field(d0, 20, 5)
+                    src_reg = _field(d0, 5, 6)
+                    coords = [registers[src_reg][_field(d0, 26 + lane * 2, 2)]
+                              for lane in range(3)]
+                    image = textures.get(fetch_constant)
+                    if image is None or not image or not image[0]:
+                        raise AssertionError(
+                            f"test executor has no texture at fetch constant tf{fetch_constant}"
+                        )
+                    height, width = len(image), len(image[0])
+                    # Deliberately simple point/clamp/no-mip oracle. This is
+                    # only for normalized-coordinate and channel routing.
+                    x = min(width - 1, max(0, int(coords[0] * width)))
+                    y = min(height - 1, max(0, int(coords[1] * height)))
+                    sample = list(map(_f32, image[y][x]))
+                    swizzle = _field(d1, 0, 12)
+                    result = []
+                    for lane in range(4):
+                        component = _field(swizzle, lane * 3, 3)
+                        if component < 4:
+                            result.append(sample[component])
+                        elif component == 4:
+                            result.append(0.0)
+                        elif component == 5:
+                            result.append(1.0)
+                        else:
+                            raise AssertionError(
+                                "texture fetch uses an undefined destination lane"
+                            )
+                    registers[dest] = result
+                    continue
+                dest = _field(d0, 12, 6)
+                fetch_constant = _field(d0, 20, 5) * 3 + _field(d0, 25, 2)
+                src_reg = _field(d0, 5, 6)
+                src_component = _field(d0, 30, 2)
+                stride = _field(d2, 0, 8)
+                encoded_offset = _field(d2, 8, 23)
+                offset = encoded_offset - (1 << 23) if encoded_offset & (1 << 22) else encoded_offset
+                vertex_index = int(registers[src_reg][src_component])
+                vertex = vertex_buffers.get(fetch_constant)
+                if vertex is None:
+                    raise AssertionError(f"test executor has no vertex buffer vf{fetch_constant}")
+                format_code = _field(d1, 16, 6)
+                widths = {37: 2, 57: 3, 38: 4}
+                if format_code not in widths:
+                    raise AssertionError(f"test executor has unknown vertex format {format_code}")
+                start = vertex_index * stride + offset
+                values = list(map(_f32, vertex[start:start + widths[format_code]]))
+                if len(values) != widths[format_code]:
+                    raise AssertionError("vertex fetch exceeds supplied test buffer")
+                swizzle = _field(d1, 0, 12)
+                result = []
+                for lane in range(4):
+                    component = _field(swizzle, lane * 3, 3)
+                    if component < len(values):
+                        result.append(values[component])
+                    elif component == 4:
+                        result.append(0.0)
+                    elif component == 5:
+                        result.append(1.0)
+                    else:
+                        raise AssertionError("test fetch uses an undefined destination lane")
+                registers[dest] = result
+                continue
+
+            dest = _field(d0, 0, 6)
+            write_mask = _field(d0, 16, 4)
+            export = bool(_field(d0, 15, 1))
+            operation = _field(d2, 24, 5)
+            operands = []
+            for n, (sel_bit, reg_shift, swz_shift, neg_bit) in enumerate(
+                ((31, 16, 16, 26), (30, 8, 8, 25), (29, 0, 0, 24))
+            ):
+                if n == 2 and operation != 11:
+                    break
+                selector = _field(d2, sel_bit, 1)
+                reg_index = _field(d2, reg_shift, 8)
+                swizzle = _field(d1, swz_shift, 8)
+                operands.append(source(selector, reg_index, swizzle,
+                                       bool(_field(d1, neg_bit, 1))))
+            if operation == 0:
+                result = [_f32(x + y) for x, y in zip(*operands)]
+            elif operation == 1:
+                result = [_f32(x * y) for x, y in zip(*operands)]
+            elif operation == 2:
+                result = [_f32(max(x, y)) for x, y in zip(*operands)]
+            elif operation == 15:
+                # Xenia Canary src/xenia/gpu/ucode.h:1482-1486 defines DOT4v:
+                # opcode 15 sums four component products, then the encoded
+                # destination mask controls which lanes are kept.
+                dot = 0.0
+                for x, y in zip(*operands):
+                    dot = _f32(dot + _f32(x * y))
+                result = [dot] * 4
+            elif operation == 11:
+                result = [_f32(_f32(x * y) + z) for x, y, z in zip(*operands)]
+            else:
+                raise AssertionError(f"unknown ALU opcode {operation}")
+            if export:
+                if dest == 62:
+                    name = "oPos"
+                else:
+                    name = f"oC{dest}" if pixel else f"o{dest}"
+                exports[name] = result
+            else:
+                old = registers[dest]
+                registers[dest] = [result[lane] if write_mask & (1 << lane) else old[lane]
+                                    for lane in range(4)]
+    return exports
+
+
+def decode_xenos_exec(binary):
+    """Return emitted instruction words and the fetch/serialize bits per slot."""
+    words = struct.unpack(">%dI" % (len(binary) // 4), binary)
+    result = []
+    cf = []
+    cursor = 0
+    while cursor + 2 < len(words):
+        pairs = [(words[cursor], words[cursor + 1] & 0xFFFF),
+                 ((words[cursor + 1] >> 16) | ((words[cursor + 2] & 0xFFFF) << 16),
+                  words[cursor + 2] >> 16)]
+        cursor += 3
+        cf.extend(pairs)
+        if any(_field(w1, 12, 4) == 2 for _w0, w1 in pairs):
+            break
+    cf_dwords = cursor
+    pair_count = cursor // 3
+    for w0, w1 in cf:
+        if _field(w1, 12, 4) not in (1, 2):
+            continue
+        address, count = _field(w0, 0, 12), _field(w0, 12, 3)
+        sequence = _field(w0, 16, 12)
+        for slot in range(count):
+            offset = cf_dwords + (address - pair_count + slot) * 3
+            result.append((bool(_field(sequence, slot * 2, 1)),
+                           bool(_field(sequence, slot * 2 + 1, 1)),
+                           words[offset:offset + 3]))
+    return result
+
+
+def swap_texture_fetch_uv_swizzle(binary):
+    """Return a test-only binary with the first tfetch's X/Y source lanes swapped."""
+    words = list(struct.unpack(">%dI" % (len(binary) // 4), binary))
+    cf = []
+    cursor = 0
+    while cursor + 2 < len(words):
+        pair = [(words[cursor], words[cursor + 1] & 0xFFFF),
+                ((words[cursor + 1] >> 16) | ((words[cursor + 2] & 0xFFFF) << 16),
+                 words[cursor + 2] >> 16)]
+        cf.extend(pair)
+        cursor += 3
+        if any(_field(w1, 12, 4) == 2 for _w0, w1 in pair):
+            break
+    cf_dwords = cursor
+    pair_count = cursor // 3
+    for w0, w1 in cf:
+        if _field(w1, 12, 4) not in (1, 2):
+            continue
+        address, count = _field(w0, 0, 12), _field(w0, 12, 3)
+        sequence = _field(w0, 16, 12)
+        for slot in range(count):
+            offset = cf_dwords + (address - pair_count + slot) * 3
+            d0 = words[offset]
+            if _field(sequence, slot * 2, 1) and _field(d0, 0, 5) == 1:
+                x, y = _field(d0, 26, 2), _field(d0, 28, 2)
+                words[offset] = (d0 & ~(0xF << 26)) | (x << 28) | (y << 26)
+                return struct.pack(">%dI" % len(words), *words)
+    raise AssertionError("binary has no texture fetch to mutate")
+
+
+class SpirvParserTests(unittest.TestCase):
+    def test_khronos_opcode_values_and_shaderc_names_are_pinned(self):
+        from spirv_parser import OP_NAMES, OPCODE_GRAMMAR_VERSION
+        self.assertEqual(OPCODE_GRAMMAR_VERSION, "SPIR-V 1.6 revision 7")
+        self.assertEqual({n: OP_NAMES[n] for n in (99, 129, 131, 133, 136, 144, 145)}, {
+            99: "ImageWrite", 129: "FAdd", 131: "FSub", 133: "FMul",
+            136: "FDiv", 144: "VectorTimesMatrix", 145: "MatrixTimesVector",
+        })
+    def test_rejects_instruction_word_count_past_module_end(self):
+        words = [0x07230203, 0x00010000, 0, 2, 0, (3 << 16) | 17, 1]
+        with self.assertRaisesRegex(SpirvError, "word count|bounds|truncated"):
+            parse_spirv(struct.pack("<7I", *words))
+
+    def test_rejects_unknown_semantic_opcode(self):
+        words = [0x07230203, 0x00010000, 0, 2, 0, (1 << 16) | 60000]
+        with self.assertRaisesRegex(SpirvError, "60000"):
+            parse_spirv(struct.pack("<6I", *words))
+
+    def test_known_decorations_require_their_literal_operands(self):
+        for opcode, word_count, operands in ((71, 3, (1, 30)),
+                                             (72, 4, (1, 0, 30))):
+            words = [0x07230203, 0x00010000, 0, 8, 0,
+                     (word_count << 16) | opcode, *operands,
+                     (4 << 16) | 15, 0, 1, 0x0000006D]
+            with self.subTest(opcode=opcode), self.assertRaisesRegex(
+                    SpirvError, "Location decoration.*expected"):
+                parse_spirv(struct.pack("<%dI" % len(words), *words))
+
+
+class LoweringTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.library, _path = shader_probe.load_shaderc(SHADERC)
+
+    def compile(self, name, stage):
+        return shader_probe.compile_hlsl(
+            self.library, FIXTURES / name, stage, "main"
+        )
+
+    def test_test_executor_dp4_sums_four_components_and_preserves_masked_lanes(self):
+        dwords, _listing = xenos_asm.assemble(
+            "alloc position\n"
+            "exec\n"
+            "  dp4 r1.x, r0, c0\n"
+            "  dp4 r1.z, r0, c1\n"
+            "exece\n"
+            "  max oPos, r1, r1\n"
+        )
+        binary = struct.pack(">%dI" % len(dwords), *dwords)
+        result = execute_xenos(
+            binary,
+            [[2, 3, 5, 7], [11, 13, 17, 19]],
+            input_registers={0: [1, 2, 3, 1]},
+        )
+        self.assertEqual(result["oPos"], [30, 0, 107, 0])
+
+    def test_vertex_transform_uses_source_expression_and_explicit_maps(self):
+        spirv = self.compile("transform_vs.hlsl", "vertex")
+        layout = {
+            "vertex_inputs": {
+                "0": {"fetch_constant": 0, "stride": 12, "offset": 0,
+                      "format": "32_32_32_FLOAT"},
+                "2": {"fetch_constant": 0, "stride": 12, "offset": 6,
+                      "format": "32_32_FLOAT"},
+                "3": {"fetch_constant": 0, "stride": 12, "offset": 8,
+                      "format": "32_32_32_32_FLOAT"},
+            },
+            "uniforms": {
+                "0": [
+                    [2, 11, 23, 41], [3, 13, 29, 43], [5, 17, 31, 47],
+                    [7, 19, 37, 53], [.5, 1, 2, 1],
+                ]
+            },
+            "varyings": {"0": 0, "1": 1},
+        }
+        lowered = lower_spirv(spirv, "vertex", "main", layout)
+        outputs = execute_xenos(
+            lowered.binary, layout["uniforms"]["0"],
+            vertex_buffers={0: [1, 2, 3, 0, 0, 0, .125, .25, .25, .5, .75, 1]},
+        )
+        self.assertEqual(outputs["oPos"], [30, 107, 211, 321])
+        self.assertEqual(outputs["o0"], [.125, .5, 1.5, 1])
+        self.assertEqual(outputs["o1"][:2], [.125, .25])
+        uniform = lowered.metadata["uniforms"]["0"]
+        self.assertEqual(uniform["raw_memory_order"], "consecutive_uploaded_vec4_registers")
+        self.assertEqual(uniform["register_values"], layout["uniforms"]["0"])
+        self.assertEqual([member["offset_bytes"] for member in uniform["members"]], [0, 64])
+        self.assertEqual(uniform["members"][0]["major"], "row_major")
+        self.assertEqual(uniform["members"][0]["matrix_stride_bytes"], 16)
+
+    def test_shared_textured_row_major_matrix_transform_matches_hand_calculation(self):
+        shared_path = pathlib.Path(
+            r"C:\dev\helworks\helengine\engine\helengine.editor"
+            r"\shaders\builtin\SpriteBatchShader.hlsl"
+        )
+        source = shared_path.read_text(encoding="utf-8")
+        # HLSL mul(input.position, projection) is emitted by shaderc as
+        # OpMatrixTimesVector with the cbuffer member decorated RowMajor.
+        # These four uploaded vec4s are therefore matrix rows. Expected results
+        # below are hand-computed row dot products, independent of the lowerer.
+        matrix_rows = [
+            [2, 3, 5, 7],
+            [11, 13, 17, 19],
+            [23, 29, 31, 37],
+            [41, 43, 47, 53],
+        ]
+        vertices = [
+            ([1, 2, 3, 1], [.125, .375, .5, 1], [.25, .5, .75, 1]),
+            ([-2, .5, 4, 1], [.625, .875, 0, 1], [1, .125, .375, .5]),
+        ]
+        vertex_data = []
+        for position, tex_local, color in vertices:
+            vertex_data.extend(position + tex_local + color + [0.0] * 12)
+
+        expected_positions = [
+            [30, 107, 211, 321],
+            [24.5, 71.5, 129.5, 180.5],
+        ]
+        for optimize in (False, True):
+            with self.subTest(optimize=optimize):
+                compiled = shader_probe.compile_hlsl_from_source(
+                    self.library,
+                    source.encode("utf-8"),
+                    str(shared_path),
+                    "vertex",
+                    "VS",
+                    defines={},
+                    debug_info=False,
+                    optimize=optimize,
+                    warnings_as_errors=False,
+                    preserve_reflection_names=optimize,
+                )
+                self.assertTrue(compiled.succeeded, compiled.diagnostics)
+                reflection, layout = reflect_layout(
+                    compiled.spirv, "vertex", "VS", "batch2d-v1"
+                )
+                self.assertEqual(
+                    [(item["location"], item["format"])
+                     for item in reflection["inputs"]],
+                    [(0, "float4"), (1, "float4"), (2, "float4")],
+                )
+                self.assertEqual(
+                    {location: (item["offset"], item["stride"])
+                     for location, item in layout["vertex_inputs"].items()},
+                    {"0": (0, 24), "1": (4, 24), "2": (8, 24)},
+                )
+                projection = next(
+                    item for item in reflection["bindings"]
+                    if item["kind"] == "constant_buffer"
+                )
+                self.assertEqual(projection["members"][0]["name"], "projection")
+                self.assertEqual(layout["uniforms"]["0"], {"register_count": 4})
+                lowered = lower_spirv(compiled.spirv, "vertex", "VS", layout)
+                self.assertEqual(
+                    lowered.metadata["uniforms"]["0"]["members"][0]["major"],
+                    "row_major",
+                )
+
+                for vertex_index, (position, tex_local, color) in enumerate(vertices):
+                    with self.subTest(optimize=optimize, vertex=vertex_index):
+                        outputs = execute_xenos(
+                            lowered.binary,
+                            matrix_rows,
+                            vertex_buffers={0: vertex_data},
+                            input_registers={0: [vertex_index, 0, 0, 0]},
+                        )
+                        self.assertEqual(outputs["oPos"], expected_positions[vertex_index])
+                        self.assertEqual(outputs["o0"][:2], tex_local[:2])
+                        self.assertEqual(outputs["o1"], color)
+
+    def test_mesh_material_homogeneous_literals_transform_numerically(self):
+        source_path = ROOT / "tests/shaders/mesh-material.hlsl"
+        source = source_path.read_text(encoding="utf-8")
+        rows = [[2, 3, 5, 7], [11, 13, 17, 19],
+                [23, 29, 31, 37], [41, 43, 47, 53]]
+        for literal, expected in ((1, [30, 107, 211, 321]),
+                                  (0, [23, 88, 174, 268])):
+            for optimize in (False, True):
+                with self.subTest(literal=literal, optimize=optimize):
+                    compiled = shader_probe.compile_hlsl_from_source(
+                        self.library,
+                        source.replace("float4(input.position, 1.0)",
+                                       f"float4(input.position, {literal}.0)").encode("utf-8"),
+                        str(source_path), "vertex", "VS", defines={},
+                        debug_info=False, optimize=optimize,
+                        warnings_as_errors=False, preserve_reflection_names=optimize)
+                    self.assertTrue(compiled.succeeded, compiled.diagnostics)
+                    _, layout = reflect_layout(compiled.spirv, "vertex", "VS", "mesh3d-v1")
+                    lowered = lower_spirv(compiled.spirv, "vertex", "VS", layout)
+                    self.assertEqual(lowered.metadata["uniforms"]["0"]["members"][0]["major"],
+                                     "row_major")
+                    outputs = execute_xenos(lowered.binary, rows,
+                        vertex_buffers={0: [1, 2, 3] + [0] * 9})
+                    self.assertEqual(outputs["oPos"], expected)
+
+    def test_pixel_uniform_color_exports_uploaded_value(self):
+        spirv = self.compile("uniform_color_ps.hlsl", "pixel")
+        lowered = lower_spirv(
+            spirv, "pixel", "main", {"uniforms": {"0": [[.2, .4, .6, 1]]}}
+        )
+        self.assertIn("alloc colors", lowered.assembly)
+        # SQ_PROGRAM_CNTL encodes allocated registers minus one. Even this
+        # direct constant export must expose the minimum one-register budget.
+        self.assertEqual(lowered.metadata["register_count"], 1)
+        self.assertEqual(lowered.metadata["highest_register_index"], 0)
+        self.assertEqual(lowered.metadata["sq_program_cntl_register_field"], 0)
+        outputs = execute_xenos(lowered.binary, [[.2, .4, .6, 1]], pixel=True)
+        for actual, expected in zip(outputs["oC0"], [.2, .4, .6, 1]):
+            self.assertAlmostEqual(actual, expected, places=6)
+        self.assertEqual(lowered.metadata["stage"], "pixel")
+
+    def test_texture2d_sample_requires_and_records_explicit_logical_pair_mapping(self):
+        spirv = self.compile("texture_ps.hlsl", "pixel")
+        layout = {
+            "varyings": {"0": 0, "1": 1},
+            "texture_bindings": [{
+                "texture_set": 0, "texture_binding": 0,
+                "sampler_set": 0, "sampler_binding": 0,
+                "fetch_constant": 5,
+            }],
+        }
+        lowered = lower_spirv(spirv, "pixel", "main", layout)
+        self.assertEqual(lowered.metadata["textures"], [{
+            "texture_set": 0, "texture_binding": 0,
+            "sampler_set": 0, "sampler_binding": 0,
+            "fetch_constant": 5, "stage": "pixel", "dimension": "2D",
+        }])
+        instructions = decode_xenos_exec(lowered.binary)
+        texture_fetches = [code for is_fetch, _serialize, code in instructions
+                           if is_fetch and _field(code[0], 0, 5) == 1]
+        self.assertEqual(len(texture_fetches), 1)
+        d0, d1, d2 = texture_fetches[0]
+        self.assertLess(_field(d0, 5, 6), 64)  # computed UV source register
+        self.assertLess(_field(d0, 12, 6), 64)  # conservative destination
+        self.assertEqual(_field(d0, 20, 5), 5)  # physical tf5, not logical b0
+        self.assertEqual(_field(d0, 25, 1), 0)  # normalized coordinates
+        self.assertEqual(_field(d1, 0, 12), 0x688)  # xyzw destination swizzle
+        self.assertEqual(_field(d1, 28, 1), 1)  # computed LOD
+        self.assertEqual(_field(d2, 14, 2), 1)  # 2D
+        self.assertEqual(_field(d2, 2, 7), 0)  # no baked-in LOD bias
+        self.assertTrue(all(serialize for _fetch, serialize, _code in instructions))
+        fetch_index = next(i for i, (fetch, _serialize, _code)
+                           in enumerate(instructions) if fetch)
+        self.assertGreater(fetch_index, 0, "UV arithmetic must precede the fetch")
+        self.assertLess(fetch_index, len(instructions) - 1,
+                        "sample dependent arithmetic must follow the fetch")
+        self.assertTrue(any(not fetch for fetch, _serialize, _code
+                            in instructions[:fetch_index]))
+        self.assertTrue(any(not fetch for fetch, _serialize, _code
+                            in instructions[fetch_index + 1:]))
+        result = execute_xenos(
+            lowered.binary, [], input_registers={
+                0: [1, .75, .5, 1], 1: [.6, .8, 0, 1],
+            }, textures={5: [
+                [[.2, .4, .6, .8], [.3, .5, .7, .9]],
+                [[.4, .6, .8, 1], [.5, .7, .9, .25]],
+            ]}, pixel=True,
+        )
+        expected_output = [.4, .45, .4, 1]
+        for actual, expected in zip(result["oC0"], expected_output):
+            self.assertAlmostEqual(actual, expected, places=6)
+        swapped = execute_xenos(
+            swap_texture_fetch_uv_swizzle(lowered.binary), [], input_registers={
+                0: [1, .75, .5, 1], 1: [.6, .8, 0, 1],
+            }, textures={5: [
+                [[.2, .4, .6, .8], [.3, .5, .7, .9]],
+                [[.4, .6, .8, 1], [.5, .7, .9, .25]],
+            ]}, pixel=True,
+        )["oC0"]
+        with self.assertRaises(AssertionError):
+            self.assertEqual(swapped, expected_output)
+
+        changed = (FIXTURES / "texture_ps.hlsl").read_text().replace(
+            "input.uv * input.uv", "input.uv"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory) / "changed_texture.hlsl"
+            source.write_text(changed, encoding="utf-8")
+            changed_spirv = shader_probe.compile_hlsl(
+                self.library, source, "pixel", "main"
+            )
+        changed_lowered = lower_spirv(changed_spirv, "pixel", "main", layout)
+        changed_result = execute_xenos(
+            changed_lowered.binary, [], input_registers={
+                0: [1, .75, .5, 1], 1: [.6, .8, 0, 1],
+            }, textures={5: [
+                [[.2, .4, .6, .8], [.3, .5, .7, .9]],
+                [[.4, .6, .8, 1], [.5, .7, .9, .25]],
+            ]}, pixel=True,
+        )
+        for actual, expected in zip(changed_result["oC0"], [.5, .525, .45, .25]):
+            self.assertAlmostEqual(actual, expected, places=6)
+        self.assertNotEqual(result["oC0"], changed_result["oC0"])
+
+    def test_pixel_interpolated_color_multiply_add_subtract_and_source_change(self):
+        source = (FIXTURES / "color_math_ps.hlsl").read_text()
+        spirv = self.compile("color_math_ps.hlsl", "pixel")
+        layout = {"varyings": {"0": 0},
+                  "uniforms": {"0": [[2, 3, 4, 1], [.1, .2, .3, .4]]}}
+        result = lower_spirv(spirv, "pixel", "main", layout)
+        first = execute_xenos(result.binary, layout["uniforms"]["0"],
+                              input_registers={0: [.25, .5, .75, 1]}, pixel=True)
+        for actual, expected in zip(first["oC0"], [.5, 1.5, 3, 1]):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        changed = source.replace(" * factor + bias - bias", " * factor + bias + bias")
+        self.assertNotEqual(source, changed)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            changed_path = pathlib.Path(temp_dir) / "changed.hlsl"
+            changed_path.write_text(changed, encoding="utf-8")
+            changed_spirv = shader_probe.compile_hlsl(
+                self.library, changed_path, "pixel", "main"
+            )
+        changed_result = lower_spirv(changed_spirv, "pixel", "main", layout)
+        second = execute_xenos(changed_result.binary, layout["uniforms"]["0"],
+                               input_registers={0: [.25, .5, .75, 1]}, pixel=True)
+        for actual, expected in zip(second["oC0"], [.7, 1.9, 3.6, 1.8]):
+            self.assertAlmostEqual(actual, expected, places=6)
+        self.assertNotEqual(first["oC0"], second["oC0"])
+
+    def test_shaderc_fadd_and_fsub_are_executed_numerically(self):
+        spirv = self.compile("color_add_sub_ps.hlsl", "pixel")
+        from spirv_parser import parse_spirv
+        module = parse_spirv(spirv)
+        self.assertIn(129, [ins.opcode for ins in module.instructions])
+        self.assertIn(131, [ins.opcode for ins in module.instructions])
+        uniforms = [[.1, .2, .3, .4]]
+        lowered = lower_spirv(spirv, "pixel", "main",
+                              {"varyings": {"0": 0}, "uniforms": {"0": uniforms}})
+        result = execute_xenos(lowered.binary, uniforms,
+                               input_registers={0: [.25, .5, .75, 1]}, pixel=True)
+        for actual, expected in zip(result["oC0"], [.25, .5, .75, 1]):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+    def test_opload_volatile_memory_access_is_rejected(self):
+        spirv = _add_volatile_to_first_load(self.compile("uniform_color_ps.hlsl", "pixel"))
+        with self.assertRaisesRegex(LoweringError, "OpLoad.*memory access"):
+            lower_spirv(spirv, "pixel", "main", {"uniforms": {"0": [[.2, .4, .6, 1]]}})
+
+    def test_matrix_composite_constructor_is_explicitly_unsupported(self):
+        module = parse_spirv(self.compile("transform_vs.hlsl", "vertex"))
+        lowerer = _Lowerer(module, "vertex", "main", {})
+        matrix_type = next(i.operands[0] for i in module.types.values() if i.opcode == 24)
+        for result_id in range(1000, 1004):
+            lowerer.value[result_id] = Vector((0.0, 0.0, 0.0, 0.0))
+        with self.assertRaisesRegex(LoweringError, "matrix OpCompositeConstruct.*unsupported"):
+            lowerer._composite_construct((matrix_type, 1004, 1000, 1001, 1002, 1003))
+
+    def test_executor_rounds_each_alu_step_to_float32(self):
+        source = """\
+cbuffer C : register(b0) { float4 one; float4 large; };
+struct I { [[vk::location(0)]] float4 color : COLOR0; };
+float4 main(I input) : SV_Target0 { return (input.color + one) - large; }
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "float32_rounding.hlsl"
+            path.write_text(source, encoding="utf-8")
+            spirv = shader_probe.compile_hlsl(self.library, path, "pixel", "main")
+        constants = [[1, 1, 1, 1], [16777216, 16777216, 16777216, 16777216]]
+        self.assertEqual((16777216.0 + 1.0) - 16777216.0, 1.0)
+        result = lower_spirv(spirv, "pixel", "main",
+                             {"varyings": {"0": 0}, "uniforms": {"0": constants}})
+        actual = execute_xenos(result.binary, constants,
+                               input_registers={0: [16777216] * 4}, pixel=True)["oC0"]
+        self.assertEqual(actual, [0.0, 0.0, 0.0, 0.0])
+
+    def test_fdiv_fails_and_texture_sample_requires_a_mapping(self):
+        with self.assertRaisesRegex(LoweringError, "FDiv"):
+            lower_spirv(self.compile("divide_ps.hlsl", "pixel"), "pixel", "main",
+                        {"varyings": {"0": 0}, "uniforms": {"0": [[2, 2, 2, 2]]}})
+        with self.assertRaisesRegex(LoweringError, "texture_bindings.*mapping"):
+            lower_spirv(self.compile("texture_ps.hlsl", "pixel"), "pixel", "main",
+                        {"varyings": {"0": 0, "1": 1}})
+
+    def test_texture_binding_layout_rejects_duplicate_collision_and_invalid_slots(self):
+        spirv = self.compile("texture_ps.hlsl", "pixel")
+        entry = {
+            "texture_set": 0, "texture_binding": 0,
+            "sampler_set": 0, "sampler_binding": 0,
+            "fetch_constant": 5,
+        }
+        cases = (
+            ([entry, dict(entry)], "duplicate.*pair"),
+            ([entry, {"texture_set": 1, "texture_binding": 1,
+                      "sampler_set": 1, "sampler_binding": 1,
+                      "fetch_constant": 5}], "fetch constant.*collision"),
+            ([{**entry, "fetch_constant": -1}], "fetch_constant.*0\.\.31"),
+            ([{**entry, "fetch_constant": True}], "fetch_constant.*integer"),
+        )
+        for mappings, message in cases:
+            with self.subTest(mappings=mappings), self.assertRaisesRegex(
+                    LoweringError, message):
+                lower_spirv(spirv, "pixel", "main", {
+                    "varyings": {"0": 0, "1": 1},
+                    "texture_bindings": mappings,
+                })
+
+    def test_texture_sampling_rejects_optional_bias_operand(self):
+        source = """\
+Texture2D<float4> image : register(t0);
+SamplerState sampler0 : register(s0);
+struct I { [[vk::location(0)]] float2 uv : TEXCOORD0; };
+float4 main(I input) : SV_Target0 { return image.Sample(sampler0, input.uv, 0.5); }
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "biased_sample.hlsl"
+            path.write_text(source, encoding="utf-8")
+            spirv = shader_probe.compile_hlsl(self.library, path, "pixel", "main")
+        with self.assertRaisesRegex(LoweringError, "optional.*sampling operand"):
+            lower_spirv(spirv, "pixel", "main", {
+                "varyings": {"0": 0},
+                "texture_bindings": [{
+                    "texture_set": 0, "texture_binding": 0,
+                    "sampler_set": 0, "sampler_binding": 0,
+                    "fetch_constant": 3,
+                }],
+            })
+
+    def test_texture_sampling_rejects_non_2d_array_multisample_integer_and_comparison_forms(self):
+        cases = (
+            ("Texture3D<float4>", "only 2D"),
+            ("Texture2DArray<float4>", "texture arrays"),
+            ("Texture2DMS<float4>", "multisample"),
+            ("Texture2D<int4>", "Texture2D<float4>"),
+        )
+        for resource_type, message in cases:
+            with self.subTest(resource_type=resource_type), tempfile.TemporaryDirectory() as directory:
+                path = pathlib.Path(directory) / "unsupported_texture.hlsl"
+                if resource_type == "Texture2DMS<float4>":
+                    source = f"""\
+{resource_type} image : register(t0);
+float4 main() : SV_Target0 {{ return image.Load(int2(0, 0), 0); }}
+"""
+                else:
+                    coordinate_type = "float3" if resource_type in (
+                        "Texture3D<float4>", "Texture2DArray<float4>") else "float2"
+                    sample_coordinate = "float3(0.25, 0.25, 0.25)" if coordinate_type == "float3" \
+                        else "float2(0.25, 0.25)"
+                    if resource_type == "Texture2D<int4>":
+                        source = f"""\
+{resource_type} image : register(t0);
+SamplerState sampler0 : register(s0);
+struct I {{ [[vk::location(0)]] float2 uv : TEXCOORD0; }};
+int4 main(I input) : SV_Target0 {{ return image.Sample(sampler0, input.uv); }}
+"""
+                    else:
+                        sample = "image.Sample(sampler0, input.uv)"
+                        source = f"""\
+{resource_type} image : register(t0);
+SamplerState sampler0 : register(s0);
+struct I {{ [[vk::location(0)]] {coordinate_type} uv : TEXCOORD0; }};
+float4 main(I input) : SV_Target0 {{ return {sample}; }}
+"""
+                        source = source.replace("input.uv", sample_coordinate)
+                path.write_text(source, encoding="utf-8")
+                spirv = shader_probe.compile_hlsl(self.library, path, "pixel", "main")
+                layout = {"texture_bindings": [{
+                    "texture_set": 0, "texture_binding": 0,
+                    "sampler_set": 0, "sampler_binding": 0,
+                    "fetch_constant": 2,
+                }]}
+                with self.assertRaisesRegex(LoweringError, message):
+                    lower_spirv(spirv, "pixel", "main", layout)
+
+        comparison = """\
+Texture2D<float> image : register(t0);
+SamplerComparisonState sampler0 : register(s0);
+struct I { [[vk::location(0)]] float2 uv : TEXCOORD0; };
+float4 main(I input) : SV_Target0 {
+    float value = image.SampleCmp(sampler0, input.uv, 0.5);
+    return float4(value, value, value, value);
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "comparison_texture.hlsl"
+            path.write_text(comparison, encoding="utf-8")
+            spirv = shader_probe.compile_hlsl(self.library, path, "pixel", "main")
+        with self.assertRaisesRegex(LoweringError, "depth/comparison"):
+            lower_spirv(spirv, "pixel", "main", {"varyings": {"0": 0},
+                "texture_bindings": [{
+                    "texture_set": 0, "texture_binding": 0,
+                    "sampler_set": 0, "sampler_binding": 0,
+                    "fetch_constant": 2,
+                }]})
+
+        descriptor_array = """\
+Texture2D<float4> image[2] : register(t0);
+SamplerState sampler0 : register(s0);
+struct I { [[vk::location(0)]] float2 uv : TEXCOORD0; };
+float4 main(I input) : SV_Target0 { return image[0].Sample(sampler0, input.uv); }
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "texture_array.hlsl"
+            path.write_text(descriptor_array, encoding="utf-8")
+            spirv = shader_probe.compile_hlsl(self.library, path, "pixel", "main")
+        with self.assertRaisesRegex(LoweringError, "resource arrays are unsupported"):
+            lower_spirv(spirv, "pixel", "main", {"varyings": {"0": 0},
+                "texture_bindings": [{
+                    "texture_set": 0, "texture_binding": 0,
+                    "sampler_set": 0, "sampler_binding": 0,
+                    "fetch_constant": 2,
+                }]})
+
+    def test_rejects_stage_mismatch_and_register_exhaustion(self):
+        spirv = self.compile("uniform_color_ps.hlsl", "pixel")
+        with self.assertRaisesRegex(LoweringError, "stage"):
+            lower_spirv(spirv, "vertex", "main", {"uniforms": {"0": [[0, 0, 0, 1]]}})
+
+        vertex = self.compile("transform_vs.hlsl", "vertex")
+        with self.assertRaisesRegex(LoweringError, "register|temporary"):
+            lower_spirv(
+                vertex, "vertex", "main",
+                {"register_limit": 0,
+                 "vertex_inputs": {"0": {"fetch_constant": 0, "stride": 12,
+                                          "offset": 0, "format": "32_32_32_FLOAT"}},
+                 "uniforms": {"0": []}},
+            )
+        with self.assertRaisesRegex(LoweringError, "unique"):
+            lower_spirv(
+                vertex, "vertex", "main",
+                {"vertex_inputs": {"0": {"fetch_constant": 0, "stride": 12,
+                                           "offset": 0, "format": "32_32_32_FLOAT"}},
+                 "uniforms": {"0": [[0, 0, 0, 1]]},
+                 "varyings": {"0": 0, "1": 0}},
+            )
+
+    def test_rejects_noninterpolated_varying_qualifier(self):
+        with self.assertRaisesRegex(LoweringError, "decoration"):
+            lower_spirv(self.compile("flat_ps.hlsl", "pixel"), "pixel", "main",
+                        {"varyings": {"0": 0}})
+
+    def test_rejects_vertex_shader_without_position(self):
+        with self.assertRaisesRegex(LoweringError, "BuiltIn Position"):
+            lower_spirv(self.compile("varying_only_vs.hlsl", "vertex"),
+                        "vertex", "main",
+                        {"vertex_inputs": {"0": {"fetch_constant": 0, "stride": 3,
+                                                   "offset": 0, "format": "32_32_32_FLOAT"}},
+                         "varyings": {"0": 0}})
+
+
+class ProbeCliTests(unittest.TestCase):
+    def run_cli(self, source, layout, prefix, stage, shaderc=True):
+        command = [sys.executable, str(ROOT / "tools" / "shader-probe" / "xenos_probe.py"),
+                   "--input", str(source), "--stage", stage, "--entry", "main",
+                   "--layout", str(layout), "--output-prefix", str(prefix)]
+        if shaderc:
+            command.extend(("--shaderc", str(SHADERC)))
+        env = os.environ.copy()
+        if not shaderc:
+            env.pop("SHADERC_SHARED_LIBRARY", None)
+            env.pop("HEL_X360_SHADERC", None)
+        return subprocess.run(command, cwd=ROOT, capture_output=True,
+                              text=True, check=False, env=env)
+
+    def test_hlsl_and_spirv_routes_write_hashed_artifacts(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            temp = pathlib.Path(directory)
+            fixture = FIXTURES / "uniform_color_ps.hlsl"
+            layout = FIXTURES / "uniform_color_layout.json"
+            hlsl_prefix = temp / "uniform-hlsl"
+            result = self.run_cli(fixture, layout, hlsl_prefix, "pixel")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            hlsl_metadata = json.loads(hlsl_prefix.with_suffix(".json").read_text())
+            self.assertEqual(hlsl_metadata["route"], "hlsl")
+            self.assertEqual(hlsl_metadata["source_sha256"],
+                             hashlib.sha256(fixture.read_bytes()).hexdigest())
+            self.assertTrue(hlsl_metadata["shaderc_sha256"])
+            self.assertEqual(hlsl_metadata["artifact_status"],
+                             "provisional_probe_output_not_runtime_integrated")
+
+            spirv = compile_fixture("uniform_color_ps.hlsl", "pixel")
+            spv_path = temp / "uniform.spv"
+            spv_path.write_bytes(spirv)
+            spv_prefix = temp / "uniform-spv"
+            result = self.run_cli(spv_path, layout, spv_prefix, "pixel", shaderc=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            metadata = json.loads(spv_prefix.with_suffix(".json").read_text())
+            self.assertEqual(metadata["route"], "spirv")
+            self.assertEqual(metadata["input_sha256"],
+                             hashlib.sha256(spirv).hexdigest())
+            self.assertEqual(metadata["spirv_sha256"], hashlib.sha256(spirv).hexdigest())
+            self.assertIsNone(metadata["shaderc_sha256"])
+            self.assertEqual(len(spv_prefix.with_suffix(".bin").read_bytes()) % 4, 0)
+
+    def test_cli_failure_invalidates_only_explicit_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = pathlib.Path(directory)
+            fixture = FIXTURES / "texture_ps.hlsl"
+            layout = temp / "missing_texture_mapping.json"
+            layout.write_text(json.dumps({"varyings": {"0": 0, "1": 1}}),
+                              encoding="utf-8")
+            prefix = temp / "failed"
+            outputs = [prefix.with_suffix(ext) for ext in (".xasm", ".bin", ".json")]
+            for path in outputs:
+                path.write_text("stale")
+            result = self.run_cli(fixture, layout, prefix, "pixel")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("texture_bindings", result.stderr)
+            self.assertTrue(all(not path.exists() for path in outputs))
+            self.assertTrue(layout.exists())
+            self.assertTrue(fixture.exists())
+
+    def test_cli_compiles_texture_fixture_with_runtime_pair_mapping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = pathlib.Path(directory) / "texture"
+            result = self.run_cli(
+                FIXTURES / "texture_ps.hlsl",
+                FIXTURES / "texture_runtime_layout.json", prefix, "pixel")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            metadata = json.loads(prefix.with_suffix(".json").read_text())
+            self.assertEqual(metadata["textures"][0]["fetch_constant"], 1)
+            self.assertEqual(metadata["textures"][0]["dimension"], "2D")
+            self.assertTrue(prefix.with_suffix(".xasm").exists())
+            self.assertTrue(prefix.with_suffix(".bin").exists())
+
+    def test_cli_setup_failure_removes_stale_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = pathlib.Path(directory) / "missing-shaderc"
+            outputs = [prefix.with_suffix(ext) for ext in (".xasm", ".bin", ".json")]
+            for path in outputs:
+                path.write_text("stale")
+            result = self.run_cli(FIXTURES / "uniform_color_ps.hlsl",
+                                  FIXTURES / "uniform_color_layout.json",
+                                  prefix, "pixel", shaderc=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--shaderc", result.stderr)
+            self.assertTrue(all(not path.exists() for path in outputs))
+
+    def test_cli_rejects_output_alias_of_layout_without_deleting_it(self):
+        import subprocess
+        layout = FIXTURES / "uniform_color_layout.json"
+        result = self.run_cli(FIXTURES / "uniform_color_ps.hlsl", layout,
+                              layout.with_suffix(""), "pixel")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("aliases", result.stderr)
+        self.assertTrue(layout.exists())
+
+    def test_malformed_location_decoration_fails_without_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = pathlib.Path(directory)
+            malformed = temp / "missing-location-literal.spv"
+            malformed.write_bytes(_remove_location_literal(
+                compile_fixture("transform_vs.hlsl", "vertex")))
+            prefix = temp / "malformed"
+            outputs = [prefix.with_suffix(ext) for ext in (".xasm", ".bin", ".json")]
+            result = self.run_cli(malformed, FIXTURES / "xenos_runtime_layout.json",
+                                  prefix, "vertex", shaderc=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Location decoration", result.stderr)
+            self.assertIn("expected 1 literal operand", result.stderr)
+            self.assertTrue(all(not path.exists() for path in outputs))
+
+
+if __name__ == "__main__":
+    unittest.main()

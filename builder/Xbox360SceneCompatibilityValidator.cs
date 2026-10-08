@@ -19,8 +19,14 @@ public sealed class Xbox360SceneCompatibilityValidator {
     /// <param name="manifest">Cooked build manifest produced by the editor build graph.</param>
     public void Validate(PlatformBuildManifest manifest) {
         if (manifest == null) throw new ArgumentNullException(nameof(manifest));
-        if (manifest.Scenes.Length != 1) {
-            throw new InvalidOperationException($"Xbox 360 builds currently require exactly one scene; the manifest declares {manifest.Scenes.Length}.");
+        if (manifest.Scenes.Length == 0) {
+            throw new InvalidOperationException("Xbox 360 builds require at least one packaged scene.");
+        }
+        HashSet<string> sceneIds = new(StringComparer.OrdinalIgnoreCase);
+        foreach (PlatformBuildScene scene in manifest.Scenes) {
+            if (!sceneIds.Add(scene.SceneId)) {
+                throw new InvalidOperationException($"Two packaged scenes share the scene id '{scene.SceneId}'.");
+            }
         }
         if (string.IsNullOrWhiteSpace(manifest.StartupSceneId) ||
             !manifest.Scenes.Any(scene => scene.SceneId == manifest.StartupSceneId)) {
@@ -29,7 +35,7 @@ public sealed class Xbox360SceneCompatibilityValidator {
         foreach (PlatformBuildRequiredRuntimeFeature feature in manifest.RuntimeFeatureManifest.RequiredFeatures) {
             if (!SupportedFeatures.Contains(feature.FeatureId)) {
                 throw new InvalidOperationException(
-                    $"Scene '{manifest.StartupSceneId}' needs runtime feature '{feature.FeatureId}' from '{feature.SourceId}', which the Xbox 360 renderer does not implement yet.");
+                    $"The scene package needs runtime feature '{feature.FeatureId}' from '{feature.SourceId}', which the Xbox 360 renderer does not implement yet.");
             }
         }
     }

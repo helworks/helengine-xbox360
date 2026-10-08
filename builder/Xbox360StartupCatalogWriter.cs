@@ -43,7 +43,7 @@ public sealed class Xbox360StartupCatalogWriter {
                 artifact = sceneArtifacts.FirstOrDefault(
                     candidate => string.Equals(Xbox360ContentStager.NormalizeRelativePath(candidate.RelativePath), identity, StringComparison.Ordinal));
             }
-            if (artifact == null && sceneArtifacts.Length == 1) {
+            if (artifact == null && manifest.Scenes.Length == 1 && sceneArtifacts.Length == 1) {
                 artifact = sceneArtifacts[0];
             }
             if (artifact == null) {

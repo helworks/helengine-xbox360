@@ -49,8 +49,20 @@ param(
     [string] $CodegenRoot = '',
     # Fresh output root, conventionally under C:\dev\helworks\builds\helengine-x360.
     [Parameter(Mandatory = $true)][string] $OutputRoot,
+    # Rebuild the caller-owned active output in place rather than retaining a new history.
+    [switch] $ReuseOutput,
+    # Use the verified codegen already published with the selected central editor.
+    [switch] $UsePublishedCodegen,
     [string] $SceneRelativePath = 'scenes/rendering/cube_test.helen',
     [string] $SceneId = 'cube_test',
+    # Additional original authored scenes needed by menu actions, in catalog order.
+    # These arrays are paired; the startup scene remains first.
+    [string[]] $AdditionalSceneRelativePaths = @(),
+    [string[]] $AdditionalSceneIds = @(),
+    # Optional reviewed preparation of the staged copy, before script dependency pruning.
+    [string] $StagedProjectPreparationScript = '',
+    # Opt-in shader validation on the staged cube_test only; never edits the source project.
+    [switch] $CubeSharedShaders,
     # Scripts to keep beyond those the scene names. A retained script that calls a helper
     # in the same module needs the helper kept too, and the scene does not mention it.
     [string[]] $AdditionalRetainedClasses = @(),
@@ -60,11 +72,36 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($AdditionalSceneRelativePaths.Count -ne $AdditionalSceneIds.Count) {
+    throw 'AdditionalSceneRelativePaths and AdditionalSceneIds must have matching counts.'
+}
+$scenePaths = @($SceneRelativePath) + @($AdditionalSceneRelativePaths)
+$sceneIds = @($SceneId) + @($AdditionalSceneIds)
+if (@($scenePaths | Sort-Object -Unique).Count -ne $scenePaths.Count -or @($sceneIds | Sort-Object -Unique).Count -ne $sceneIds.Count) {
+    throw 'Selected scene paths and catalog ids must be unique.'
+}
+foreach ($relativePath in $scenePaths) {
+    if ([IO.Path]::IsPathRooted($relativePath) -or $relativePath.Replace('\', '/').Split('/') -contains '..') {
+        throw "Selected scene must be relative to assets: $relativePath"
+    }
+}
+foreach ($catalogId in $sceneIds) {
+    if ([string]::IsNullOrWhiteSpace($catalogId)) { throw 'Selected scene catalog ids must not be empty.' }
+}
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $projectRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $engineRoot = (Resolve-Path -LiteralPath $EngineSourceRoot).Path
 $editorApp = (Resolve-Path -LiteralPath $EditorAppPath).Path
+# The X360 backend is a separate process and needs an explicit native shaderc path.
+# Prefer the caller's selection; otherwise use the DLL shipped with this editor.
+if ([string]::IsNullOrWhiteSpace($env:HEL_X360_SHADERC) -and [string]::IsNullOrWhiteSpace($env:SHADERC_SHARED_LIBRARY)) {
+    $editorShaderc = Join-Path (Split-Path -Parent $editorApp) 'runtimes\win-x64\native\shaderc_shared.dll'
+    if (-not (Test-Path -LiteralPath $editorShaderc -PathType Leaf)) {
+        throw 'Set HEL_X360_SHADERC to shaderc_shared.dll, or publish an editor containing that native dependency.'
+    }
+    $env:HEL_X360_SHADERC = (Resolve-Path -LiteralPath $editorShaderc).Path
+}
 $codegenRoot = if ([string]::IsNullOrWhiteSpace($CodegenRoot)) {
     Join-Path $engineRoot 'engine\vendor\csharpcodegen'
 } else {
@@ -75,41 +112,71 @@ if (-not (Test-Path -LiteralPath $codegenProject -PathType Leaf)) {
     throw "codegen project is missing: $codegenProject. Run: git -C $engineRoot submodule update --init --recursive"
 }
 $output = [IO.Path]::GetFullPath($OutputRoot)
-if (Test-Path -LiteralPath $output) { throw "Use a fresh authored build output directory: $output" }
+if (Test-Path -LiteralPath $output) {
+    if (-not $ReuseOutput) { throw "Use a fresh authored build output directory or explicitly select ReuseOutput: $output" }
+    if (-not $output.StartsWith('C:\dev\helworks\builds\helengine-x360\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Active output must stay in the owned platform build root.' }
+    $previous = Get-Content (Join-Path $output 'authored-build.json') -Raw | ConvertFrom-Json
+    if ([IO.Path]::GetFullPath($previous.project_root) -ne $projectRoot -or [IO.Path]::GetFullPath($previous.engine_source_root) -ne $engineRoot) { throw 'Active output receipt does not match this source project and engine.' }
+} elseif ($ReuseOutput) { throw "ReuseOutput requires an existing reviewed active build: $output" }
 
-New-Item -ItemType Directory -Path $output | Out-Null
+New-Item -ItemType Directory -Path $output -Force | Out-Null
 $logsRoot = Join-Path $output 'logs'
-New-Item -ItemType Directory -Path $logsRoot | Out-Null
+New-Item -ItemType Directory -Path $logsRoot -Force | Out-Null
 
 # 1. Build this repository's platform builder against the same engine checkout the
 # editor was built from, so both load one set of base-platform types.
 $builderArtifacts = Join-Path $output 'builder'
-& $DotNet build (Join-Path $repoRoot 'builder\helengine.x360.builder.csproj') -c Debug --artifacts-path $builderArtifacts -p:HelengineRoot=$engineRoot -v:q -nologo *> (Join-Path $logsRoot 'builder-build.log')
+& rtk proxy $DotNet build (Join-Path $repoRoot 'builder\helengine.x360.builder.csproj') -c Debug --artifacts-path $builderArtifacts -p:HelengineRoot=$engineRoot -v:q -nologo *> (Join-Path $logsRoot 'builder-build.log')
 if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $logsRoot 'builder-build.log') -Tail 20; throw 'The Xbox 360 platform builder failed to build.' }
 $builderAssembly = Join-Path $builderArtifacts 'bin\helengine.x360.builder\debug\helengine.x360.builder.dll'
 if (-not (Test-Path -LiteralPath $builderAssembly -PathType Leaf)) { throw "Builder assembly was not produced: $builderAssembly" }
 
 # 2. Stage the project: assets and settings only. The authoring project keeps its own
 # user_settings, caches and build outputs, none of which belong to this build.
-$engineVersion = '1.0.0+' + ((& git -c "safe.directory=$engineRoot" -C $engineRoot rev-parse HEAD | Out-String).Trim())
+$engineVersion = '1.0.0+' + ((& rtk proxy git -c "safe.directory=$engineRoot" -C $engineRoot rev-parse HEAD | Out-String).Trim())
 if ($engineVersion -notmatch '^1\.0\.0\+[0-9a-f]{40}$') { throw "Could not resolve the engine revision from $engineRoot" }
 $stagedProject = Join-Path $output 'staged-project'
-New-Item -ItemType Directory -Path $stagedProject | Out-Null
+New-Item -ItemType Directory -Path $stagedProject -Force | Out-Null
 foreach ($relative in @('assets', 'settings')) {
     $sourcePath = Join-Path $projectRoot $relative
     if (-not (Test-Path -LiteralPath $sourcePath)) { throw "Project is missing ${relative}: $sourcePath" }
-    & robocopy $sourcePath (Join-Path $stagedProject $relative) /E /NFL /NDL /NJH /NJS /NP /XD bin obj .generated-build | Out-Null
+    & rtk proxy robocopy $sourcePath (Join-Path $stagedProject $relative) /E /NFL /NDL /NJH /NJS /NP /XD bin obj .generated-build | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Staging $relative failed with robocopy exit code $LASTEXITCODE" }
+}
+if (-not [string]::IsNullOrWhiteSpace($StagedProjectPreparationScript)) {
+    $preparationScript = (Resolve-Path -LiteralPath $StagedProjectPreparationScript).Path
+    & $preparationScript -StagedProjectRoot $stagedProject
 }
 $stagedScene = Join-Path $stagedProject ('assets\' + $SceneRelativePath.Replace('/', '\'))
 if (-not (Test-Path -LiteralPath $stagedScene -PathType Leaf)) { throw "Staged project lacks the scene to build: $stagedScene" }
-$sceneHash = (Get-FileHash -LiteralPath $stagedScene -Algorithm SHA256).Hash.ToLowerInvariant()
-$sceneText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($stagedScene))
-# The scene carries its own authoring asset id; the build configuration below has to
-# name the same one, and reading it beats recording a copy that can go stale.
-$assetIdMatch = [regex]::Match($sceneText, '(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])')
-if (-not $assetIdMatch.Success) { throw "No authoring asset id was found in $stagedScene." }
-$authoringAssetId = $assetIdMatch.Value
+if ($CubeSharedShaders) {
+    if ($SceneRelativePath.Replace('\', '/') -ne 'scenes/rendering/cube_test.helen') {
+        throw 'CubeSharedShaders only supports the existing cube_test scene.'
+    }
+    $preparationProject = Join-Path $repoRoot 'tools\cube-scene-preparation\cube-scene-preparation.csproj'
+    $preparationOutput = Join-Path $output 'scene-preparation-tool'
+    & rtk proxy $DotNet build $preparationProject -o $preparationOutput "-p:EditorPublishRoot=$(Split-Path -Parent $editorApp)" --nologo -v:q
+    if ($LASTEXITCODE -ne 0) { throw 'Building cube shader preparation failed.' }
+    & rtk proxy $DotNet (Join-Path $preparationOutput 'cube-scene-preparation.dll') $stagedProject (Join-Path $repoRoot 'tests\shaders\mesh-material.hlsl')
+    if ($LASTEXITCODE -ne 0) { throw 'Preparing staged cube shader material failed.' }
+}
+$selectedScenes = @()
+for ($sceneIndex = 0; $sceneIndex -lt $scenePaths.Count; $sceneIndex++) {
+    $selectedPath = Join-Path $stagedProject ('assets\' + $scenePaths[$sceneIndex].Replace('/', '\'))
+    if (-not (Test-Path -LiteralPath $selectedPath -PathType Leaf)) { throw "Staged scene is missing: $selectedPath" }
+    $selectedText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($selectedPath))
+    $assetIdMatch = [regex]::Match($selectedText, '(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])')
+    if (-not $assetIdMatch.Success) { throw "No authoring asset id was found in $selectedPath." }
+    $selectedScenes += [pscustomobject]@{
+        relativePath = $scenePaths[$sceneIndex]
+        sceneId = $sceneIds[$sceneIndex]
+        assetId = $assetIdMatch.Value
+        contentHash = 'sha256:' + (Get-FileHash -LiteralPath $selectedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        text = $selectedText
+    }
+}
+$sceneHash = $selectedScenes[0].contentHash.Substring(7)
+$sceneText = ($selectedScenes | ForEach-Object { $_.text }) -join "`n"
 
 # 3. Prune project code to the scripts the scene names, plus whatever those need.
 # The scene records each script component as "Namespace.Type, assembly", so the scene
@@ -132,6 +199,9 @@ foreach ($moduleFile in Get-ChildItem -LiteralPath $codebaseRoot -Recurse -Filte
     $module = Get-Content -LiteralPath $moduleFile.FullName -Raw | ConvertFrom-Json
     if ([string]$module.moduleKind -ne 'runtime') {
         $removedModules += [string]$module.moduleId
+        if (-not $moduleFile.DirectoryName.StartsWith($codebaseRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Module removal must stay beneath the staged codebase: $($moduleFile.DirectoryName)"
+        }
         Remove-Item -LiteralPath $moduleFile.DirectoryName -Recurse -Force
     }
 }
@@ -212,15 +282,14 @@ $buildConfig = [ordered]@{
     platforms = @(
         [ordered]@{
             platformId = 'x360'
-            selectedSceneReferences = @([ordered]@{
-                sourceKind = 1
-                relativePath = $SceneRelativePath
-                providerId = ''
-                assetId = $authoringAssetId
-                contentHash = 'sha256:' + $sceneHash
+            overridesProjectScenes = $true
+            selectedSceneReferences = @($selectedScenes | ForEach-Object {
+                [ordered]@{ sourceKind = 1; relativePath = $_.relativePath; providerId = ''; assetId = $_.assetId; contentHash = $_.contentHash }
             })
-            selectedSceneIds = @($SceneId)
-            sceneOrders = @([ordered]@{ sceneId = $SceneId; orderNumber = 1 })
+            selectedSceneIds = @($sceneIds)
+            sceneOrders = @(for ($sceneIndex = 0; $sceneIndex -lt $sceneIds.Count; $sceneIndex++) {
+                [ordered]@{ sceneId = $sceneIds[$sceneIndex]; orderNumber = $sceneIndex + 1 }
+            })
             outputDirectoryPath = $editorOutput
             debugBuild = $false
             selectedEnvironmentId = 'release'
@@ -237,15 +306,15 @@ $buildConfig = [ordered]@{
     )
     queueItems = @()
 }
-New-Item -ItemType Directory -Path (Join-Path $stagedProject 'user_settings') | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stagedProject 'user_settings') -Force | Out-Null
 $buildConfig | ConvertTo-Json -Depth 8 | Out-File -LiteralPath (Join-Path $stagedProject 'user_settings\build_config.json') -Encoding utf8
 
 # 6. A build-local engine registry, so this build neither reads nor disturbs the
 # machine-local one another session may be editing.
 $generatedCoreRoot = Join-Path $output 'generated-core'
-New-Item -ItemType Directory -Path $generatedCoreRoot | Out-Null
+New-Item -ItemType Directory -Path $generatedCoreRoot -Force | Out-Null
 $engineUserSettings = Join-Path $output 'engine-user-settings'
-New-Item -ItemType Directory -Path $engineUserSettings | Out-Null
+New-Item -ItemType Directory -Path $engineUserSettings -Force | Out-Null
 $publishedCodegen = Join-Path (Split-Path -Parent $editorApp) 'codegen'
 [ordered]@{
     platforms = @(
@@ -268,24 +337,28 @@ $publishedCodegen = Join-Path (Split-Path -Parent $editorApp) 'codegen'
 # It is cleared first: dotnet publish leaves files it considers current, so publishing a
 # different csharpcodegen over an earlier one leaves one commit's tool beside another
 # commit's bundled runtime headers, which compiles a core the headers do not describe.
-if (Test-Path -LiteralPath $publishedCodegen) { Remove-Item -LiteralPath $publishedCodegen -Recurse -Force }
-$codegenPublishLog = Join-Path $logsRoot 'codegen-publish.log'
-& $DotNet publish $codegenProject -c Release -o $publishedCodegen -v:q --nologo *> $codegenPublishLog
-if ($LASTEXITCODE -ne 0) { Get-Content $codegenPublishLog -Tail 20; throw "Publishing codegen beside the editor failed with exit code $LASTEXITCODE." }
+$publishedCodegen = [IO.Path]::GetFullPath($publishedCodegen)
+if (-not $UsePublishedCodegen) {
+    if (-not $publishedCodegen.StartsWith('C:\dev\helworks\builds\helengine-x360\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Codegen output must stay in this platform build root.' }
+    if (Test-Path -LiteralPath $publishedCodegen) { Remove-Item -LiteralPath $publishedCodegen -Recurse -Force }
+    $codegenPublishLog = Join-Path $logsRoot 'codegen-publish.log'
+    & rtk proxy $DotNet publish $codegenProject -c Release -o $publishedCodegen --artifacts-path (Join-Path $output 'codegen-artifacts') -v:q --nologo *> $codegenPublishLog
+    if ($LASTEXITCODE -ne 0) { Get-Content $codegenPublishLog -Tail 20; throw "Publishing codegen beside the editor failed with exit code $LASTEXITCODE." }
+}
 if (-not (Test-Path -LiteralPath (Join-Path $publishedCodegen 'codegen.exe') -PathType Leaf)) {
     throw "codegen publish did not produce the tool: $publishedCodegen"
 }
-$codegenCommit = (& git -c "safe.directory=$codegenRoot" -C $codegenRoot rev-parse HEAD 2>$null | Out-String).Trim()
+$codegenCommit = (& rtk proxy git -c "safe.directory=$codegenRoot" -C $codegenRoot rev-parse HEAD 2>$null | Out-String).Trim()
 
 # 8. Run the editor's headless build graph against the staged project.
 $workspaceRoot = Join-Path $output 'workspace'
-New-Item -ItemType Directory -Path $workspaceRoot | Out-Null
+New-Item -ItemType Directory -Path $workspaceRoot -Force | Out-Null
 $env:HELENGINE_SOURCE_ROOT = $engineRoot
 $env:HELENGINE_ENGINE_USER_SETTINGS_ROOT = $engineUserSettings
 $env:HELENGINE_BUILD_WORKSPACE_ROOT = $workspaceRoot
 $env:HELENGINE_X360_REPOSITORY_ROOT = $repoRoot
 $editorLog = Join-Path $logsRoot 'editor-build.log'
-& $DotNet $editorApp --project (Join-Path $stagedProject 'project.heproj') --build x360 --build-profile release --output $editorOutput *> $editorLog
+& rtk proxy $DotNet $editorApp --project (Join-Path $stagedProject 'project.heproj') --build x360 --build-profile release --output $editorOutput *> $editorLog
 $editorExit = $LASTEXITCODE
 
 [ordered]@{
@@ -300,13 +373,20 @@ $editorExit = $LASTEXITCODE
     project_root = $projectRoot
     scene_relative_path = $SceneRelativePath
     scene_id = $SceneId
+    staged_project_preparation_script = $StagedProjectPreparationScript
+    cube_shared_shaders = [bool]$CubeSharedShaders
     scene_sha256 = $sceneHash
+    selected_scenes = @($selectedScenes | ForEach-Object {
+        [ordered]@{ scene_relative_path = $_.relativePath; scene_id = $_.sceneId; asset_id = $_.assetId; content_hash = $_.contentHash }
+    })
     retained_script_classes = $retainedScriptClasses
     staged_project = $stagedProject
     generated_core_root = $generatedCoreRoot
     workspace_root = $workspaceRoot
     editor_output = $editorOutput
     editor_exit_code = $editorExit
+    reused_output = [bool]$ReuseOutput
+    reused_published_codegen = [bool]$UsePublishedCodegen
 } | ConvertTo-Json -Depth 4 | Out-File -LiteralPath (Join-Path $output 'authored-build.json') -Encoding utf8
 
 if ($editorExit -ne 0) {

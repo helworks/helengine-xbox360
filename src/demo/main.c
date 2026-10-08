@@ -24,7 +24,13 @@
 #define HEL_CORE_BOOT 1
 #endif
 #ifndef HEL_HEAP_BYTES
-#define HEL_HEAP_BYTES (32u * 1024u * 1024u)
+/* Authored 2048x2048 textures require both the decoded 16 MiB asset and its
+   upload staging copy to coexist with the scene and font assets. */
+#define HEL_HEAP_BYTES (64u * 1024u * 1024u)
+#endif
+
+#if defined(HEL_SHADER_GPU_PROBE) && HEL_SHADER_GPU_PROBE
+#include "shader_gpu_probe.inc"
 #endif
 
 #if HEL_CORE_BOOT
@@ -75,9 +81,19 @@ static int clear_frame(uint32_t frame, void *user) {
     unsigned phase = (frame / 60u) & 1u;
     int err = hel_frame_begin(phase ? 0.25f : 0.02f, 0.02f, 0.08f, 1.0f);
 #endif
+#if defined(HEL_SHADER_GPU_PROBE) && HEL_SHADER_GPU_PROBE
+    if (!err) {
+        err = hel_demo_shader_gpu_probe_overlay();
+    }
+#endif
     if (!err) {
         err = hel_frame_present();
     }
+#if defined(HEL_SHADER_GPU_PROBE) && HEL_SHADER_GPU_PROBE
+    if (!err) {
+        hel_demo_shader_gpu_probe_after_present();
+    }
+#endif
     return err;
 }
 

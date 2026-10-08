@@ -19,7 +19,7 @@ public static class Xbox360PlatformDefinitionFactory {
     /// microcode rather than the engine's shader system, and there is no debug overlay.
     /// Ids must exist in the engine feature catalog.
     /// </summary>
-    const string ForcedDisabledFeatures = "shaders;debug_overlay";
+    const string ForcedDisabledFeatures = "debug_overlay";
 
     /// <summary>Builds the Xbox 360 platform definition.</summary>
     /// <returns>Platform definition consumed by the editor build graph.</returns>
@@ -38,12 +38,13 @@ public static class Xbox360PlatformDefinitionFactory {
             PlatformSerializationEndianness.BigEndian,
             [
                 new(PlatformCodegenSettingIds.ForcedDisabledFeatures, "Forced Disabled Features", PlatformSettingKind.Text, ForcedDisabledFeatures, true, []),
+                new(PlatformCodegenSettingIds.EnabledFeatures, "Enabled Features", PlatformSettingKind.Text, "shaders", true, []),
                 new("generated-math-convention", "Generated Math Convention", PlatformSettingKind.Text, "engine-row-vector", true, []),
                 // 32-bit: the image is linked at a 32-bit base and every pointer in it is four
                 // bytes, whatever the processor is capable of.
                 new("pointer-size-bytes", "Pointer Size (Bytes)", PlatformSettingKind.Text, "4", true, []),
                 new("include-project-defined-preprocessor-symbols", "Include Project Preprocessor Symbols", PlatformSettingKind.Boolean, "false", true, []),
-                new("additional-preprocessor-symbols", "Additional Preprocessor Symbols", PlatformSettingKind.Text, "HELENGINE_CODEGEN_DISABLE_MENU_REFLECTION;HELENGINE_CODEGEN_DISABLE_RUNTIME_SCRIPT_REFLECTION", true, []),
+                new("additional-preprocessor-symbols", "Additional Preprocessor Symbols", PlatformSettingKind.Text, "HELENGINE_CODEGEN_DISABLE_MENU_REFLECTION;HELENGINE_CODEGEN_DISABLE_RUNTIME_SCRIPT_REFLECTION;HELENGINE_CODEGEN_FATAL_ONLY", true, []),
                 new("load-native-runtime-metadata", "Load Native Runtime Metadata", PlatformSettingKind.Boolean, "false", true, []),
                 new("codegen-use-std-string", "Use std::string", PlatformSettingKind.Boolean, "false", true, []),
                 new("codegen-use-std-vector", "Use std::vector", PlatformSettingKind.Boolean, "false", true, []),
@@ -88,7 +89,15 @@ public static class Xbox360PlatformDefinitionFactory {
             profiles,
             [new PlatformGraphicsProfileDefinition(Xbox360MaterialSchemaIds.RendererFamilyId, "Xbox 360 Unlit", "Xenos command-ring renderer, unlit vertex colours, depth tested", [])],
             [new PlatformAssetRequirementDefinition("scene", "Scene", true, ["helen"])],
-            [materialSchema],
+            [materialSchema, new PlatformMaterialSchemaDefinition(
+                Xbox360MaterialSchemaIds.MeshShaderSchemaId, "Xbox 360 Mesh Shader V1",
+                [Xbox360MaterialSchemaIds.RendererFamilyId],
+                [
+                    new(Xbox360MaterialSchemaIds.ShaderAssetFieldId, "Shader Asset", PlatformMaterialFieldKind.Text, string.Empty, true, []),
+                    new(Xbox360MaterialSchemaIds.VertexProgramFieldId, "Vertex Program", PlatformMaterialFieldKind.Text, string.Empty, true, []),
+                    new(Xbox360MaterialSchemaIds.PixelProgramFieldId, "Pixel Program", PlatformMaterialFieldKind.Text, string.Empty, true, []),
+                    new(Xbox360MaterialSchemaIds.BaseColorFieldId, "Base Color", PlatformMaterialFieldKind.Color, "#FFFFFFFF", true, [])
+                ])],
             [
                 new PlatformComponentSupportRule("helengine.meshcomponent", PlatformComponentSupportKind.Transform, "Static triangle-list meshes with 16-bit indices are drawn.", "Remove meshes that need 32-bit indices."),
                 new PlatformComponentSupportRule("helengine.cameracomponent", PlatformComponentSupportKind.Transform, "Perspective cameras are supported and supply their own field of view.", "Keep at least one authored camera."),

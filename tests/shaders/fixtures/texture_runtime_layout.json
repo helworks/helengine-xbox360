@@ -1,0 +1,15 @@
+{
+  "varyings": {
+    "0": 0,
+    "1": 1
+  },
+  "texture_bindings": [
+    {
+      "texture_set": 0,
+      "texture_binding": 0,
+      "sampler_set": 0,
+      "sampler_binding": 0,
+      "fetch_constant": 1
+    }
+  ]
+}

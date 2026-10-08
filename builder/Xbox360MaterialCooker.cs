@@ -22,7 +22,8 @@ public sealed class Xbox360MaterialCooker {
         if (!string.Equals(request.TargetPlatformId, "x360", StringComparison.OrdinalIgnoreCase)) {
             throw new InvalidOperationException($"The Xbox 360 builder cannot cook materials for target platform '{request.TargetPlatformId}'.");
         }
-        if (!string.Equals(request.SchemaId, Xbox360MaterialSchemaIds.OpaqueSchemaId, StringComparison.OrdinalIgnoreCase)) {
+        bool meshShader = string.Equals(request.SchemaId, Xbox360MaterialSchemaIds.MeshShaderSchemaId, StringComparison.OrdinalIgnoreCase);
+        if (!meshShader && !string.Equals(request.SchemaId, Xbox360MaterialSchemaIds.OpaqueSchemaId, StringComparison.OrdinalIgnoreCase)) {
             throw new InvalidOperationException($"The Xbox 360 builder does not support material schema '{request.SchemaId}'.");
         }
 
@@ -44,6 +45,30 @@ public sealed class Xbox360MaterialCooker {
         ParseColor(Resolve(request.FieldValues, Xbox360MaterialSchemaIds.BaseColorFieldId, "#FFFFFFFF"), out byte r, out byte g, out byte b, out byte a);
         if (a != 255) {
             throw new InvalidOperationException($"The Xbox 360 opaque schema requires an alpha of FF; '{request.MaterialRelativePath}' has alpha {a:X2}.");
+        }
+
+        if (meshShader) {
+            var dependency = new PlatformShaderDependency(
+                Resolve(request.FieldValues, Xbox360MaterialSchemaIds.ShaderAssetFieldId),
+                Resolve(request.FieldValues, Xbox360MaterialSchemaIds.VertexProgramFieldId),
+                Resolve(request.FieldValues, Xbox360MaterialSchemaIds.PixelProgramFieldId),
+                Xbox360MaterialSchemaIds.MeshVariant);
+            _ = Xbox360ShaderArtifactCooker.RelativePath(dependency);
+            byte[] color = new byte[16];
+            float[] channels = [r / 255f, g / 255f, b / 255f, 1f];
+            for (int i = 0; i < 4; i++)
+                System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(color.AsSpan(i * 4, 4), channels[i]);
+            using var material = new helengine.ShaderMaterialAsset {
+                Id = request.MaterialAssetId,
+                ShaderAssetId = dependency.ShaderAssetId,
+                VertexProgram = dependency.VertexProgramName,
+                PixelProgram = dependency.PixelProgramName,
+                Variant = dependency.VariantName,
+                CastsShadows = false,
+                ReceivesShadows = false,
+                ConstantBuffers = [helengine.MaterialConstantBufferAsset.Create("Material", color)]
+            };
+            return new PlatformMaterialCookResult(helengine.ShaderMaterialAssetBinarySerializer.SerializeToBytes(material), [dependency]);
         }
 
         helengine.PlatformMaterialAsset cooked = new() {

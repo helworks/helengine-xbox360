@@ -21,6 +21,7 @@ public sealed class Xbox360NativeBuildExecutor : IXbox360NativeBuildExecutor {
         string contentRootPath,
         string catalogRootPath,
         string outputRootPath,
+        string nativeObjectCacheRootPath,
         CancellationToken cancellationToken) {
         string repositoryRoot = ResolveRepositoryRoot();
         string scriptPath = Path.Combine(repositoryRoot, "tools", "build-image.ps1");
@@ -48,6 +49,8 @@ public sealed class Xbox360NativeBuildExecutor : IXbox360NativeBuildExecutor {
         startInfo.ArgumentList.Add(Path.GetFullPath(catalogRootPath));
         startInfo.ArgumentList.Add("-OutputRoot");
         startInfo.ArgumentList.Add(Path.GetFullPath(outputRootPath));
+        startInfo.ArgumentList.Add("-NativeObjectCacheRoot");
+        startInfo.ArgumentList.Add(Path.GetFullPath(nativeObjectCacheRootPath));
 
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The Xbox 360 native build process could not be started.");

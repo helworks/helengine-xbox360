@@ -16,7 +16,7 @@ namespace helengine.x360.builder;
 /// declares, writes the scene catalog the console reads at boot, and runs the native build
 /// that compiles the core and links the image.
 /// </remarks>
-public sealed class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder {
+public sealed partial class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder, IPlatformShaderArtifactBuilder, IPlatformRendererShaderDependencyProvider {
     /// <summary>The image the native build must produce for a build to count as successful.</summary>
     public const string ImageFileName = "helengine.xex";
 
@@ -51,6 +51,12 @@ public sealed class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder {
 
     /// <inheritdoc />
     public PlatformDefinition Definition { get; }
+
+    public IReadOnlyList<PlatformShaderDependency> RendererShaderDependencies =>
+        Array.AsReadOnly(new[] { new PlatformShaderDependency("SpriteBatchShader", "SpriteBatchShader.vs", "SpriteBatchShader.ps", "Textured") });
+
+    public PlatformShaderArtifactCookResult CookShaderArtifacts(PlatformShaderArtifactCookRequest request) =>
+        new Xbox360ShaderArtifactCooker().Cook(request);
 
     /// <inheritdoc />
     public PlatformMaterialCookResult CookMaterial(PlatformMaterialCookRequest request) => MaterialCooker.Cook(request);
@@ -94,7 +100,10 @@ public sealed class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder {
             new Xbox360StartupCatalogWriter().Write(catalogRoot, request.Manifest);
 
             progressReporter.Report(new PlatformBuildProgressUpdate("Build Image", ImageFileName, 0, 1, "Compiling the generated core and linking the image."));
-            NativeBuildExecutor.Build(request.GeneratedCoreCppRootPath, stagingRoot, catalogRoot, request.OutputRoot, cancellationToken);
+            string nativeCacheRoot = string.IsNullOrWhiteSpace(request.NativeObjectCacheRoot)
+                ? Path.Combine(request.WorkingRoot, "x360-native-cache")
+                : request.NativeObjectCacheRoot;
+            NativeBuildExecutor.Build(request.GeneratedCoreCppRootPath, stagingRoot, catalogRoot, request.OutputRoot, nativeCacheRoot, cancellationToken);
             progressReporter.Report(new PlatformBuildProgressUpdate("Build Image", ImageFileName, 1, 1, "Linked the image."));
         } catch (OperationCanceledException) {
             throw;

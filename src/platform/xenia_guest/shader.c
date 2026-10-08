@@ -149,3 +149,11 @@ void hel_shaders_emit_kind(HelShaderKind kind) {
     hel_ring_reg(XE_GPU_REG_SQ_VS_CONST, 0x000FF000u);
     hel_ring_reg(XE_GPU_REG_SQ_PS_CONST, 0x000FF100u);
 }
+
+#if defined(HEL_SHADER_GPU_PROBE) && HEL_SHADER_GPU_PROBE
+#ifndef HEL_SHADER_GPU_PROBE_HEADER
+#define HEL_SHADER_GPU_PROBE_HEADER "../../../build/shader-gpu-probe/probe_shaders.h"
+#endif
+#include HEL_SHADER_GPU_PROBE_HEADER
+#include "shader_gpu_probe.inc"
+#endif

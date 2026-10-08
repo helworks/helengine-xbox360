@@ -217,16 +217,24 @@ def classify_pages(elf, base, image_size, page_size):
     return [tuple(run) for run in runs]
 
 
-def build_import_block(records):
-    library_name = KERNEL_LIBRARY.encode("ascii") + b"\0"
-    string_table = library_name.ljust(align_up(len(library_name), 4), b"\0")
-    library = struct.pack(">I", 0x28 + 4 * len(records))
-    library += b"\0" * 20                       # next_import_digest
-    library += struct.pack(">III", 0, 0, 0)     # id, version, version_min
-    library += struct.pack(">HH", 0, len(records))
-    for address in records:
-        library += struct.pack(">I", address)
-    block = struct.pack(">II", len(string_table), 1) + string_table + library
+def build_import_block(records, xam_records=None):
+    """Encode separate kernel and XAM tables so equal ordinals resolve correctly."""
+    groups = [(KERNEL_LIBRARY, records)]
+    if xam_records:
+        groups.append(("xam.xex", xam_records))
+    string_table = b""
+    libraries = b""
+    for name_index, (name, addresses) in enumerate(groups):
+        library_name = name.encode("ascii") + b"\0"
+        string_table += library_name.ljust(align_up(len(library_name), 4), b"\0")
+        library = struct.pack(">I", 0x28 + 4 * len(addresses))
+        library += b"\0" * 20
+        library += struct.pack(">III", 0, 0, 0)
+        library += struct.pack(">HH", name_index, len(addresses))
+        for address in addresses:
+            library += struct.pack(">I", address)
+        libraries += library
+    block = struct.pack(">II", len(string_table), len(groups)) + string_table + libraries
     return struct.pack(">I", 4 + len(block)) + block
 
 
@@ -279,6 +287,7 @@ def build_xex(elf, nm_symbols, imports, base, page_size, stack_size,
     page_runs = classify_pages(elf, base, image_size, page_size)
 
     records = []
+    xam_records = []
     import_report = []
     for name, ordinal in imports:
         try:
@@ -291,14 +300,16 @@ def build_xex(elf, nm_symbols, imports, base, page_size, stack_size,
         if var_value != ordinal or thunk_value != (0x01000000 | ordinal):
             raise ValueError("import record contents for %s do not match "
                              "ordinal %d" % (name, ordinal))
-        records += [var_addr, thunk_addr]
+        library_name = "xam.xex" if name.startswith("Xam") else KERNEL_LIBRARY
+        (xam_records if library_name == "xam.xex" else records).extend([var_addr, thunk_addr])
         import_report.append({"name": name, "ordinal": ordinal,
+                              "library": library_name,
                               "variable": "0x%08X" % var_addr,
                               "thunk": "0x%08X" % thunk_addr})
 
-    import_block = build_import_block(records)
+    import_block = build_import_block(records, xam_records)
     file_format = struct.pack(">IHH", 8, 0, 0)
-    security = build_security_info(base, image_size, page_runs, len(records))
+    security = build_security_info(base, image_size, page_runs, len(records) + len(xam_records))
 
     opt_headers = [
         (XEX_HEADER_FILE_FORMAT_INFO, "block", file_format),

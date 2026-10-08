@@ -15,7 +15,10 @@
 #include "xenia_guest.h"
 #include "xenos_regs.h"
 
-#define HEL_RING_SIZE_LOG2 13u /* VdInitializeRingBuffer: bytes = 1 << (13+3) */
+/* Shared authored text batches upload validated shader pairs per run. A
+   1 MiB ring reserves 512 KiB for a contiguous frame; the prior 32 KiB
+   frame budget exhausted during DemoDisc's first outlined-text pass. */
+#define HEL_RING_SIZE_LOG2 17u /* VdInitializeRingBuffer: bytes = 1 << (17+3) */
 #define HEL_RING_BYTES (1u << (HEL_RING_SIZE_LOG2 + 3u))
 #define HEL_RING_DWORDS (HEL_RING_BYTES / 4u)
 #define HEL_MAX_FRAME_DWORDS (HEL_RING_DWORDS / 2u)
@@ -84,6 +87,16 @@ void hel_ring_type3(uint32_t opcode, uint32_t count) {
 }
 
 int hel_ring_overflowed(void) { return g.overflow; }
+
+uint32_t hel_ring_available(void) {
+    if (!g.ready || g.overflow || g.write_index < g.frame_start_index ||
+        g.write_index >= HEL_RING_DWORDS) return 0;
+    uint32_t used = g.write_index - g.frame_start_index;
+    if (used >= HEL_MAX_FRAME_DWORDS) return 0;
+    uint32_t frame = HEL_MAX_FRAME_DWORDS - used;
+    uint32_t contiguous = HEL_RING_DWORDS - g.write_index;
+    return frame < contiguous ? frame : contiguous;
+}
 
 uint32_t hel_video_width(void) { return g.width; }
 
@@ -333,6 +346,10 @@ int hel_frame_present(void) {
         waited_ms++;
     }
     uint64_t done_ticks = hel_ticks();
+    /* Scene disposal can happen before present. Retired textures remain valid
+       for every recorded draw until this fence acknowledges GPU completion. */
+    hel_texture_collect_retired();
+    hel_mesh_collect_retired();
     g.frames_presented++;
     g.last_present_ticks = done_ticks;
     if (g.frames_presented == 1) {

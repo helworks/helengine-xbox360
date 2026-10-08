@@ -1,0 +1,17 @@
+{
+  "vertex_inputs": {
+    "0": {"fetch_constant": 0, "stride": 12, "offset": 0, "format": "32_32_32_FLOAT"},
+    "3": {"fetch_constant": 0, "stride": 12, "offset": 8, "format": "32_32_32_32_FLOAT"},
+    "2": {"fetch_constant": 0, "stride": 12, "offset": 6, "format": "32_32_FLOAT"}
+  },
+  "uniforms": {
+    "0": [
+      [0.65, 0.10, 0.0, 0.0],
+      [0.20, 0.65, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0],
+      [0.0, 0.0, 0.0, 1.0],
+      [1.0, 0.75, 0.5, 1.0]
+    ]
+  },
+  "varyings": {"0": 0, "1": 1}
+}

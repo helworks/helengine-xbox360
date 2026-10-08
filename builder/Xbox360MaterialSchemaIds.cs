@@ -13,6 +13,12 @@ public static class Xbox360MaterialSchemaIds {
     /// <summary>Schema for the only material this target currently cooks.</summary>
     public const string OpaqueSchemaId = "x360-opaque-unlit";
 
+    public const string MeshShaderSchemaId = "x360-mesh-shader-v1";
+    public const string ShaderAssetFieldId = "shader-asset-id";
+    public const string VertexProgramFieldId = "vertex-program";
+    public const string PixelProgramFieldId = "pixel-program";
+    public const string MeshVariant = "MeshMaterialV1";
+
     /// <summary>Base colour field, the one value the renderer reads today.</summary>
     public const string BaseColorFieldId = "base-color";
 

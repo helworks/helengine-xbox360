@@ -33,6 +33,7 @@ void hel_ring_put(uint32_t value);
 void hel_ring_reg(uint32_t index, uint32_t value);
 void hel_ring_type3(uint32_t opcode, uint32_t count);
 int hel_ring_overflowed(void);
+uint32_t hel_ring_available(void);
 uint32_t hel_video_width(void);
 uint32_t hel_video_height(void);
 
@@ -53,6 +54,29 @@ void hel_shaders_emit_kind(HelShaderKind kind);
 /* Forgets which program pair the ring carries, so the next draw uploads it
    again. Called when a frame begins. */
 void hel_shaders_frame_reset(void);
+
+#include "x360_shader_runtime.h"
+typedef struct {
+    const HelShaderProgram *program;
+    const uint32_t *constants;
+    uint32_t viewport[4];
+    uint32_t scissor[4];
+    const uint32_t *pixel_constants;
+} HelBatchDraw;
+int hel_draw_batch(const void *vertices, uint32_t vertex_count,
+    const uint16_t *indices, uint32_t index_count, HelTexture texture,
+    const HelBatchDraw *batch);
+int hel_draw_mesh_program(HelMesh mesh, const HelShaderProgram *program,
+    const float row_mvp[16], const uint32_t color[4]);
+
+#if defined(HEL_SHADER_GPU_PROBE) && HEL_SHADER_GPU_PROBE
+/* Active only around the single diagnostic draw; toggles invalidate the
+   legacy emitted-program cache so ordinary draws always restore their pair. */
+void hel_shader_gpu_probe_set_active(int active);
+int hel_shader_gpu_probe_is_active(void);
+int hel_shader_gpu_probe_emit(void);
+void hel_shader_gpu_probe_constants(void);
+#endif
 
 /* Writes the texture fetch constant a sampling draw reads. Valid only between
    hel_frame_begin and hel_frame_present, like everything else that writes the

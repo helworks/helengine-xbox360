@@ -14,11 +14,13 @@ public interface IXbox360NativeBuildExecutor {
     /// <param name="contentRootPath">Staged cooked content packed into the image.</param>
     /// <param name="catalogRootPath">Directory holding the generated scene catalog.</param>
     /// <param name="outputRootPath">Directory receiving the image.</param>
+    /// <param name="nativeObjectCacheRootPath">Stable, project/profile-scoped compiler cache.</param>
     /// <param name="cancellationToken">Cancellation token honoured by killing the process tree.</param>
     void Build(
         string generatedCoreCppRootPath,
         string contentRootPath,
         string catalogRootPath,
         string outputRootPath,
+        string nativeObjectCacheRootPath,
         CancellationToken cancellationToken);
 }

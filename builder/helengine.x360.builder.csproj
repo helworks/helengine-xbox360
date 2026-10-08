@@ -15,6 +15,44 @@
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj" />
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.core\helengine.core.csproj" />
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.files\helengine.files.csproj" />
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\xenos_asm.py"
+             Link="shader-tools\xenos_asm.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\xenos_asm.py')" />
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_protocol.py"
+             Link="shader-tools\shader-probe\backend_protocol.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_protocol.py')" />
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_layout.py"
+             Link="shader-tools\shader-probe\backend_layout.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_layout.py')" />
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\shader_probe.py"
+             Link="shader-tools\shader-probe\shader_probe.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\shader_probe.py')" />
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\lower_xenos.py"
+             Link="shader-tools\shader-probe\lower_xenos.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\lower_xenos.py')" />
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\spirv_parser.py"
+             Link="shader-tools\shader-probe\spirv_parser.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\spirv_parser.py')" />
+    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\vertex_layout.py"
+             Link="shader-tools\shader-probe\vertex_layout.py"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\vertex_layout.py')" />
   </ItemGroup>
   <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
     <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj')" Text="helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT to the shared engine checkout." />

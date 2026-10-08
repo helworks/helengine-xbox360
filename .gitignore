@@ -22,3 +22,12 @@ Thumbs.db
 # .NET build output from the platform builder.
 builder/bin/
 builder/obj/
+builder.tests/bin/
+builder.tests/obj/
+builder.tests/fixtures/Xbox360ShaderProtocolFixture/bin/
+builder.tests/fixtures/Xbox360ShaderProtocolFixture/obj/
+.artifacts/
+tools/cube-scene-preparation/bin/
+tools/cube-scene-preparation/obj/
+tests/cube-scene-preparation/bin/
+tests/cube-scene-preparation/obj/

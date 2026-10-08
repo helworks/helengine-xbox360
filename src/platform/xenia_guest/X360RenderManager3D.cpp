@@ -37,6 +37,10 @@
 #include "LightDirectionUtility.hpp"
 #include "IContentStreamSource.hpp"
 #include "PlatformMaterialAsset.hpp"
+#include "EngineBinaryHeader.hpp"
+#include "EngineBinaryHeaderSerializer.hpp"
+#include "ShaderMaterialAsset.hpp"
+#include "ShaderMaterialAssetBinarySerializer.hpp"
 #include "X360EngineMath.hpp"
 #include "float2.hpp"
 #include "float3.hpp"
@@ -106,8 +110,10 @@ public:
             params.base_color[3] = (float)(material->baseColor & 0xFFu) / 255.0f;
         }
 
-        const int error =
-            hel_draw_shaded(model->mesh(), &mvp, &modelMatrix, &params);
+        // Column-major storage of the backend transpose is the Engine row matrix.
+        const int error = material && material->program.view.data
+            ? hel_draw_mesh_program(model->mesh(), &material->program, mvp.m, material->pixelConstants)
+            : hel_draw_shaded(model->mesh(), &mvp, &modelMatrix, &params);
         if (error != HEL_OK) {
             owner_.recordDrawError(error);
             return;
@@ -142,6 +148,16 @@ private:
 X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
                                    uint32_t indexCount)
     : mesh_(mesh), vertexCount_(vertexCount), indexCount_(indexCount) {}
+
+X360RuntimeModel::~X360RuntimeModel() { Dispose(); }
+
+void X360RuntimeModel::Dispose() {
+    if (mesh_ != 0) {
+        hel_mesh_release(mesh_);
+        mesh_ = 0;
+    }
+    ::RuntimeModel::Dispose();
+}
 
 ::RuntimeModel *X360RenderManager3D::BuildModelFromRaw(::ModelAsset *data) {
     if (data == nullptr || data->Positions == nullptr) {
@@ -245,14 +261,21 @@ X360RuntimeModel::X360RuntimeModel(HelMesh mesh, uint32_t vertexCount,
         hel_log(cookedAssetPath.c_str());
         return nullptr;
     }
-    ::ModelAsset *asset =
-        dynamic_cast<::ModelAsset *>(::AssetSerializer::Deserialize(stream));
+    ::Asset *deserialized = ::AssetSerializer::Deserialize(stream);
+    stream->Dispose();
+    delete stream;
+    ::ModelAsset *asset = dynamic_cast<::ModelAsset *>(deserialized);
     if (!asset) {
         hel_log("HEL render3d: cooked model did not deserialize");
         hel_log(cookedAssetPath.c_str());
+        delete deserialized;
         return nullptr;
     }
-    return BuildModelFromRaw(asset);
+    ::RuntimeModel *model = BuildModelFromRaw(asset);
+    // Successful upload transfers the raw asset to RuntimeModel. Failed upload
+    // has no owner to release its arrays, so this cooked path retains that duty.
+    if (model == nullptr) { asset->Dispose(); delete asset; }
+    return model;
 }
 
 #if defined(HELENGINE_RUNTIME_MATERIAL_RESOLUTION_COOKED_PLATFORM_OWNED)
@@ -289,6 +312,19 @@ X360RenderManager3D::BuildMaterialFromCooked(::PlatformMaterialAsset *materialAs
         hel_log(cookedAssetPath.c_str());
         return BuildMaterialFromCooked((::PlatformMaterialAsset *)nullptr);
     }
+    auto *header = ::EngineBinaryHeaderSerializer::Read(stream);
+    if (header->FormatId == ::ShaderMaterialAssetBinarySerializer::FormatId) {
+        auto *asset = ::ShaderMaterialAssetBinarySerializer::Deserialize(stream, header);
+        auto *material = X360RuntimeMaterial::FromShaderAsset(asset);
+        asset->Dispose();
+        delete asset;
+        stream->Dispose();
+        delete stream;
+        materials_++;
+        return material;
+    }
+    delete header;
+    stream->SetPosition(0);
     /* The payload is whatever the cooker serialized. A different asset type
        here means the build staged the wrong file, which is worth saying rather
        than reading as a default-coloured material. */
@@ -298,7 +334,12 @@ X360RenderManager3D::BuildMaterialFromCooked(::PlatformMaterialAsset *materialAs
         hel_log("HEL render3d: cooked material did not deserialize");
         hel_log(cookedAssetPath.c_str());
     }
-    return BuildMaterialFromCooked(asset);
+    auto *material = BuildMaterialFromCooked(asset);
+    // PlatformMaterialAsset has a destructor, but no Dispose in the generated ABI.
+    delete asset;
+    stream->Dispose();
+    delete stream;
+    return material;
 }
 #endif
 
@@ -572,8 +613,8 @@ void X360RenderManager3D::recordDrawError(int error) {
 }
 
 void X360RenderManager3D::ReleaseModel(::RuntimeModel *model) {
-    /* Mesh storage lives until video shutdown (hel_mesh_release_all), so a
-       released model only drops its handle. */
+    // Core invokes the model's virtual Dispose before deleting it. The platform
+    // override retires GPU storage; present releases it after its final use.
     ::RenderManager3D::ReleaseModel(model);
 }
 

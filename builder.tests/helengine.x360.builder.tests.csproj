@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <HelengineRoot Condition="'$(HelengineRoot)' == '' and '$(HELENGINE_ROOT)' != ''">$(HELENGINE_ROOT)</HelengineRoot>
+    <HelengineRoot Condition="'$(HelengineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\helengine</HelengineRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Compile Remove="fixtures\Xbox360ShaderProtocolFixture\**\*.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <ProjectReference Include="..\builder\helengine.x360.builder.csproj" />
+    <ProjectReference Include="fixtures\Xbox360ShaderProtocolFixture\Xbox360ShaderProtocolFixture.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
+  </ItemGroup>
+
+  <Target Name="CopyXbox360ShaderProtocolFixture" AfterTargets="Build">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)fixtures\Xbox360ShaderProtocolFixture\Xbox360ShaderProtocolFixture.csproj" Targets="GetTargetPath" BuildInParallel="false">
+      <Output TaskParameter="TargetOutputs" ItemName="_Xbox360ShaderProtocolFixtureAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly)" />
+      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).exe')" />
+      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).deps.json')" />
+      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).runtimeconfig.json')" />
+    </ItemGroup>
+    <MakeDir Directories="$(OutDir)shader-protocol-fixture" />
+    <Copy
+      SourceFiles="@(Xbox360ShaderProtocolFixtureFiles)"
+      DestinationFiles="@(Xbox360ShaderProtocolFixtureFiles->'$(OutDir)shader-protocol-fixture\%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
+    <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj')" Text="helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT to the shared engine checkout." />
+  </Target>
+</Project>

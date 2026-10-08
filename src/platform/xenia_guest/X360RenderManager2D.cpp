@@ -7,6 +7,7 @@
 #include "FontChar.hpp"
 #include "FontInfo.hpp"
 #include "ICamera.hpp"
+#include "CameraViewportResolver.hpp"
 #include "IContentStreamSource.hpp"
 #include "IDrawable2D.hpp"
 #include "IRenderQueue2D.hpp"
@@ -27,6 +28,8 @@
 #include "float3.hpp"
 #include "float4.hpp"
 #include "int2.hpp"
+#include "X360RuntimeProvider.hpp"
+#include <cmath>
 
 extern "C" {
 void hel_log(const char *message);
@@ -167,7 +170,7 @@ void X360RenderManager2D::beginFrame() {
 }
 
 void X360RenderManager2D::renderCamera(::ICamera *camera) {
-    flushTextBatch();
+    flushSharedBatch();
     if (camera == nullptr) {
         return;
     }
@@ -179,20 +182,25 @@ void X360RenderManager2D::renderCamera(::ICamera *camera) {
        default is the whole of it. */
     const float screenWidth = (float)hel_video_width();
     const float screenHeight = (float)hel_video_height();
-    const ::float4 viewport = camera->get_Viewport();
-    viewportX_ = viewport.X * screenWidth;
-    viewportY_ = viewport.Y * screenHeight;
-    viewportWidth_ = viewport.Z * screenWidth;
-    viewportHeight_ = viewport.W * screenHeight;
+    const ::float4 viewport = ::CameraViewportResolver::ResolveViewport(
+        camera->get_Viewport(), screenWidth, screenHeight);
+    /* Use one pixel rectangle for projection, hardware viewport and scissor. */
+    viewportX_ = clampf((float)::Math::Ceiling((double)viewport.X - 0.5), 0, screenWidth);
+    viewportY_ = clampf((float)::Math::Ceiling((double)viewport.Y - 0.5), 0, screenHeight);
+    const float right = clampf((float)::Math::Ceiling((double)viewport.X + viewport.Z - 0.5), viewportX_, screenWidth);
+    const float bottom = clampf((float)::Math::Ceiling((double)viewport.Y + viewport.W - 0.5), viewportY_, screenHeight);
+    viewportWidth_ = right - viewportX_;
+    viewportHeight_ = bottom - viewportY_;
     if (viewportWidth_ <= 0.0f || viewportHeight_ <= 0.0f) {
         return;
     }
+    configureBatch();
     queue->VisitOrdered(this);
-    flushTextBatch();
+    flushSharedBatch();
 }
 
 void X360RenderManager2D::endFrame() {
-    flushTextBatch();
+    flushSharedBatch();
     if (reportedFirstDraw_) {
         return;
     }
@@ -203,11 +211,11 @@ void X360RenderManager2D::endFrame() {
     hel_log_u32("HEL render2d: first draw, sprites requested", sprites_);
     hel_log_u32("HEL render2d: textures uploaded", texturesUploaded_);
     hel_log_u32("HEL render2d: first draw, text runs requested", texts_);
-    hel_log_u32("HEL render2d: first draw, text runs submitted",
+    hel_log_u32("HEL render2d: first draw, shared text batches submitted",
                 textRunsSubmitted_);
     hel_log_u32("HEL render2d: first draw, text runs skipped",
                 textRunsSkipped_);
-    hel_log_u32("HEL render2d: first draw, text glyphs submitted",
+    hel_log_u32("HEL render2d: first draw, text quads including effects",
                 textGlyphsSubmitted_);
     hel_log_u32("HEL render2d: interface arena peak bytes", hel_ui_peak_bytes());
 }
@@ -217,6 +225,37 @@ void X360RenderManager2D::Visit(::IDrawable2D *drawable) {
         shapesSkipped_++;
         return;
     }
+    ::Entity *parent = drawable->get_Parent();
+    if (parent == nullptr) he_cpp_custom::Fail("Xbox360 queued drawable has no parent entity");
+    if (!parent->get_IsHierarchyEnabled()) {
+        ++shapesSkipped_;
+        return;
+    }
+    const ::float4 cameraRect(viewportX_, viewportY_, viewportWidth_, viewportHeight_);
+    ::float4 clip = cameraRect;
+    clipBuilder_.BuildClipChain(drawable, &clipChain_);
+    for (::IClipRegion2D *region : clipChain_) {
+        if (region == nullptr) he_cpp_custom::Fail("Xbox360 clip chain contains a null region");
+        const ::float4 rect = region->GetClipRect();
+        if (!std::isfinite(rect.X) || !std::isfinite(rect.Y) || !std::isfinite(rect.Z) ||
+            !std::isfinite(rect.W) || rect.Z < 0.0f || rect.W < 0.0f)
+            he_cpp_custom::Fail("Xbox360 authored clip rectangle is invalid");
+        clip = clipBuilder_.Intersect(clip, rect);
+    }
+    const float right = cameraRect.X + cameraRect.Z;
+    const float bottom = cameraRect.Y + cameraRect.W;
+    const float leftPixel = clampf((float)::Math::Ceiling((double)clip.X - 0.5), cameraRect.X, right);
+    const float topPixel = clampf((float)::Math::Ceiling((double)clip.Y - 0.5), cameraRect.Y, bottom);
+    const float rightPixel = clampf((float)::Math::Ceiling((double)clip.X + clip.Z - 0.5), leftPixel, right);
+    const float bottomPixel = clampf((float)::Math::Ceiling((double)clip.Y + clip.W - 0.5), topPixel, bottom);
+    activeScissor_ = ::float4(leftPixel, topPixel, rightPixel - leftPixel, bottomPixel - topPixel);
+    if (activeScissor_.Z == 0.0f || activeScissor_.W == 0.0f) {
+        ++shapesSkipped_;
+        return;
+    }
+    if (hel_ui_set_scissor((uint32_t)activeScissor_.X, (uint32_t)activeScissor_.Y,
+            (uint32_t)activeScissor_.Z, (uint32_t)activeScissor_.W) != HEL_OK)
+        he_cpp_custom::Fail("Xbox360 resolved UI scissor is outside the backbuffer");
     /* The drawable calls back into one of the Draw* methods below, which is
        how the engine keeps the shape's own fields out of this traversal. */
     drawable->Draw();
@@ -258,33 +297,19 @@ bool X360RenderManager2D::submit(const HelVertex *vertices,
     return true;
 }
 
-bool X360RenderManager2D::flushTextBatch() {
-    if (textBatchGlyphs_ == 0) {
-        return true;
-    }
-
-    const bool accepted = submit(textVertices_, textBatchVertexCount_,
-                                 textIndices_, textBatchIndexCount_,
-                                 textBatchTexture_);
-    if (accepted) {
-        textRunsSubmitted_ += textBatchRuns_;
-        textGlyphsSubmitted_ += textBatchGlyphs_;
-    } else {
-        textRunsSkipped_ += textBatchRuns_;
-    }
-    textBatchGlyphs_ = 0;
-    textBatchRuns_ = 0;
-    textBatchVertexCount_ = 0;
-    textBatchIndexCount_ = 0;
-    textBatchTexture_ = 0;
-    return accepted;
-}
-
 void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
-    flushTextBatch();
+    flushSharedBatch();
     if (shape == nullptr || shape->get_Parent() == nullptr) {
         shapesSkipped_++;
         return;
+    }
+    /* Interface batches compose in submission order with no depth, so a shape
+       that arrives after a sprite covers it. Logging the order each kind
+       arrives in is what tells those two apart. */
+    if (!reportedOrder_) {
+        reportedOrder_ = true;
+        hel_log_u32("HEL render2d: a rounded rect arrived at batch",
+                    shapesDrawn_ + shapesSkipped_);
     }
     /* The anchor system and the viewport component have already written their
        results into the entity's position and this shape's size, so no layout
@@ -371,282 +396,15 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
     submit(ringVertices, kOutlinePoints * 2, ringIndices, ringIndexCount);
 }
 
-void X360RenderManager2D::DrawSprite(::ISpriteDrawable2D *sprite) {
-    sprites_++;
-    flushTextBatch();
-    if (sprite == nullptr || sprite->get_Parent() == nullptr) {
-        shapesSkipped_++;
-        return;
-    }
-    const X360RuntimeTexture *texture =
-        dynamic_cast<const X360RuntimeTexture *>(sprite->get_Texture());
-    if (texture == nullptr || texture->handle == 0) {
-        /* The engine has a texture object but its pixels never reached the
-           hardware, so there is nothing to sample. The format was named when
-           the texture was built. */
-        shapesSkipped_++;
-        return;
-    }
+X360RuntimeTexture::~X360RuntimeTexture() { Dispose(); }
 
-    const ::float3 position = sprite->get_Parent()->get_Position();
-    const ::int2 size = sprite->get_Size();
-    if (size.X <= 0 || size.Y <= 0) {
-        shapesSkipped_++;
-        return;
+void X360RuntimeTexture::Dispose() {
+    if (get_IsDisposed()) return;
+    if (handle != 0) {
+        hel_texture_release(handle);
+        handle = 0;
     }
-    const float left = position.X;
-    const float top = position.Y;
-    const float right = left + (float)size.X;
-    const float bottom = top + (float)size.Y;
-
-    /* The source rectangle is already in texture coordinates, and holds an
-       origin and a size rather than two corners. An empty one means the whole
-       texture, which is what a sprite that never set it wants. */
-    ::float4 source = sprite->get_SourceRect();
-    float u0 = source.X;
-    float v0 = source.Y;
-    float u1 = source.X + source.Z;
-    float v1 = source.Y + source.W;
-    if (source.Z <= 0.0f || source.W <= 0.0f) {
-        u0 = 0.0f;
-        v0 = 0.0f;
-        u1 = 1.0f;
-        v1 = 1.0f;
-    }
-
-    float tint[4];
-    colour_from_byte4(sprite->get_Color(), tint);
-
-    HelVertex vertices[4];
-    fill_vertex(&vertices[0], left, top, tint, u0, v0);
-    fill_vertex(&vertices[1], right, top, tint, u1, v0);
-    fill_vertex(&vertices[2], right, bottom, tint, u1, v1);
-    fill_vertex(&vertices[3], left, bottom, tint, u0, v1);
-    static const uint16_t indices[6] = {0, 1, 2, 0, 2, 3};
-    if (spritesDrawn_ == 0) {
-        hel_log_u32("HEL render2d: first sprite, texture handle",
-                    texture->handle);
-        hel_log_u32("HEL render2d: first sprite, width", (uint32_t)size.X);
-        /* The pixel shader multiplies the sampled texel by this. A black tint
-           produces a black sprite however well the sampling works, so it is
-           worth seeing before blaming the fetch. */
-        const ::byte4 tintColour = sprite->get_Color();
-        hel_log_u32("HEL render2d: first sprite, tint RGBA",
-                    ((uint32_t)tintColour.X << 24) |
-                        ((uint32_t)tintColour.Y << 16) |
-                        ((uint32_t)tintColour.Z << 8) |
-                        (uint32_t)tintColour.W);
-        hel_log_u32("HEL render2d: first sprite, u0 and v0 thousandths",
-                    ((uint32_t)(u0 * 1000.0f) << 16) |
-                        (uint32_t)(v0 * 1000.0f));
-        hel_log_u32("HEL render2d: first sprite, u1 and v1 thousandths",
-                    ((uint32_t)(u1 * 1000.0f) << 16) |
-                        (uint32_t)(v1 * 1000.0f));
-    }
-    submit(vertices, 4, indices, 6, texture->handle);
-    spritesDrawn_++;
-}
-
-void X360RenderManager2D::DrawText(::ITextDrawable2D *text) {
-    texts_++;
-    if (text == nullptr || text->get_Parent() == nullptr) {
-        textRunsSkipped_++;
-        shapesSkipped_++;
-        return;
-    }
-
-    ::FontAsset *font = text->get_Font();
-    const X360RuntimeTexture *texture =
-        font == nullptr
-            ? nullptr
-            : dynamic_cast<const X360RuntimeTexture *>(font->get_Texture());
-    if (font == nullptr || font->get_FontInfo() == nullptr ||
-        font->get_Characters() == nullptr || font->get_AtlasWidth() <= 0 ||
-        font->get_AtlasHeight() <= 0 || texture == nullptr ||
-        texture->handle == 0) {
-        textRunsSkipped_++;
-        shapesSkipped_++;
-        if (!reportedMissingTextFont_) {
-            reportedMissingTextFont_ = true;
-            hel_log("HEL render2d: text font atlas unavailable; text skipped");
-        }
-        return;
-    }
-
-    const double fontScale =
-        ::Math::Max(static_cast<double>(text->get_FontScale()), 0.0001);
-    HeCppString content = text->get_Text();
-    if (text->get_WrapText()) {
-        const int32_t wrapWidth = static_cast<int32_t>(::Math::Max(
-            1, static_cast<int32_t>(::Math::Round(
-                   text->get_Size().X / fontScale))));
-        content = ::TextLayoutUtils::WrapText(content, font, wrapWidth);
-    }
-    if (content.empty()) {
-        textRunsSkipped_++;
-        return;
-    }
-
-    uint32_t visibleGlyphs = 0;
-    for (size_t index = 0; index < content.size(); ++index) {
-        const char character = content[index];
-        if (character == '\r' || character == '\n' || character == ' ') {
-            continue;
-        }
-        ::FontChar glyph;
-        if (font->get_Characters()->TryGetValue(character, glyph)) {
-            ++visibleGlyphs;
-        }
-    }
-    if (visibleGlyphs == 0) {
-        textRunsSkipped_++;
-        return;
-    }
-
-    const bool canShareBatch = visibleGlyphs <= kTextBatchGlyphLimit;
-    if (canShareBatch) {
-        if (textBatchGlyphs_ != 0 &&
-            (textBatchTexture_ != texture->handle ||
-             textBatchGlyphs_ + visibleGlyphs > kTextBatchGlyphLimit)) {
-            flushTextBatch();
-        }
-        if (textBatchGlyphs_ == 0) {
-            textBatchTexture_ = texture->handle;
-        }
-    } else {
-        flushTextBatch();
-        textBatchTexture_ = texture->handle;
-    }
-
-    ::Array<double> *lineOffsets = ::TextLineOffsets2D::Build(
-        text, font, content, fontScale, font->get_AtlasWidth());
-    ::List<::TextRenderEffectPass *> *effectPasses =
-        ::TextRenderEffectPassBuilder::Build(text);
-    if (lineOffsets == nullptr || effectPasses == nullptr ||
-        effectPasses->get_Count() <= 0 ||
-        static_cast<uint32_t>(effectPasses->get_Count()) >
-            kTextBatchMaxPasses) {
-        delete effectPasses;
-        delete lineOffsets;
-        textRunsSkipped_++;
-        shapesSkipped_++;
-        return;
-    }
-    if (canShareBatch) {
-        textBatchRuns_++;
-    }
-
-    const ::float3 ownerPosition = text->get_Parent()->get_Position();
-    const double baseX = ::Math::Round(ownerPosition.X);
-    const double baseY = ::Math::Round(ownerPosition.Y);
-    const double lineHeight = ::Math::Max(
-        static_cast<double>(font->get_LineHeight()) * fontScale, 1.0);
-    double offsetX = 0.0;
-    double offsetY = 0.0;
-    int32_t lineIndex = 0;
-    double lineOriginX = baseX + ::TextLineOffsets2D::Resolve(
-                                      lineOffsets, lineIndex);
-    uint32_t batchGlyphs = 0;
-    bool runAccepted = false;
-
-    for (size_t characterIndex = 0; characterIndex < content.size();
-         ++characterIndex) {
-        const char character = content[characterIndex];
-        if (character == '\r') {
-            continue;
-        }
-        if (character == '\n') {
-            offsetY += lineHeight;
-            offsetX = 0.0;
-            ++lineIndex;
-            lineOriginX = baseX +
-                ::TextLineOffsets2D::Resolve(lineOffsets, lineIndex);
-            continue;
-        }
-        if (character == ' ') {
-            offsetX += font->get_FontInfo()->get_SpaceWidth() * fontScale;
-            continue;
-        }
-
-        ::FontChar glyph;
-        if (!font->get_Characters()->TryGetValue(character, glyph)) {
-            continue;
-        }
-
-        const double glyphWidth = glyph.SourceRect.Z *
-                                  font->get_AtlasWidth() * fontScale;
-        const double glyphHeight = glyph.SourceRect.W *
-                                   font->get_AtlasHeight() * fontScale;
-        const double snappedLineOffsetY = ::Math::Round(offsetY);
-        for (int32_t passIndex = 0;
-             passIndex < effectPasses->get_Count(); ++passIndex) {
-            ::TextRenderEffectPass *pass =
-                effectPasses->get_Item(passIndex);
-            const uint32_t firstVertex = textBatchVertexCount_;
-            const float left = static_cast<float>(
-                lineOriginX + offsetX + pass->get_Offset().X);
-            const float top = static_cast<float>(
-                baseY + snappedLineOffsetY + glyph.OffsetY * fontScale +
-                pass->get_Offset().Y);
-            const float right = left + static_cast<float>(glyphWidth);
-            const float bottom = top + static_cast<float>(glyphHeight);
-            float tint[4];
-            colour_from_byte4(pass->get_Color(), tint);
-            fill_vertex(&textVertices_[textBatchVertexCount_++], left, top, tint,
-                        glyph.SourceRect.X, glyph.SourceRect.Y);
-            fill_vertex(&textVertices_[textBatchVertexCount_++], right, top, tint,
-                        glyph.SourceRect.X + glyph.SourceRect.Z,
-                        glyph.SourceRect.Y);
-            fill_vertex(&textVertices_[textBatchVertexCount_++], right, bottom, tint,
-                        glyph.SourceRect.X + glyph.SourceRect.Z,
-                        glyph.SourceRect.Y + glyph.SourceRect.W);
-            fill_vertex(&textVertices_[textBatchVertexCount_++], left, bottom, tint,
-                        glyph.SourceRect.X,
-                        glyph.SourceRect.Y + glyph.SourceRect.W);
-            textIndices_[textBatchIndexCount_++] = static_cast<uint16_t>(firstVertex);
-            textIndices_[textBatchIndexCount_++] =
-                static_cast<uint16_t>(firstVertex + 1);
-            textIndices_[textBatchIndexCount_++] =
-                static_cast<uint16_t>(firstVertex + 2);
-            textIndices_[textBatchIndexCount_++] = static_cast<uint16_t>(firstVertex);
-            textIndices_[textBatchIndexCount_++] =
-                static_cast<uint16_t>(firstVertex + 2);
-            textIndices_[textBatchIndexCount_++] =
-                static_cast<uint16_t>(firstVertex + 3);
-        }
-        ++batchGlyphs;
-        ++textBatchGlyphs_;
-        if (canShareBatch) {
-            if (textBatchGlyphs_ == kTextBatchGlyphLimit) {
-                flushTextBatch();
-            }
-        } else if (batchGlyphs == kTextBatchGlyphLimit) {
-            const bool accepted = flushTextBatch();
-            runAccepted = runAccepted || accepted;
-            batchGlyphs = 0;
-            textBatchTexture_ = texture->handle;
-        }
-        offsetX += glyph.AdvanceWidth > 0.0f
-                       ? glyph.AdvanceWidth * fontScale
-                       : glyphWidth;
-    }
-    if (canShareBatch) {
-        if (textBatchGlyphs_ == kTextBatchGlyphLimit) {
-            flushTextBatch();
-        }
-    } else {
-        if (batchGlyphs > 0) {
-            const bool accepted = flushTextBatch();
-            runAccepted = runAccepted || accepted;
-        }
-        if (runAccepted) {
-            textRunsSubmitted_++;
-        } else {
-            textRunsSkipped_++;
-        }
-    }
-    delete effectPasses;
-    delete lineOffsets;
+    ::RuntimeTexture::Dispose();
 }
 
 ::RuntimeTexture *X360RenderManager2D::buildTexture(int32_t width,
@@ -726,14 +484,24 @@ void X360RenderManager2D::DrawText(::ITextDrawable2D *text) {
         hel_log(cookedAssetPath.c_str());
         return buildTexture(1, 1, nullptr, cookedAssetPath.c_str());
     }
-    ::TextureAsset *asset =
-        dynamic_cast<::TextureAsset *>(::AssetSerializer::Deserialize(stream));
+    ::Asset *deserialized = ::AssetSerializer::Deserialize(stream);
+    stream->Dispose();
+    delete stream;
+    ::TextureAsset *asset = dynamic_cast<::TextureAsset *>(deserialized);
     if (asset == nullptr) {
         hel_log("HEL render2d: cooked texture did not deserialize");
         hel_log(cookedAssetPath.c_str());
+        delete deserialized;
         return buildTexture(1, 1, nullptr, cookedAssetPath.c_str());
     }
-    return buildFromAsset(asset, cookedAssetPath.c_str());
+    // Upload copies the pixels into physical GPU memory; the deserialized CPU
+    // array is temporary and must not survive another scene load.
+    ::RuntimeTexture *texture = buildFromAsset(asset, cookedAssetPath.c_str());
+    hel_log_u32("HEL render2d: upload heap before temporary disposal", hel_heap_used_bytes());
+    asset->Dispose();
+    delete asset;
+    hel_log_u32("HEL render2d: upload heap after temporary disposal", hel_heap_used_bytes());
+    return texture;
 }
 
 void X360RenderManager2D::UpdateTextureRegionCore(

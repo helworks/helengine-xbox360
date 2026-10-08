@@ -28,6 +28,11 @@
 #include "RenderManager2D.hpp"
 #include "IRenderVisitor2D.hpp"
 #include "RuntimeTexture.hpp"
+#include "Batch2DSink.hpp"
+#include "Batch2DWriter.hpp"
+#include "Batch2DDrawableEmitter.hpp"
+#include "ClipRegionStackBuilder2D.hpp"
+#include "IClipRegion2D.hpp"
 
 extern "C" {
 #include "../../engine/frame.h"
@@ -53,13 +58,22 @@ namespace helengine::x360 {
 /// </remarks>
 class X360RuntimeTexture final : public ::RuntimeTexture {
 public:
+    /// Releases this texture's owned backend allocation through the next GPU fence.
+    ~X360RuntimeTexture() override;
+    /// Retires the upload once; repeated disposal and shutdown cannot double-free it.
+    void Dispose() override;
+    /// Backend handle owned exclusively by this runtime texture until retirement.
     HelTexture handle = 0;
 };
 
 /// <summary>Draws the engine's 2D content through the Xenos backend.</summary>
 class X360RenderManager2D final : public ::RenderManager2D,
-                                  public ::IRenderVisitor2D {
+                                  public ::IRenderVisitor2D, public ::Batch2DSink {
 public:
+    ~X360RenderManager2D() override;
+    void Dispose() override;
+    void SetCamera(::float4x4 projection, ::float4 viewport) override;
+    void Submit(::Batch2DBuffer *buffer, ::Batch2DRun run) override;
     /// <summary>Draws one camera's 2D queue. Called by the 3D manager.</summary>
     /// <param name="camera">Camera whose queue and viewport to use.</param>
     void renderCamera(::ICamera *camera);
@@ -98,12 +112,21 @@ public:
     uint32_t textGlyphsSubmitted() const { return textGlyphsSubmitted_; }
 
 private:
-    static constexpr uint32_t kTextBatchGlyphLimit = 32;
-    static constexpr uint32_t kTextBatchMaxPasses = 6;
-    static constexpr uint32_t kTextBatchVertexCapacity =
-        kTextBatchGlyphLimit * kTextBatchMaxPasses * 4;
-    static constexpr uint32_t kTextBatchIndexCapacity =
-        kTextBatchGlyphLimit * kTextBatchMaxPasses * 6;
+    /// Uses Core's authored ancestry to resolve enabled clip components for each drawable.
+    ::ClipRegionStackBuilder2D clipBuilder_;
+    /// Reused chain storage avoids allocating an ancestor list for every menu row.
+    ::List<::IClipRegion2D *> clipChain_;
+    /// Pixel-center-bounded intersection of the camera and current authored clip chain.
+    ::float4 activeScissor_;
+    ::Batch2DWriter *batchWriter_ = nullptr;
+    ::Batch2DDrawableEmitter *batchEmitter_ = nullptr;
+    HelShaderProgram batchProgram_ = {};
+    HelBatchDraw batchDraw_ = {};
+    uint32_t batchConstants_[16] = {};
+    bool batchDisposed_ = false;
+    bool batchText_ = false;
+    void configureBatch();
+    void flushSharedBatch();
 
     /// <summary>Builds the engine's texture object, uploading pixels when it can.</summary>
     /// <param name="width">Texture width in pixels.</param>
@@ -123,8 +146,6 @@ private:
                 const uint16_t *indices, uint32_t indexCount,
                 HelTexture texture = 0);
 
-    /// <summary>Submits pending consecutive text runs before painter order changes.</summary>
-    bool flushTextBatch();
 
     /* The viewport being drawn into, in pixels. Set once per camera so the
        drawables visited under it convert to clip space against the right
@@ -144,13 +165,6 @@ private:
     uint32_t textRunsSubmitted_ = 0;
     uint32_t textRunsSkipped_ = 0;
     uint32_t textGlyphsSubmitted_ = 0;
-    uint32_t textBatchGlyphs_ = 0;
-    uint32_t textBatchRuns_ = 0;
-    uint32_t textBatchVertexCount_ = 0;
-    uint32_t textBatchIndexCount_ = 0;
-    HelTexture textBatchTexture_ = 0;
-    HelVertex textVertices_[kTextBatchVertexCapacity] = {};
-    uint16_t textIndices_[kTextBatchIndexCapacity] = {};
     bool reportedFirstDraw_ = false;
     bool reportedNoTexturePath_ = false;
     bool reportedMissingTextFont_ = false;

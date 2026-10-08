@@ -65,6 +65,12 @@ int hel_frame_begin(float r, float g, float b, float a);
 int hel_mesh_create(const HelVertex *vertices, uint32_t vertex_count,
                     const uint16_t *indices, uint32_t index_count,
                     HelMesh *out_mesh);
+/// Retires a model's GPU storage while preserving buffers used by the submitted frame.
+void hel_mesh_release(HelMesh mesh);
+/// Releases retired model buffers only after the present fence has completed.
+void hel_mesh_collect_retired(void);
+/// Number of live model uploads, excluding owners already retired for collection.
+uint32_t hel_mesh_count(void);
 int hel_draw_unlit(HelMesh mesh, const HelMat4 *mvp);
 /* As hel_draw_unlit, but shading with the material and light in params.
    The normal is transformed by the model rotation the caller supplies, so a
@@ -81,6 +87,8 @@ int hel_draw_ui(const HelVertex *vertices, uint32_t vertex_count,
                 const HelMat4 *transform, const HelDrawParams *params);
 /* Reserves the interface arena; safe to call more than once. */
 int hel_ui_arena_init(void);
+/// Applies the current authored UI clip to legacy tessellated shapes; shared batches carry their own clips.
+int hel_ui_set_scissor(uint32_t x, uint32_t y, uint32_t width, uint32_t height);
 
 /* Textures. A handle of zero means "no texture", which is what an untextured
    draw passes. Pixels are 8 bits a channel in red, green, blue, alpha order,
@@ -89,6 +97,10 @@ int hel_ui_arena_init(void);
 typedef uint32_t HelTexture;
 int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
                        HelTexture *out_texture);
+/// Retires an owned handle without freeing memory still referenced by the current GPU frame.
+void hel_texture_release(HelTexture texture);
+/// Frees retired uploads after the caller has verified the present fence completed.
+void hel_texture_collect_retired(void);
 /* Releases every texture. Called at shutdown, like meshes. */
 void hel_texture_release_all(void);
 uint32_t hel_texture_count(void);

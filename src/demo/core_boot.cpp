@@ -1,12 +1,10 @@
 /*
  * Boots the transpiled engine core inside the guest.
  *
- * This is the Xbox 360 counterpart of the PS1 port's core-boot host: it
- * constructs the generated Core with an empty scene catalog and no render,
- * input or audio backends, then runs its frame calls. Nothing the core draws
- * reaches the screen yet, because the render managers are still null; the
- * point of this stage is that the engine's own object graph, allocator use
- * and frame loop run on the console target at all.
+ * Constructs the generated Core with the image's authored scene catalog,
+ * native Xenos render managers and the XAM controller backend. The real
+ * startup scene is loaded from the linked cooked-content archive and runs
+ * its own components through the engine's frame loop.
  *
  * Every step logs a marker so a failure can be placed exactly:
  *   HEL core: constructing -> constructed -> initializing -> ready
@@ -28,6 +26,7 @@
 
 #include "../platform/xenia_guest/X360RenderManager2D.hpp"
 #include "../platform/xenia_guest/X360RenderManager3D.hpp"
+#include "../platform/xenia_guest/X360InputBackend.hpp"
 #include "core_host.hpp"
 #include "scene_catalog.hpp"
 #include "RuntimeSceneCatalog.hpp"
@@ -95,6 +94,8 @@ public:
 
 helengine::x360::X360RenderManager3D *g_render3d;
 helengine::x360::X360RenderManager2D *g_render2d;
+/// Owns the controller backend for the lifetime of the native engine instance.
+helengine::x360::X360InputBackend *g_input;
 X360ContentStreamSource *g_content;
 ::Core *g_core;
 ::PlatformInfo *g_platform;
@@ -119,14 +120,15 @@ extern "C" int hel_core_boot(void) {
                 hel_heap_live_allocations());
 
     hel_log("HEL core: initializing");
-    /* Render managers are supplied because the engine's draw path requires
-       them; there is still no input or audio backend. */
+    /* Native graphics and controller services must exist before the authored
+       scene is initialized, since its startup components query both. */
     g_render3d = new helengine::x360::X360RenderManager3D();
     /* The engine reads the window size from the render manager. */
     g_render3d->AddWindow(0, (int32_t)hel_video_width(),
                           (int32_t)hel_video_height());
     g_render2d = new helengine::x360::X360RenderManager2D();
-    g_core->Initialize(g_render3d, g_render2d, nullptr, g_platform, g_options);
+    g_input = new helengine::x360::X360InputBackend();
+    g_core->Initialize(g_render3d, g_render2d, g_input, g_platform, g_options);
     hel_log("HEL core: ready");
     hel_log_u32("HEL core: heap allocations after initialize",
                 hel_heap_live_allocations());

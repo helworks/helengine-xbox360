@@ -18,6 +18,7 @@
 class ICamera;
 class ObjectManager;
 class PlatformMaterialAsset;
+class ShaderMaterialAsset;
 
 extern "C" {
 #include "../../engine/frame.h"
@@ -30,6 +31,10 @@ namespace helengine::x360 {
 class X360RuntimeModel final : public ::RuntimeModel {
 public:
     X360RuntimeModel(HelMesh mesh, uint32_t vertexCount, uint32_t indexCount);
+    /// Releases the model's GPU handle and owned Core data when the last owner is gone.
+    ~X360RuntimeModel() override;
+    /// Retires GPU buffers until the present fence and clears ownership idempotently.
+    void Dispose() override;
 
     /// <summary>Backend mesh handle, zero when the upload failed.</summary>
     HelMesh mesh() const { return mesh_; }
@@ -55,6 +60,9 @@ class X360RuntimeMaterial final : public ::RuntimeMaterial {
 public:
     /// <summary>The cooked base colour, packed 0xRRGGBBAA.</summary>
     uint32_t baseColor = 0xFFFFFFFFu;
+    HelShaderProgram program = {};
+    uint32_t pixelConstants[4] = {};
+    static X360RuntimeMaterial *FromShaderAsset(::ShaderMaterialAsset *asset);
 };
 
 /// <summary>Draws the engine's scene through the Xenos backend.</summary>

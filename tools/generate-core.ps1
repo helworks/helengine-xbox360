@@ -54,7 +54,7 @@ if (-not (Test-Path -LiteralPath $generator)) {
 
 $arguments = @(
     $generator, "--cpp",
-    "--project", (Join-Path $engineSource "engine/helengine.core/helengine.core.csproj"),
+    "--project", (Join-Path $engineSource "engine/helengine.shader/helengine.shader.csproj"),
     "--output", $generated,
     "--runtime-root", (Join-Path $codegen "cs2.cpp"),
     "--compiler", "gcc", "--platform", "xbox360", "--endianness", "big",
@@ -64,8 +64,9 @@ $arguments = @(
     "--set", "generated-math-convention=engine-row-vector",
     "--set", "pointer-size-bytes=4",
     "--set", "include-project-defined-preprocessor-symbols=false",
-    "--set", "additional-preprocessor-symbols=HELENGINE_CODEGEN_DISABLE_MENU_REFLECTION;HELENGINE_CODEGEN_DISABLE_RUNTIME_SCRIPT_REFLECTION",
-    "--set", "codegen-forced-disabled-features=shaders;debug_overlay",
+    "--set", "additional-preprocessor-symbols=HELENGINE_CODEGEN_DISABLE_MENU_REFLECTION;HELENGINE_CODEGEN_DISABLE_RUNTIME_SCRIPT_REFLECTION;HELENGINE_CODEGEN_FATAL_ONLY;HELENGINE_RUNTIME_MATERIAL_RESOLUTION_COOKED_PLATFORM_OWNED",
+    "--set", "codegen-enabled-features=shaders",
+    "--set", "codegen-forced-disabled-features=debug_overlay",
     "--set", "load-native-runtime-metadata=false",
     "--set", "codegen-use-std-string=false",
     "--set", "codegen-use-std-vector=false",

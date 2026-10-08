@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <UseAppHost>false</UseAppHost>
+    <HelengineRoot Condition="'$(HelengineRoot)' == '' and '$(HELENGINE_ROOT)' != ''">$(HELENGINE_ROOT)</HelengineRoot>
+    <HelengineRoot Condition="'$(HelengineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\helengine</HelengineRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\builder\helengine.x360.builder.csproj" />
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
+  </ItemGroup>
+  <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
+    <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj')" Text="Shared helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT." />
+  </Target>
+</Project>

@@ -32,6 +32,7 @@ param(
     [string]$Config = "tools/config.local.json",
     [string]$GeneratedRoot = "build/generated-core/generated",
     [string]$OutDir = "build/core",
+    [string]$NativeObjectCacheRoot = '',
     [int]$Jobs = 0
 )
 $ErrorActionPreference = "Stop"
@@ -41,20 +42,45 @@ $generatedFull = Join-Path $repo $GeneratedRoot
 if (-not (Test-Path $generatedFull)) {
     throw "No generated core at $generatedFull. Run tools/generate-core.ps1 first."
 }
-$out = Join-Path $repo $OutDir
+$out = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { Join-Path $repo $OutDir } else { Join-Path ([IO.Path]::GetFullPath($NativeObjectCacheRoot)) 'x360-core' }
 New-Item -ItemType Directory -Force $out | Out-Null
+$scriptOut = Join-Path $repo $OutDir
+New-Item -ItemType Directory -Force $scriptOut | Out-Null
 $outRel = $OutDir.Replace("\", "/")
 $genRel = $GeneratedRoot.Replace("\", "/")
+$cacheFingerprintPath = Join-Path $out 'build-fingerprint.txt'
+$fingerprintInput = @(
+    $cfg.docker_image
+    (Get-FileHash -LiteralPath (Join-Path $repo 'tools/build-core.ps1') -Algorithm SHA256).Hash
+    '-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec -mhard-float -mstrict-align -fno-builtin -O2 -std=c++20 -fno-exceptions -frtti'
+    Get-ChildItem -LiteralPath (Join-Path $repo 'src/platform/xenia_guest') -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($repo.Length).TrimStart([char[]]@('\', '/'))
+        "$relative=$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    }
+    Get-ChildItem -LiteralPath $generatedFull -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($generatedFull.Length).TrimStart([char[]]@('\', '/'))
+        "$relative=$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+    }
+) -join "`n"
+$fingerprintBytes = [Text.Encoding]::UTF8.GetBytes($fingerprintInput)
+$fingerprintSha = [Security.Cryptography.SHA256]::Create()
+$cacheFingerprint = ([BitConverter]::ToString($fingerprintSha.ComputeHash($fingerprintBytes))).Replace('-', '').ToLowerInvariant()
+$oldFingerprint = if (Test-Path -LiteralPath $cacheFingerprintPath) { (Get-Content -LiteralPath $cacheFingerprintPath -Raw).Trim() } else { '' }
+if ($oldFingerprint -ne $cacheFingerprint) {
+    foreach ($cached in @('obj/helcore.o', 'libhelcore.a', 'libhelcore.nm', 'failed.txt', 'errors.txt')) {
+        $path = Join-Path $out $cached
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    }
+}
 if ($Jobs -le 0) { $Jobs = [Environment]::ProcessorCount }
+$containerOut = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { "/work/$outRel" } else { '/nativecache/x360-core' }
 
 $script = @"
-set -uo pipefail
+set -euo pipefail
 export PATH=/opt/devkitpro/devkitPPC/bin:`$PATH
-OUT=/work/$outRel
+OUT=$containerOut
 GEN=/work/$genRel
-# ar adds to an existing archive, so a stale one would keep objects that are
-# no longer built.
-rm -rf `$OUT/obj `$OUT/errors.txt `$OUT/failed.txt `$OUT/libhelcore.a
+if [ -d /generated ]; then GEN=/generated; fi
 mkdir -p `$OUT/obj
 FLAGS="-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec -mhard-float -mstrict-align -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fno-pic -fno-common -O2 -std=c++20 -fno-exceptions -frtti -fno-threadsafe-statics -fno-unwind-tables -I`$GEN -I/work/src/platform/xenia_guest -w"
 # An editor build emits two unity translation units: generated_unity.cpp holds
@@ -67,22 +93,30 @@ UNITY=`$GEN/helengine_core_unity.cpp
 if [ ! -f "`$UNITY" ]; then UNITY=`$GEN/generated_unity.cpp; fi
 if [ ! -f "`$UNITY" ]; then echo "no unity translation unit in `$GEN"; exit 1; fi
 echo "translation unit: `$UNITY (`$(grep -c '#include' "`$UNITY") generated sources)"
-if ! powerpc-eabi-g++ `$FLAGS -c "`$UNITY" -o `$OUT/obj/helcore.o 2> `$OUT/errors.txt; then
+if [ ! -f `$OUT/obj/helcore.o ]; then
+  if ! powerpc-eabi-g++ `$FLAGS -c "`$UNITY" -o `$OUT/obj/helcore.o 2> `$OUT/errors.txt; then
   echo "`$UNITY" > `$OUT/failed.txt
   echo "failed: 1"
   exit 1
+  fi
+else
+  echo "reused cached helcore.o"
 fi
 touch `$OUT/failed.txt
 echo "failed: 0"
-powerpc-eabi-ar rcs `$OUT/libhelcore.a `$OUT/obj/*.o
+rm -f `$OUT/libhelcore.a
+powerpc-eabi-ar rcsD `$OUT/libhelcore.a `$OUT/obj/*.o
 powerpc-eabi-nm `$OUT/libhelcore.a > `$OUT/libhelcore.nm
 echo "archive: `$(stat -c %s `$OUT/libhelcore.a) bytes"
 "@
-$scriptPath = Join-Path $out "build-core.sh"
+$scriptPath = Join-Path $scriptOut "build-core.sh"
 [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n"))
 
 $env:MSYS_NO_PATHCONV = "1"
-& docker run --rm -v "${repo}:/work" $cfg.docker_image bash "/work/$outRel/build-core.sh"
+$dockerArgs = @('run', '--rm', '-v', "${repo}:/work")
+if (-not [string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { $dockerArgs += @('-v', "${NativeObjectCacheRoot}:/nativecache") }
+$dockerArgs += @($cfg.docker_image, 'bash', "/work/$($OutDir.Replace('\', '/'))/build-core.sh")
+& docker @dockerArgs
 $code = $LASTEXITCODE
 $errorsPath = Join-Path $out "errors.txt"
 $failedPath = Join-Path $out "failed.txt"
@@ -102,3 +136,9 @@ if ($code -ne 0) {
     throw "Core compilation failed; see $errorsPath"
 }
 Write-Host "Core archive: $out/libhelcore.a"
+if (-not [string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) {
+    Set-Content -LiteralPath $cacheFingerprintPath -Value $cacheFingerprint -Encoding ASCII
+    $publishDir = Join-Path $repo $OutDir
+    New-Item -ItemType Directory -Force $publishDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path $out 'libhelcore.a') -Destination (Join-Path $publishDir 'libhelcore.a') -Force
+}

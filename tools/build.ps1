@@ -18,6 +18,7 @@ param(
     # it is empty the stub catalog is linked instead and the image falls back
     # to the scene built in code.
     [string]$CatalogRoot = "",
+    [string]$NativeObjectCacheRoot = "",
     [string[]]$Define = @()
 )
 $ErrorActionPreference = "Stop"
@@ -25,6 +26,9 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
 $out = Join-Path $repo $OutDir
 New-Item -ItemType Directory -Force $out | Out-Null
+$nativeCacheRoot = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { Join-Path $out 'native-cache' } else { [IO.Path]::GetFullPath($NativeObjectCacheRoot) }
+$objectCacheRoot = Join-Path $nativeCacheRoot 'x360-image-objects'
+New-Item -ItemType Directory -Force $objectCacheRoot | Out-Null
 $outRel = $OutDir.Replace("\", "/")
 $coreGenRel = $CoreGenerated.Replace("\", "/")
 $coreLibRel = $CoreLib.Replace("\", "/")
@@ -91,9 +95,12 @@ $coreCxxflags = (($common -replace " -ffreestanding", "") -replace " -Werror", "
 # Compiled against the generated core (hosted headers, C++20).
 $coreSources = @(
     "src/platform/xenia_guest/X360RuntimeProvider.cpp",
+    "src/platform/xenia_guest/X360InputBackend.cpp",
     "src/platform/xenia_guest/X360Math.cpp",
     "src/platform/xenia_guest/X360LibcShim.cpp",
     "src/platform/xenia_guest/X360RenderManager2D.cpp",
+    "src/platform/xenia_guest/X360Batch2D.cpp",
+    "src/platform/xenia_guest/X360MeshMaterial.cpp",
     "src/platform/xenia_guest/X360RenderManager3D.cpp",
     "src/demo/core_boot.cpp",
     "src/demo/core_scene.cpp",
@@ -110,6 +117,12 @@ $sources = @(
     "src/platform/xenia_guest/cxx_runtime.cpp",
     "src/platform/xenia_guest/video.c",
     "src/platform/xenia_guest/shader.c",
+    "src/platform/xenia_guest/x360_shader_artifact.c",
+    "src/platform/xenia_guest/x360_shader_artifact_envelope.c",
+    "src/platform/xenia_guest/x360_shader_artifact_semantics.c",
+    "src/platform/xenia_guest/x360_shader_artifact_sha256.c",
+    "src/platform/xenia_guest/x360_shader_runtime.c",
+    "src/platform/xenia_guest/x360_shader_content.c",
     "src/platform/xenia_guest/mesh.c",
     "src/platform/xenia_guest/texture.c",
     "src/engine/frame.c",
@@ -124,8 +137,15 @@ $sources = @(
 )
 $compileLines = @()
 $objects = @()
+$objectNames = @()
 foreach ($s in ($sources + $coreSources)) {
-    $obj = "`$OUT/" + ($s -replace "[/\\]", "_") + ".o"
+    if ($s -eq $catalogSource) {
+        $objectName = if ($s.EndsWith('scene_catalog_generated.cpp')) { 'scene_catalog_generated.cpp.o' } else { 'scene_catalog_stub.cpp.o' }
+    } else {
+        $objectName = ($s -replace "[/\\]", "_") + ".o"
+    }
+    $objectNames += $objectName
+    $obj = "`$OBJ_ROOT/$objectName"
     $objects += $obj
     if ($coreSources -contains $s) {
         $compileLines += "powerpc-eabi-g++ $coreCxxflags -c /work/$s -o $obj"
@@ -141,16 +161,120 @@ foreach ($s in ($sources + $coreSources)) {
 }
 # The content stub lives in the output directory rather than the source tree,
 # because its archive is a build product.
-$compileLines += "powerpc-eabi-gcc $cflags -c `$OUT/content.S -o `$OUT/content.S.o"
-$objects += "`$OUT/content.S.o"
+$contentObjectName = 'content.S.o'
+$contentObject = "`$OBJ_ROOT/$contentObjectName"
+$objects += $contentObject
+
+# The image pipeline has no compiler depfiles. Fingerprint every compile input
+# and toolchain/flag choice, then validate cached object hashes before reusing
+# the complete object set. Content is keyed separately because it is embedded
+# through content.S and should only refresh that one object when cooked files
+# change.
+$toolchainId = (& docker image inspect $cfg.docker_image --format '{{.Id}}' | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($toolchainId)) { throw "Could not identify toolchain image $($cfg.docker_image)." }
+$sourceInputs = @(
+    (Get-ChildItem -LiteralPath (Join-Path $repo 'src') -File -Recurse)
+    (Get-ChildItem -LiteralPath (Join-Path $repo 'build/shaders') -File -Recurse -ErrorAction SilentlyContinue)
+    (Get-ChildItem -LiteralPath (Join-Path $repo $CoreGenerated) -File -Recurse)
+    (Get-Item -LiteralPath (Join-Path $repo 'tools/build.ps1'))
+    (Get-Item -LiteralPath (Join-Path $repo 'tools/build-shaders.ps1'))
+)
+$coreObjectCachePath = Join-Path $nativeCacheRoot 'x360-core/obj/helcore.o'
+if (Test-Path -LiteralPath $coreObjectCachePath) {
+    $sourceInputs += Get-Item -LiteralPath $coreObjectCachePath
+} else {
+    $sourceInputs += Get-Item -LiteralPath (Join-Path $repo $CoreLib)
+}
+if ($CatalogRoot) { $sourceInputs += Get-Item -LiteralPath (Join-Path $out 'scene_catalog_generated.cpp') }
+$coreGeneratedFull = [IO.Path]::GetFullPath((Join-Path $repo $CoreGenerated))
+$coreGeneratedPrefix = $coreGeneratedFull.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
+$coreLibraryFull = [IO.Path]::GetFullPath((Join-Path $repo $CoreLib))
+$inputRecords = @(
+    foreach ($input in $sourceInputs | Sort-Object FullName -Unique) {
+        $fullInput = [IO.Path]::GetFullPath($input.FullName)
+        $relativeInput = if ($fullInput.Equals([IO.Path]::GetFullPath($coreObjectCachePath), [StringComparison]::OrdinalIgnoreCase)) {
+            'generated-core-object/helcore.o'
+        } elseif ($fullInput.Equals($coreLibraryFull, [StringComparison]::OrdinalIgnoreCase)) {
+            'generated-core-archive/libhelcore.a'
+        } elseif ($fullInput.StartsWith($coreGeneratedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            'generated-core/' + $fullInput.Substring($coreGeneratedPrefix.Length).Replace('\', '/')
+        } elseif ($fullInput.EndsWith('scene_catalog_generated.cpp', [StringComparison]::OrdinalIgnoreCase)) {
+            'generated-scene-catalog.cpp'
+        } elseif ($fullInput.StartsWith($repo, [StringComparison]::OrdinalIgnoreCase)) {
+            $fullInput.Substring($repo.Length).TrimStart('\', '/')
+        } else {
+            throw "A cache input is outside the repository and generated-core root: $fullInput"
+        }
+        "$relativeInput=$((Get-FileHash -LiteralPath $fullInput -Algorithm SHA256).Hash)"
+    }
+)
+$coreCxxflagsForFingerprint = $coreCxxflags -replace [regex]::Escape("/work/$coreGenRel"), '/work/generated-core'
+$nativeFingerprintText = @(
+    $toolchainId, $cfg.docker_image, $common, $cflags, $cxxflags, $coreCxxflagsForFingerprint,
+    'powerpc-eabi-g++ -nostartfiles -T src/platform/xenia_guest/link.ld -lstdc++ -lsupc++ -lm -lgcc',
+    ($Define -join "`n"), ($inputRecords -join "`n"), ($objectNames -join "`n")
+) -join "`n"
+$fingerprintInputPath = Join-Path $objectCacheRoot 'native-fingerprint-input.txt'
+if (Test-Path -LiteralPath $fingerprintInputPath) {
+    $previousInputLines = @(Get-Content -LiteralPath $fingerprintInputPath)
+    $currentInputLines = @($nativeFingerprintText -split "`n")
+    $inputDifferences = @(Compare-Object -ReferenceObject $previousInputLines -DifferenceObject $currentInputLines)
+    if ($inputDifferences.Count -gt 0) {
+        Write-Host 'Native cache input differences:'
+        $inputDifferences | Select-Object -First 8 | ForEach-Object { Write-Host ("{0} {1}" -f $_.SideIndicator, $_.InputObject) }
+    }
+}
+Set-Content -LiteralPath $fingerprintInputPath -Value ($nativeFingerprintText -split "`n") -Encoding UTF8
+$sha256 = [Security.Cryptography.SHA256]::Create()
+$nativeFingerprint = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($nativeFingerprintText)))).Replace('-', '').ToLowerInvariant()
+$nativeFingerprintPath = Join-Path $objectCacheRoot 'native-fingerprint.txt'
+$objectManifestPath = Join-Path $objectCacheRoot 'objects.json'
+$nativeCacheHit = $false
+$nativeFingerprintPrevious = if (Test-Path -LiteralPath $nativeFingerprintPath) { (Get-Content -LiteralPath $nativeFingerprintPath -Raw).Trim() } else { '' }
+if ((Test-Path -LiteralPath $nativeFingerprintPath) -and (Test-Path -LiteralPath $objectManifestPath) -and
+    $nativeFingerprintPrevious -eq $nativeFingerprint) {
+    $manifest = Get-Content -LiteralPath $objectManifestPath -Raw | ConvertFrom-Json
+    $nativeCacheHit = $true
+    foreach ($objectName in $objectNames) {
+        $cachedObject = Join-Path $objectCacheRoot $objectName
+        $record = $manifest.objects | Where-Object { $_.name -eq $objectName } | Select-Object -First 1
+        if (-not $record -or -not (Test-Path -LiteralPath $cachedObject) -or
+            (Get-FileHash -LiteralPath $cachedObject -Algorithm SHA256).Hash -ne $record.sha256) {
+            Write-Host "Object cache entry failed validation: $objectName"
+            $nativeCacheHit = $false
+            break
+        }
+    }
+}
+if (-not $nativeCacheHit) { Write-Host "Native cache fingerprint mismatch: current $nativeFingerprint; cached $nativeFingerprintPrevious" }
+if (-not $nativeCacheHit) {
+    Get-ChildItem -LiteralPath $objectCacheRoot -File -Filter '*.o' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $contentObjectName } | Remove-Item -Force
+}
+$contentFingerprint = ([BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes(
+    "$toolchainId`n$cflags`n$((Get-FileHash -LiteralPath (Join-Path $out 'content.bin') -Algorithm SHA256).Hash)")))).Replace('-', '').ToLowerInvariant()
+$contentFingerprintPath = Join-Path $objectCacheRoot 'content-fingerprint.txt'
+$contentObjectPath = Join-Path $objectCacheRoot $contentObjectName
+$contentObjectHashPath = Join-Path $objectCacheRoot 'content-object.sha256'
+$contentCacheHit = (Test-Path -LiteralPath $contentFingerprintPath) -and
+    (Get-Content -LiteralPath $contentFingerprintPath -Raw).Trim() -eq $contentFingerprint -and
+    (Test-Path -LiteralPath $contentObjectPath) -and (Test-Path -LiteralPath $contentObjectHashPath) -and
+    (Get-FileHash -LiteralPath $contentObjectPath -Algorithm SHA256).Hash -eq (Get-Content -LiteralPath $contentObjectHashPath -Raw).Trim()
+if (-not $contentCacheHit -and (Test-Path -LiteralPath $contentObjectPath)) { Remove-Item -LiteralPath $contentObjectPath -Force }
+Write-Host "Native object cache: $(if ($nativeCacheHit) { 'hit' } else { 'miss' }); content object cache: $(if ($contentCacheHit) { 'hit' } else { 'miss' })"
+$nativeCompileLines = if ($nativeCacheHit) { 'echo "reused cached X360 native objects"' } else { $compileLines -join "`n" }
+$contentCompileLine = if ($contentCacheHit) { 'echo "reused cached content object"' } else { "powerpc-eabi-gcc $cflags -c `$OUT/content.S -o $contentObject" }
 $script = @"
 set -euo pipefail
 export PATH=/opt/devkitpro/devkitPPC/bin:`$PATH
 OUT=/work/$outRel
+OBJ_ROOT=/nativecache/x360-image-objects
+mkdir -p `$OBJ_ROOT
 powerpc-eabi-gcc --version | head -1 > `$OUT/toolchain.txt
 powerpc-eabi-g++ --version | head -1 >> `$OUT/toolchain.txt
 powerpc-eabi-ld --version | head -1 >> `$OUT/toolchain.txt
-$($compileLines -join "`n")
+$nativeCompileLines
+$contentCompileLine
 powerpc-eabi-g++ $cxxflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') /work/$coreLibRel -lstdc++ -lsupc++ -lm -lgcc
 powerpc-eabi-objdump -d `$OUT/helengine.elf > `$OUT/helengine.dis
 powerpc-eabi-nm -n `$OUT/helengine.elf > `$OUT/helengine.nm
@@ -164,7 +288,7 @@ $env:MSYS_NO_PATHCONV = "1"
 # native stderr line into a terminating error under ErrorActionPreference
 # Stop, and the compiler writes warnings there even on a successful build.
 $buildLog = Join-Path $out "build.log"
-& cmd /c "docker run --rm -v ""${repo}:/work"" $($cfg.docker_image) bash ""/work/$outRel/build.sh"" > ""$buildLog"" 2>&1"
+& cmd /c "docker run --pull=never --rm --network none -v ""${repo}:/work"" -v ""${nativeCacheRoot}:/nativecache"" $($cfg.docker_image) bash ""/work/$outRel/build.sh"" > ""$buildLog"" 2>&1"
 if ($LASTEXITCODE -ne 0) {
     Get-Content $buildLog | Select-Object -Last 25
     throw "docker build step failed with exit code $LASTEXITCODE (see $buildLog)"
@@ -191,3 +315,17 @@ Get-FileHash (Join-Path $out "helengine.elf"), (Join-Path $out "helengine.xex") 
     Set-Content (Join-Path $out "hashes.txt")
 Get-Content (Join-Path $out "hashes.txt")
 Write-Host "Built $out/helengine.xex"
+if (-not $nativeCacheHit) {
+    $objectRecords = @(
+        foreach ($objectName in $objectNames) {
+            $cachedObject = Join-Path $objectCacheRoot $objectName
+            if (-not (Test-Path -LiteralPath $cachedObject)) { throw "Native build did not produce cached object $cachedObject" }
+            [ordered]@{ name = $objectName; sha256 = (Get-FileHash -LiteralPath $cachedObject -Algorithm SHA256).Hash }
+        }
+    )
+    $manifestJson = [ordered]@{ schema = 1; fingerprint = $nativeFingerprint; objects = $objectRecords } | ConvertTo-Json -Depth 4
+    Set-Content -LiteralPath $objectManifestPath -Value $manifestJson -Encoding UTF8
+    Set-Content -LiteralPath $nativeFingerprintPath -Value $nativeFingerprint -Encoding ASCII
+}
+Set-Content -LiteralPath $contentFingerprintPath -Value $contentFingerprint -Encoding ASCII
+Set-Content -LiteralPath $contentObjectHashPath -Value (Get-FileHash -LiteralPath $contentObjectPath -Algorithm SHA256).Hash -Encoding ASCII
