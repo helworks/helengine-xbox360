@@ -17,7 +17,8 @@ int hel_phys_alloc(const char *name, uint32_t size, HelPhysBlock *out) {
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
     if (memory == MAP_FAILED || (uintptr_t)memory > UINT32_MAX) return HEL_ERR_PLATFORM_ALLOC;
     out->virt = (uint32_t)(uintptr_t)memory;
-    out->phys = out->virt;
+    /* GPU physical addresses live below 512 MiB; the host mapping is a separate virtual address. */
+    out->phys = 0x01000000u + allocations * 0x10000u;
     out->size = size;
     ++allocations;
     return HEL_OK;

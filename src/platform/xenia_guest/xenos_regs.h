@@ -49,7 +49,7 @@
 #define XE_TEX_CLAMP_REPEAT 0u
 #define XE_TEX_CLAMP_TO_EDGE 2u
 
-/* TextureFormat; only the one this backend uploads. */
+/* Legacy RGBA uploads use this code; x360_native_texture.c validates the native format catalog separately. */
 #define XE_TEX_FORMAT_8_8_8_8 6u
 
 /* Endian. Texel bytes need no swap: each channel is one byte, and the format

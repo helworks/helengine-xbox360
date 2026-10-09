@@ -51,8 +51,8 @@ namespace helengine::x360 {
 /// uploaded to.
 /// </summary>
 /// <remarks>
-/// A handle of zero means the pixels never reached the hardware, because the
-/// cooked format was one this backend does not convert. The size is still
+/// A handle of zero means upload failed validation or physical allocation. Native
+/// payloads preserve their packed GPU representation; generic formats are decoded by the shared codec. The size is still
 /// real, so layout and sprite sizing work; what is missing is only the
 /// picture, and the log says which format it was.
 /// </remarks>

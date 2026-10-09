@@ -1,0 +1,897 @@
+﻿diff --git a/src/platform/xenia_guest/x360_shader_artifact_internal.h b/src/platform/xenia_guest/x360_shader_artifact_internal.h
+new file mode 100644
+index 0000000..86303dc
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact_internal.h
+@@ -0,0 +1,39 @@
++#ifndef HEL_X360_SHADER_ARTIFACT_INTERNAL_H
++#define HEL_X360_SHADER_ARTIFACT_INTERNAL_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++typedef enum HelX3spErrorCode {
++    HEL_X3SP_ERROR_OK = 0,
++    HEL_X3SP_ERROR_ARGUMENT = 1,
++    HEL_X3SP_ERROR_ENVELOPE = 2,
++    HEL_X3SP_ERROR_INTEGRITY = 3,
++    HEL_X3SP_ERROR_RANGE = 4,
++    HEL_X3SP_ERROR_UNSUPPORTED = 5,
++    HEL_X3SP_ERROR_SEMANTIC = 6
++} HelX3spErrorCode;
++
++typedef struct HelX3spSection {
++    uint32_t offset;
++    uint32_t length;
++    uint32_t count;
++} HelX3spSection;
++
++typedef struct HelX3spEnvelope {
++    const uint8_t *data;
++    size_t size;
++    HelX3spSection sections[8];
++} HelX3spEnvelope;
++
++typedef struct HelX3spError {
++    uint32_t code;
++    uint32_t offset;
++} HelX3spError;
++
++int hel_x3sp_validate_envelope(const uint8_t *data, size_t size,
++                               HelX3spEnvelope *out, HelX3spError *error);
++/* Call only after proving that four bytes at p are within the input range. */
++uint32_t hel_x3sp_read_le32(const uint8_t *p);
++
++#endif
+diff --git a/src/platform/xenia_guest/x360_shader_artifact_envelope.c b/src/platform/xenia_guest/x360_shader_artifact_envelope.c
+new file mode 100644
+index 0000000..dd5b7e4
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact_envelope.c
+@@ -0,0 +1,256 @@
++#include "x360_shader_artifact_internal.h"
++
++#include "x360_shader_artifact_sha256.h"
++
++#include <string.h>
++
++#define X3SP_HEADER_SIZE 64u
++#define X3SP_DIRECTORY_OFFSET 64u
++#define X3SP_DIRECTORY_RECORD_SIZE 16u
++#define X3SP_SECTION_COUNT 8u
++#define X3SP_FIRST_SECTION_OFFSET 192u
++#define X3SP_MAX_FILE_SIZE 1048576u
++#define X3SP_STAGE_RECORD_SIZE 160u
++
++static const uint32_t section_record_sizes[X3SP_SECTION_COUNT] = {
++    48u, 160u, 4u, 36u, 40u, 24u, 24u, 1u
++};
++
++static const uint32_t section_min_counts[X3SP_SECTION_COUNT] = {
++    1u, 2u, 6u, 2u, 0u, 0u, 0u, 1u
++};
++
++static const uint32_t section_max_counts[X3SP_SECTION_COUNT] = {
++    1u, 2u, 2048u, 24u, 4u, 512u, 512u, 262144u
++};
++
++uint32_t hel_x3sp_read_le32(const uint8_t *p)
++{
++    return (uint32_t)p[0] |
++           ((uint32_t)p[1] << 8) |
++           ((uint32_t)p[2] << 16) |
++           ((uint32_t)p[3] << 24);
++}
++
++static int fail(HelX3spError *error, HelX3spErrorCode code, uint32_t offset)
++{
++    if (error != NULL) {
++        error->code = (uint32_t)code;
++        error->offset = offset;
++    }
++    return (int)code;
++}
++
++static size_t align4(size_t value)
++{
++    return (value + 3u) & ~(size_t)3u;
++}
++
++static int check_zero_padding(const uint8_t *data, size_t begin, size_t end,
++                              HelX3spError *error)
++{
++    size_t i;
++    for (i = begin; i < end; ++i) {
++        if (data[i] != 0)
++            return fail(error, HEL_X3SP_ERROR_ENVELOPE, (uint32_t)i);
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static void compute_artifact_digest(const uint8_t *data, size_t size,
++                                    uint8_t digest[32])
++{
++    static const uint8_t virtual_zero_digest[32] = {0};
++    HelX3spSha256 ctx;
++    hel_x3sp_sha256_init(&ctx);
++    hel_x3sp_sha256_update(&ctx, data, 32);
++    hel_x3sp_sha256_update(&ctx, virtual_zero_digest, sizeof virtual_zero_digest);
++    hel_x3sp_sha256_update(&ctx, data + X3SP_HEADER_SIZE, size - X3SP_HEADER_SIZE);
++    hel_x3sp_sha256_final(&ctx, digest);
++}
++
++static int validate_and_hash_stage_code(const uint8_t *data,
++                                        const HelX3spSection *stage_section,
++                                        const HelX3spSection *microcode_section,
++                                        HelX3spError *error)
++{
++    uint32_t offsets[2];
++    uint32_t counts[2];
++    size_t microcode_end = (size_t)microcode_section->offset + microcode_section->length;
++    size_t i;
++
++    /* Validate both ranges before hashing either stage. */
++    for (i = 0; i < 2; ++i) {
++        size_t record_offset = (size_t)stage_section->offset + i * X3SP_STAGE_RECORD_SIZE;
++        uint32_t code_offset = hel_x3sp_read_le32(data + record_offset + 12);
++        uint32_t word_count = hel_x3sp_read_le32(data + record_offset + 16);
++        size_t code_offset_size = (size_t)code_offset;
++
++        if (code_offset_size < microcode_section->offset ||
++            code_offset_size > microcode_end ||
++            (code_offset_size - microcode_section->offset) % 4u != 0) {
++            return fail(error, HEL_X3SP_ERROR_RANGE, (uint32_t)(record_offset + 12));
++        }
++        if ((size_t)word_count > (microcode_end - code_offset_size) / 4u) {
++            return fail(error, HEL_X3SP_ERROR_RANGE, (uint32_t)(record_offset + 16));
++        }
++        offsets[i] = code_offset;
++        counts[i] = word_count;
++    }
++
++    for (i = 0; i < 2; ++i) {
++        size_t record_offset = (size_t)stage_section->offset + i * X3SP_STAGE_RECORD_SIZE;
++        HelX3spSha256 ctx;
++        uint8_t digest[32];
++        uint32_t word_index;
++
++        hel_x3sp_sha256_init(&ctx);
++        for (word_index = 0; word_index < counts[i]; ++word_index) {
++            size_t byte_offset = (size_t)offsets[i] + (size_t)word_index * 4u;
++            uint32_t word = hel_x3sp_read_le32(data + byte_offset);
++            uint8_t big_endian_word[4];
++
++            big_endian_word[0] = (uint8_t)(word >> 24);
++            big_endian_word[1] = (uint8_t)(word >> 16);
++            big_endian_word[2] = (uint8_t)(word >> 8);
++            big_endian_word[3] = (uint8_t)word;
++            hel_x3sp_sha256_update(&ctx, big_endian_word, sizeof big_endian_word);
++        }
++        hel_x3sp_sha256_final(&ctx, digest);
++        if (memcmp(data + record_offset + 120, digest, sizeof digest) != 0)
++            return fail(error, HEL_X3SP_ERROR_INTEGRITY, (uint32_t)(record_offset + 120));
++    }
++
++    return HEL_X3SP_ERROR_OK;
++}
++
++int hel_x3sp_validate_envelope(const uint8_t *data, size_t size,
++                               HelX3spEnvelope *out, HelX3spError *error)
++{
++    HelX3spEnvelope result;
++    uint8_t digest[32];
++    uint32_t version, header_size, declared_size, target, section_count;
++    uint32_t directory_offset, flags;
++    size_t directory_end;
++    size_t previous_end;
++    size_t i;
++
++    if (out != NULL)
++        memset(out, 0, sizeof *out);
++    if (error != NULL) {
++        error->code = HEL_X3SP_ERROR_OK;
++        error->offset = 0;
++    }
++    if (out == NULL)
++        return fail(error, HEL_X3SP_ERROR_ARGUMENT, 0);
++    if (data == NULL)
++        return fail(error, HEL_X3SP_ERROR_ARGUMENT, 0);
++    if (size < X3SP_HEADER_SIZE || size > X3SP_MAX_FILE_SIZE)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 0);
++    if (memcmp(data, "X3SP", 4) != 0)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 0);
++
++    version = hel_x3sp_read_le32(data + 4);
++    header_size = hel_x3sp_read_le32(data + 8);
++    declared_size = hel_x3sp_read_le32(data + 12);
++    target = hel_x3sp_read_le32(data + 16);
++    section_count = hel_x3sp_read_le32(data + 20);
++    directory_offset = hel_x3sp_read_le32(data + 24);
++    flags = hel_x3sp_read_le32(data + 28);
++
++    if (version != 1u)
++        return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, 4);
++    if (header_size != X3SP_HEADER_SIZE)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 8);
++    if (declared_size > X3SP_MAX_FILE_SIZE || (size_t)declared_size != size)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 12);
++    if (target != 8u)
++        return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, 16);
++    if (section_count != X3SP_SECTION_COUNT)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 20);
++    if (directory_offset != X3SP_DIRECTORY_OFFSET)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 24);
++    if (flags != 0u)
++        return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, 28);
++
++    if ((size_t)directory_offset > size ||
++        (size_t)section_count > (size - (size_t)directory_offset) /
++                                    X3SP_DIRECTORY_RECORD_SIZE) {
++        return fail(error, HEL_X3SP_ERROR_RANGE, 24);
++    }
++    directory_end = (size_t)directory_offset +
++                    (size_t)section_count * X3SP_DIRECTORY_RECORD_SIZE;
++
++    compute_artifact_digest(data, size, digest);
++    if (memcmp(data + 32, digest, sizeof digest) != 0)
++        return fail(error, HEL_X3SP_ERROR_INTEGRITY, 32);
++
++    memset(&result, 0, sizeof result);
++    result.data = data;
++    result.size = size;
++    previous_end = directory_end;
++
++    for (i = 0; i < X3SP_SECTION_COUNT; ++i) {
++        size_t directory_record = (size_t)directory_offset + i * X3SP_DIRECTORY_RECORD_SIZE;
++        uint32_t kind = hel_x3sp_read_le32(data + directory_record);
++        uint32_t offset = hel_x3sp_read_le32(data + directory_record + 4);
++        uint32_t length = hel_x3sp_read_le32(data + directory_record + 8);
++        uint32_t count = hel_x3sp_read_le32(data + directory_record + 12);
++        size_t expected_offset = align4(previous_end);
++        size_t available;
++        size_t expected_length;
++        int padding_result;
++
++        if (kind == 0u || kind > X3SP_SECTION_COUNT)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, (uint32_t)directory_record);
++        if (kind != (uint32_t)i + 1u)
++            return fail(error, HEL_X3SP_ERROR_ENVELOPE, (uint32_t)directory_record);
++        if ((size_t)offset > size)
++            return fail(error, HEL_X3SP_ERROR_RANGE, (uint32_t)(directory_record + 4));
++        if ((size_t)offset != expected_offset)
++            return fail(error, HEL_X3SP_ERROR_ENVELOPE, (uint32_t)(directory_record + 4));
++
++        padding_result = check_zero_padding(data, previous_end, (size_t)offset, error);
++        if (padding_result != HEL_X3SP_ERROR_OK)
++            return padding_result;
++
++        available = size - (size_t)offset;
++        if ((size_t)count > available / section_record_sizes[i])
++            return fail(error, HEL_X3SP_ERROR_RANGE, (uint32_t)(directory_record + 12));
++        if (count < section_min_counts[i] || count > section_max_counts[i])
++            return fail(error, HEL_X3SP_ERROR_RANGE, (uint32_t)(directory_record + 12));
++        expected_length = (size_t)count * section_record_sizes[i];
++        if ((size_t)length > available || (size_t)length != expected_length)
++            return fail(error, HEL_X3SP_ERROR_RANGE, (uint32_t)(directory_record + 8));
++
++        result.sections[i].offset = offset;
++        result.sections[i].length = length;
++        result.sections[i].count = count;
++        previous_end = (size_t)offset + (size_t)length;
++    }
++
++    {
++        size_t aligned_end = align4(previous_end);
++        size_t padded_end = aligned_end < size ? aligned_end : size;
++        int padding_result = check_zero_padding(data, previous_end, padded_end, error);
++        if (padding_result != HEL_X3SP_ERROR_OK)
++            return padding_result;
++        if (aligned_end != size)
++            return fail(error, HEL_X3SP_ERROR_ENVELOPE,
++                        (uint32_t)(aligned_end < size ? aligned_end : size));
++    }
++
++    {
++        int stage_result = validate_and_hash_stage_code(data, &result.sections[1],
++                                                        &result.sections[2], error);
++        if (stage_result != HEL_X3SP_ERROR_OK)
++            return stage_result;
++    }
++
++    *out = result;
++    if (error != NULL) {
++        error->code = HEL_X3SP_ERROR_OK;
++        error->offset = 0;
++    }
++    return HEL_X3SP_ERROR_OK;
++}
+diff --git a/src/platform/xenia_guest/x360_shader_artifact_sha256.h b/src/platform/xenia_guest/x360_shader_artifact_sha256.h
+new file mode 100644
+index 0000000..b5b0b0e
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact_sha256.h
+@@ -0,0 +1,19 @@
++#ifndef HEL_X360_SHADER_ARTIFACT_SHA256_H
++#define HEL_X360_SHADER_ARTIFACT_SHA256_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++/* Private streaming state: fixed storage only, with no borrowed pointers. */
++typedef struct HelX3spSha256 {
++    uint32_t state[8];
++    uint64_t bit_count;
++    uint8_t block[64];
++    size_t block_size;
++} HelX3spSha256;
++
++void hel_x3sp_sha256_init(HelX3spSha256 *ctx);
++void hel_x3sp_sha256_update(HelX3spSha256 *ctx, const uint8_t *data, size_t size);
++void hel_x3sp_sha256_final(HelX3spSha256 *ctx, uint8_t digest[32]);
++
++#endif
+diff --git a/src/platform/xenia_guest/x360_shader_artifact_sha256.c b/src/platform/xenia_guest/x360_shader_artifact_sha256.c
+new file mode 100644
+index 0000000..673dc42
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact_sha256.c
+@@ -0,0 +1,156 @@
++#include "x360_shader_artifact_sha256.h"
++
++#include <string.h>
++
++static const uint32_t sha256_round_constants[64] = {
++    UINT32_C(0x428a2f98), UINT32_C(0x71374491), UINT32_C(0xb5c0fbcf), UINT32_C(0xe9b5dba5),
++    UINT32_C(0x3956c25b), UINT32_C(0x59f111f1), UINT32_C(0x923f82a4), UINT32_C(0xab1c5ed5),
++    UINT32_C(0xd807aa98), UINT32_C(0x12835b01), UINT32_C(0x243185be), UINT32_C(0x550c7dc3),
++    UINT32_C(0x72be5d74), UINT32_C(0x80deb1fe), UINT32_C(0x9bdc06a7), UINT32_C(0xc19bf174),
++    UINT32_C(0xe49b69c1), UINT32_C(0xefbe4786), UINT32_C(0x0fc19dc6), UINT32_C(0x240ca1cc),
++    UINT32_C(0x2de92c6f), UINT32_C(0x4a7484aa), UINT32_C(0x5cb0a9dc), UINT32_C(0x76f988da),
++    UINT32_C(0x983e5152), UINT32_C(0xa831c66d), UINT32_C(0xb00327c8), UINT32_C(0xbf597fc7),
++    UINT32_C(0xc6e00bf3), UINT32_C(0xd5a79147), UINT32_C(0x06ca6351), UINT32_C(0x14292967),
++    UINT32_C(0x27b70a85), UINT32_C(0x2e1b2138), UINT32_C(0x4d2c6dfc), UINT32_C(0x53380d13),
++    UINT32_C(0x650a7354), UINT32_C(0x766a0abb), UINT32_C(0x81c2c92e), UINT32_C(0x92722c85),
++    UINT32_C(0xa2bfe8a1), UINT32_C(0xa81a664b), UINT32_C(0xc24b8b70), UINT32_C(0xc76c51a3),
++    UINT32_C(0xd192e819), UINT32_C(0xd6990624), UINT32_C(0xf40e3585), UINT32_C(0x106aa070),
++    UINT32_C(0x19a4c116), UINT32_C(0x1e376c08), UINT32_C(0x2748774c), UINT32_C(0x34b0bcb5),
++    UINT32_C(0x391c0cb3), UINT32_C(0x4ed8aa4a), UINT32_C(0x5b9cca4f), UINT32_C(0x682e6ff3),
++    UINT32_C(0x748f82ee), UINT32_C(0x78a5636f), UINT32_C(0x84c87814), UINT32_C(0x8cc70208),
++    UINT32_C(0x90befffa), UINT32_C(0xa4506ceb), UINT32_C(0xbef9a3f7), UINT32_C(0xc67178f2)
++};
++
++static uint32_t rotate_right(uint32_t value, unsigned int amount)
++{
++    return (value >> amount) | (value << (32u - amount));
++}
++
++static uint32_t read_be32(const uint8_t *p)
++{
++    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
++           ((uint32_t)p[2] << 8) | (uint32_t)p[3];
++}
++
++static void write_be32(uint8_t *p, uint32_t value)
++{
++    p[0] = (uint8_t)(value >> 24);
++    p[1] = (uint8_t)(value >> 16);
++    p[2] = (uint8_t)(value >> 8);
++    p[3] = (uint8_t)value;
++}
++
++static void transform(HelX3spSha256 *ctx, const uint8_t block[64])
++{
++    uint32_t words[64];
++    uint32_t a, b, c, d, e, f, g, h;
++    size_t i;
++
++    for (i = 0; i < 16; ++i)
++        words[i] = read_be32(block + i * 4);
++    for (; i < 64; ++i) {
++        uint32_t s0 = rotate_right(words[i - 15], 7) ^
++                      rotate_right(words[i - 15], 18) ^ (words[i - 15] >> 3);
++        uint32_t s1 = rotate_right(words[i - 2], 17) ^
++                      rotate_right(words[i - 2], 19) ^ (words[i - 2] >> 10);
++        words[i] = words[i - 16] + s0 + words[i - 7] + s1;
++    }
++
++    a = ctx->state[0];
++    b = ctx->state[1];
++    c = ctx->state[2];
++    d = ctx->state[3];
++    e = ctx->state[4];
++    f = ctx->state[5];
++    g = ctx->state[6];
++    h = ctx->state[7];
++
++    for (i = 0; i < 64; ++i) {
++        uint32_t sum1 = rotate_right(e, 6) ^ rotate_right(e, 11) ^ rotate_right(e, 25);
++        uint32_t choice = (e & f) ^ (~e & g);
++        uint32_t temp1 = h + sum1 + choice + sha256_round_constants[i] + words[i];
++        uint32_t sum0 = rotate_right(a, 2) ^ rotate_right(a, 13) ^ rotate_right(a, 22);
++        uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
++        uint32_t temp2 = sum0 + majority;
++
++        h = g;
++        g = f;
++        f = e;
++        e = d + temp1;
++        d = c;
++        c = b;
++        b = a;
++        a = temp1 + temp2;
++    }
++
++    ctx->state[0] += a;
++    ctx->state[1] += b;
++    ctx->state[2] += c;
++    ctx->state[3] += d;
++    ctx->state[4] += e;
++    ctx->state[5] += f;
++    ctx->state[6] += g;
++    ctx->state[7] += h;
++}
++
++void hel_x3sp_sha256_init(HelX3spSha256 *ctx)
++{
++    if (ctx == NULL)
++        return;
++
++    ctx->state[0] = UINT32_C(0x6a09e667);
++    ctx->state[1] = UINT32_C(0xbb67ae85);
++    ctx->state[2] = UINT32_C(0x3c6ef372);
++    ctx->state[3] = UINT32_C(0xa54ff53a);
++    ctx->state[4] = UINT32_C(0x510e527f);
++    ctx->state[5] = UINT32_C(0x9b05688c);
++    ctx->state[6] = UINT32_C(0x1f83d9ab);
++    ctx->state[7] = UINT32_C(0x5be0cd19);
++    ctx->bit_count = 0;
++    ctx->block_size = 0;
++}
++
++void hel_x3sp_sha256_update(HelX3spSha256 *ctx, const uint8_t *data, size_t size)
++{
++    if (ctx == NULL || (data == NULL && size != 0))
++        return;
++
++    ctx->bit_count += (uint64_t)size * UINT64_C(8);
++    while (size != 0) {
++        size_t available = sizeof ctx->block - ctx->block_size;
++        size_t amount = size < available ? size : available;
++
++        memcpy(ctx->block + ctx->block_size, data, amount);
++        ctx->block_size += amount;
++        data += amount;
++        size -= amount;
++
++        if (ctx->block_size == sizeof ctx->block) {
++            transform(ctx, ctx->block);
++            ctx->block_size = 0;
++        }
++    }
++}
++
++void hel_x3sp_sha256_final(HelX3spSha256 *ctx, uint8_t digest[32])
++{
++    uint64_t bit_count;
++    uint8_t padding[64] = {0x80};
++    uint8_t length_bytes[8];
++    size_t padding_size;
++    size_t i;
++
++    if (ctx == NULL || digest == NULL)
++        return;
++
++    bit_count = ctx->bit_count;
++    padding_size = ctx->block_size < 56 ? 56 - ctx->block_size : 120 - ctx->block_size;
++    hel_x3sp_sha256_update(ctx, padding, padding_size);
++    for (i = 0; i < 8; ++i)
++        length_bytes[7 - i] = (uint8_t)(bit_count >> (i * 8));
++    hel_x3sp_sha256_update(ctx, length_bytes, sizeof length_bytes);
++
++    for (i = 0; i < 8; ++i)
++        write_be32(digest + i * 4, ctx->state[i]);
++    memset(ctx, 0, sizeof *ctx);
++}
+diff --git a/tests/shader_artifact_envelope_test.c b/tests/shader_artifact_envelope_test.c
+new file mode 100644
+index 0000000..e342a7a
+--- /dev/null
++++ b/tests/shader_artifact_envelope_test.c
+@@ -0,0 +1,261 @@
++#include <assert.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "../src/platform/xenia_guest/x360_shader_artifact_internal.h"
++#include "../src/platform/xenia_guest/x360_shader_artifact_sha256.h"
++
++static void assert_digest(const uint8_t actual[32], const char *hex)
++{
++    static const char digits[] = "0123456789abcdef";
++    size_t i;
++
++    for (i = 0; i < 32; ++i) {
++        assert(digits[actual[i] >> 4] == hex[i * 2]);
++        assert(digits[actual[i] & 15] == hex[i * 2 + 1]);
++    }
++    assert(hex[64] == '\0');
++}
++
++static void hash_once(const uint8_t *data, size_t size, uint8_t digest[32])
++{
++    HelX3spSha256 ctx;
++    hel_x3sp_sha256_init(&ctx);
++    hel_x3sp_sha256_update(&ctx, data, size);
++    hel_x3sp_sha256_final(&ctx, digest);
++}
++
++static void test_standard_vectors(void)
++{
++    static const uint8_t abc[] = {'a', 'b', 'c'};
++    uint8_t digest[32];
++
++    hash_once(NULL, 0, digest);
++    assert_digest(digest, "e3b0c44298fc1c149afbf4c8996fb924"
++                          "27ae41e4649b934ca495991b7852b855");
++    hash_once(abc, sizeof abc, digest);
++    assert_digest(digest, "ba7816bf8f01cfea414140de5dae2223"
++                          "b00361a396177a9cb410ff61f20015ad");
++}
++
++static void test_padding_and_split_boundaries(void)
++{
++    static const size_t sizes[] = {55, 56, 63, 64, 65, 130};
++    static const char *const expected[] = {
++        "2900465fcb533e05a158fd2b3be0e5e3b03740d83060aa3580e0d98a96bf2384",
++        "31454ff48ef36af2f08fd511bdc37d9d5855ac23e992e5ff5445cb6b7674a674",
++        "5f6401b96532c36de4e65beec0409b69b1d181864c8009b7a04f43e5d56350d1",
++        "94eb5de4943613fd048dc93393ab06877405faa39c11f53e9386083339833e7e",
++        "fc518669b6eb4b4dd91827ecacef86689c725bd5bab888fd3b26dbb196eec954",
++        "d35b74124cb85cfac62bfeaf3a9771efab3e0ef88fc43702c35a6efe09467cc1"
++    };
++    uint8_t data[130];
++    size_t i;
++
++    for (i = 0; i < sizeof data; ++i)
++        data[i] = (uint8_t)(i * 37u + 11u);
++
++    for (i = 0; i < sizeof sizes / sizeof sizes[0]; ++i) {
++        size_t size = sizes[i];
++        uint8_t before[130];
++        uint8_t digest[32];
++        HelX3spSha256 ctx;
++
++        memcpy(before, data, size);
++        hel_x3sp_sha256_init(&ctx);
++        hel_x3sp_sha256_update(&ctx, data, size / 2);
++        hel_x3sp_sha256_update(&ctx, data + size / 2, size - size / 2);
++        hel_x3sp_sha256_final(&ctx, digest);
++        assert_digest(digest, expected[i]);
++        assert(memcmp(data, before, size) == 0);
++
++        hel_x3sp_sha256_init(&ctx);
++        for (size_t offset = 0; offset < size;) {
++            size_t chunk = size - offset;
++            if (chunk > 7)
++                chunk = 7;
++            hel_x3sp_sha256_update(&ctx, data + offset, chunk);
++            offset += chunk;
++        }
++        hel_x3sp_sha256_final(&ctx, digest);
++        assert_digest(digest, expected[i]);
++        assert(memcmp(data, before, size) == 0);
++    }
++}
++
++static uint8_t golden[668];
++static uint8_t oversized_file[1048577];
++
++static void read_fixture(void)
++{
++    FILE *file = fopen("tests/shaders/artifacts/minimal-v1.x3sp", "rb");
++    assert(file != NULL);
++    assert(fread(golden, 1, sizeof golden, file) == sizeof golden);
++    assert(fgetc(file) == EOF);
++    assert(fclose(file) == 0);
++}
++
++static void write_le32(uint8_t *p, uint32_t value)
++{
++    p[0] = (uint8_t)value;
++    p[1] = (uint8_t)(value >> 8);
++    p[2] = (uint8_t)(value >> 16);
++    p[3] = (uint8_t)(value >> 24);
++}
++
++static void repair_artifact_integrity(uint8_t *data, size_t size)
++{
++    static const uint8_t zero_digest[32] = {0};
++    HelX3spSha256 ctx;
++    uint8_t digest[32];
++    hel_x3sp_sha256_init(&ctx);
++    hel_x3sp_sha256_update(&ctx, data, 32);
++    hel_x3sp_sha256_update(&ctx, zero_digest, sizeof zero_digest);
++    hel_x3sp_sha256_update(&ctx, data + 64, size - 64);
++    hel_x3sp_sha256_final(&ctx, digest);
++    memcpy(data + 32, digest, sizeof digest);
++}
++
++static void expect_failure(const uint8_t *data, size_t size,
++                           uint32_t expected_code, uint32_t expected_offset)
++{
++    HelX3spEnvelope view;
++    HelX3spEnvelope zero_view;
++    HelX3spError error = {0, 0};
++    int result;
++
++    memset(&view, 0xA5, sizeof view);
++    memset(&zero_view, 0, sizeof zero_view);
++    result = hel_x3sp_validate_envelope(data, size, &view, &error);
++    assert(result == (int)expected_code);
++    assert(error.code == expected_code);
++    if (expected_offset != UINT32_MAX)
++        assert(error.offset == expected_offset);
++    assert(memcmp(&view, &zero_view, sizeof view) == 0);
++}
++
++static void test_fixture_envelope_and_truncations(void)
++{
++    uint8_t unaligned[sizeof golden + 1];
++    uint8_t unchanged[sizeof golden + 1];
++    HelX3spEnvelope view;
++    HelX3spError error;
++    size_t size;
++
++    unaligned[0] = 0x5a;
++    memcpy(unaligned + 1, golden, sizeof golden);
++    memcpy(unchanged, unaligned, sizeof unaligned);
++    assert(hel_x3sp_validate_envelope(unaligned + 1, sizeof golden, &view, &error) == 0);
++    assert(error.code == 0);
++    assert(view.data == unaligned + 1);
++    assert(view.size == sizeof golden);
++    assert(view.sections[2].offset == 560);
++    assert(view.sections[2].length == 24);
++    assert(view.sections[2].count == 6);
++    assert(hel_x3sp_read_le32(golden + 560) == UINT32_C(0x12345678));
++    assert(memcmp(unaligned, unchanged, sizeof unaligned) == 0);
++
++    {
++        uint8_t whole_file_digest[32];
++        hash_once(golden, sizeof golden, whole_file_digest);
++        assert_digest(whole_file_digest,
++                      "698aba97a517880a854b933784738432"
++                      "85f108851e72c1a3d1ba5d3ac09071c6");
++    }
++
++    for (size = 0; size < sizeof golden; ++size)
++        expect_failure(golden, size, HEL_X3SP_ERROR_ENVELOPE, UINT32_MAX);
++}
++
++static void test_null_arguments_and_integrity_failure(void)
++{
++    HelX3spEnvelope view;
++    HelX3spEnvelope zero_view;
++    HelX3spError error;
++    uint8_t mutated[sizeof golden];
++
++    memset(&view, 0xA5, sizeof view);
++    memset(&zero_view, 0, sizeof zero_view);
++    assert(hel_x3sp_validate_envelope(NULL, sizeof golden, &view, &error) == HEL_X3SP_ERROR_ARGUMENT);
++    assert(memcmp(&view, &zero_view, sizeof view) == 0);
++    assert(error.code == HEL_X3SP_ERROR_ARGUMENT);
++    assert(error.offset == 0);
++    assert(hel_x3sp_validate_envelope(golden, sizeof golden, NULL, &error) == HEL_X3SP_ERROR_ARGUMENT);
++    assert(error.code == HEL_X3SP_ERROR_ARGUMENT);
++    assert(hel_x3sp_validate_envelope(golden, sizeof golden, &view, NULL) == 0);
++    expect_failure(oversized_file, sizeof oversized_file,
++                   HEL_X3SP_ERROR_ENVELOPE, 0);
++
++    memcpy(mutated, golden, sizeof mutated);
++    mutated[560] ^= 0x80;
++    expect_failure(mutated, sizeof mutated, HEL_X3SP_ERROR_INTEGRITY, 32);
++}
++
++static void test_repaired_header_and_directory_errors(void)
++{
++    uint8_t mutated[sizeof golden];
++
++#define REPAIR_AND_EXPECT(offset_, value_, code_, error_offset_) \
++    do { \
++        memcpy(mutated, golden, sizeof mutated); \
++        write_le32(mutated + (offset_), (value_)); \
++        repair_artifact_integrity(mutated, sizeof mutated); \
++        expect_failure(mutated, sizeof mutated, (code_), (error_offset_)); \
++    } while (0)
++
++    REPAIR_AND_EXPECT(12, 664, HEL_X3SP_ERROR_ENVELOPE, 12);
++    REPAIR_AND_EXPECT(12, 1048577, HEL_X3SP_ERROR_ENVELOPE, 12);
++    REPAIR_AND_EXPECT(4, 2, HEL_X3SP_ERROR_UNSUPPORTED, 4);
++    REPAIR_AND_EXPECT(16, 7, HEL_X3SP_ERROR_UNSUPPORTED, 16);
++    REPAIR_AND_EXPECT(28, 1, HEL_X3SP_ERROR_UNSUPPORTED, 28);
++    REPAIR_AND_EXPECT(64, 2, HEL_X3SP_ERROR_ENVELOPE, 64);
++    REPAIR_AND_EXPECT(64, 9, HEL_X3SP_ERROR_UNSUPPORTED, 64);
++    REPAIR_AND_EXPECT(64 + 3 * 16 + 4, 576, HEL_X3SP_ERROR_ENVELOPE, 116);
++    REPAIR_AND_EXPECT(64 + 3 * 16 + 4, UINT32_MAX, HEL_X3SP_ERROR_RANGE, 116);
++    REPAIR_AND_EXPECT(64 + 2 * 16 + 8, UINT32_MAX, HEL_X3SP_ERROR_RANGE, 104);
++    REPAIR_AND_EXPECT(64 + 2 * 16 + 12, UINT32_MAX, HEL_X3SP_ERROR_RANGE, 108);
++
++#undef REPAIR_AND_EXPECT
++
++    memcpy(mutated, golden, sizeof mutated);
++    mutated[667] = 1;
++    repair_artifact_integrity(mutated, sizeof mutated);
++    expect_failure(mutated, sizeof mutated, HEL_X3SP_ERROR_ENVELOPE, 667);
++}
++
++static void test_stage_word_range_and_digest(void)
++{
++    uint8_t mutated[sizeof golden];
++
++    memcpy(mutated, golden, sizeof mutated);
++    write_le32(mutated + 240 + 12, UINT32_C(0xfffffffc));
++    repair_artifact_integrity(mutated, sizeof mutated);
++    expect_failure(mutated, sizeof mutated, HEL_X3SP_ERROR_RANGE, 252);
++
++    memcpy(mutated, golden, sizeof mutated);
++    mutated[560] ^= 1;
++    repair_artifact_integrity(mutated, sizeof mutated);
++    expect_failure(mutated, sizeof mutated, HEL_X3SP_ERROR_INTEGRITY, 240 + 120);
++
++    /* The second stage range must be checked before hashing the first digest. */
++    memcpy(mutated, golden, sizeof mutated);
++    mutated[240 + 120] ^= 1;
++    write_le32(mutated + 400 + 12, UINT32_C(0xfffffffc));
++    repair_artifact_integrity(mutated, sizeof mutated);
++    expect_failure(mutated, sizeof mutated, HEL_X3SP_ERROR_RANGE, 400 + 12);
++}
++
++int main(void)
++{
++    read_fixture();
++    test_standard_vectors();
++    test_padding_and_split_boundaries();
++    test_fixture_envelope_and_truncations();
++    test_null_arguments_and_integrity_failure();
++    test_repaired_header_and_directory_errors();
++    test_stage_word_range_and_digest();
++    puts("shader artifact SHA/envelope tests passed");
++    return 0;
++}
+diff --git a/tools/test-shader-artifact.ps1 b/tools/test-shader-artifact.ps1
+new file mode 100644
+index 0000000..edbde6a
+--- /dev/null
++++ b/tools/test-shader-artifact.ps1
+@@ -0,0 +1,130 @@
++[CmdletBinding()]
++param(
++    [ValidateSet('Envelope')]
++    [string]$Suite = 'Envelope'
++)
++
++$ErrorActionPreference = 'Stop'
++$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
++$artifactRoot = Join-Path $repoRoot '.artifacts\shader-artifact'
++$image = 'devkitpro/devkitppc@sha256:db8e39c73546d461d5606dc7dfed462a7d5957498502562e3b46769d02496cc1'
++
++if (-not (Test-Path -LiteralPath $artifactRoot)) {
++    New-Item -ItemType Directory -Path $artifactRoot | Out-Null
++}
++$artifactRoot = (Resolve-Path -LiteralPath $artifactRoot).Path
++$repoPrefix = $repoRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
++if (-not $artifactRoot.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
++    throw "Resolved artifact output escaped the checkout: $artifactRoot"
++}
++
++$runId = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ', [Globalization.CultureInfo]::InvariantCulture)
++$outputPath = Join-Path $artifactRoot $runId
++if (Test-Path -LiteralPath $outputPath) {
++    throw "Refusing to reuse existing artifact output directory: $outputPath"
++}
++New-Item -ItemType Directory -Path $outputPath | Out-Null
++$outputPath = (Resolve-Path -LiteralPath $outputPath).Path
++if (-not $outputPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
++    throw "Resolved run output escaped the checkout: $outputPath"
++}
++
++$sourceMount = $repoRoot.Replace('\', '/')
++$outputMount = $outputPath.Replace('\', '/')
++$containerScript = @'
++set -euo pipefail
++export PATH=/opt/devkitpro/devkitPPC/bin:$PATH
++cd /work
++
++echo "Host compiler: $(gcc --version | head -n 1)"
++echo "PowerPC compiler: $(powerpc-eabi-gcc --version | head -n 1)"
++
++gcc -std=c11 -O1 -Wall -Wextra -Werror \
++  -I/work/src/platform/xenia_guest \
++  -o /out/shader-artifact-envelope-test \
++  /work/tests/shader_artifact_envelope_test.c \
++  /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
++  /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
++/out/shader-artifact-envelope-test
++
++run_sanitizer() {
++  sanitizer="$1"
++  flag="-fsanitize=$sanitizer"
++  extra_flags=()
++  if [ "$sanitizer" = address ]; then
++    extra_flags=(-fno-pie -no-pie)
++  fi
++  probe="/tmp/shader-artifact-sanitizer-probe-$sanitizer"
++  probe_log="/tmp/shader-artifact-sanitizer-probe-$sanitizer.log"
++  saved_probe_log="/out/sanitizer-probe-$sanitizer.log"
++
++  if ! printf '%s\n' 'int main(void) { return 0; }' | \
++      gcc -std=c11 "$flag" "${extra_flags[@]}" -x c - -o "$probe" >"$probe_log" 2>&1; then
++    echo "$sanitizer: UNAVAILABLE (compiler probe failed)"
++    cp "$probe_log" "$saved_probe_log"
++    sed -n '1,12p' "$probe_log"
++    return 0
++  fi
++
++  set +e
++  timeout 10s "$probe" >"$probe_log" 2>&1
++  probe_status=$?
++  set -e
++  if [ "$probe_status" -ne 0 ]; then
++    if [ "$probe_status" -eq 124 ]; then
++      echo "$sanitizer: UNAVAILABLE (runtime probe timed out after 10 seconds)"
++    else
++      echo "$sanitizer: UNAVAILABLE (runtime probe exited $probe_status)"
++    fi
++    cp "$probe_log" "$saved_probe_log"
++    sed -n '1,20p' "$probe_log"
++    return 0
++  fi
++  cp "$probe_log" "$saved_probe_log"
++
++  echo "$sanitizer: available; running focused harness"
++  gcc -std=c11 -O1 -g -Wall -Wextra -Werror "$flag" \
++    "${extra_flags[@]}" \
++    -I/work/src/platform/xenia_guest \
++    -o "/tmp/shader-artifact-envelope-$sanitizer" \
++    /work/tests/shader_artifact_envelope_test.c \
++    /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
++    /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
++  test_log="/tmp/shader-artifact-envelope-$sanitizer.log"
++  set +e
++  timeout 30s "/tmp/shader-artifact-envelope-$sanitizer" >"$test_log" 2>&1
++  test_status=$?
++  set -e
++  if [ "$test_status" -ne 0 ]; then
++    echo "$sanitizer: focused harness FAILED (exit $test_status)"
++    tail -n 40 "$test_log"
++    return "$test_status"
++  fi
++  cat "$test_log"
++}
++
++run_sanitizer address
++run_sanitizer undefined
++
++powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
++  -I/work/src/platform/xenia_guest -c \
++  /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
++  -o /out/x360_shader_artifact_sha256.ppc.o
++powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
++  -I/work/src/platform/xenia_guest -c \
++  /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c \
++  -o /out/x360_shader_artifact_envelope.ppc.o
++echo "PowerPC freestanding objects compiled"
++'@
++$containerScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($containerScript))
++$containerCommand = "printf '%s' '$containerScriptBase64' | base64 -d | bash"
++
++Write-Host "Suite: $Suite"
++Write-Host "Output: $outputPath"
++& docker run --pull=never --rm --network none `
++    --mount "type=bind,source=$sourceMount,target=/work,readonly" `
++    --mount "type=bind,source=$outputMount,target=/out" `
++    $image bash -lc $containerCommand
++if ($LASTEXITCODE -ne 0) {
++    throw "Shader artifact suite '$Suite' failed with exit code $LASTEXITCODE"
++}

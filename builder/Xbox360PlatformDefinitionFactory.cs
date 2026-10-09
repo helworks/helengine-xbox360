@@ -112,6 +112,42 @@ public static class Xbox360PlatformDefinitionFactory {
             [codegen],
             [new PlatformStorageProfileDefinition("embedded-archive", "Embedded Archive", PlatformStorageProfileKind.LooseFiles, "x360-embedded-archive", false)],
             [new PlatformMediaProfileDefinition("x360-xex", "XEX Image", PlatformMediaLayoutKind.InstallTree, false, true)],
-            new RuntimeGenerationContract(RuntimeMaterialResolutionMode.CookedPlatformOwned, true, PackagedPathPolicy.ContentRelativeOnly));
+            new RuntimeGenerationContract(RuntimeMaterialResolutionMode.CookedPlatformOwned, true, PackagedPathPolicy.ContentRelativeOnly),
+            assetCookCapabilities: CreateAssetCookCapabilities());
+    }
+
+    /// <summary>Publishes native choices for authored textures and font atlases without lowering existing font resolution.</summary>
+    static PlatformAssetCookCapabilityDefinition[] CreateAssetCookCapabilities() {
+        string defaults = Xbox360TextureCookSettingsSerializer.Serialize(Xbox360TextureCookSettingsSerializer.CreateDefaults());
+        PlatformTextureFormatCapabilityDefinition formats = CreateTextureFormatCapabilities();
+        return [
+            new("texture", "runtime-texture", PlatformAssetCookOwnershipKind.BuilderOwned, "x360-texture", defaults, formats),
+            new("font-atlas-texture", "runtime-texture", PlatformAssetCookOwnershipKind.BuilderOwned, "x360-font-atlas-texture", defaults, formats)
+        ];
+    }
+
+    /// <summary>Advertises cookable catalog formats and existing generic formats with their explicit alpha policies.</summary>
+    static PlatformTextureFormatCapabilityDefinition CreateTextureFormatCapabilities() {
+        List<string> formatIds = [];
+        List<PlatformTextureFormatCombinationDefinition> combinations = [];
+        HashSet<TextureAssetAlphaPrecision> alphaPrecisions = [];
+        foreach (Xbox360NativeTextureFormatDefinition format in Xbox360NativeTextureFormatCatalog.Formats) {
+            if (!format.SupportsCooking) continue;
+            formatIds.Add(format.Id);
+            foreach (TextureAssetAlphaPrecision alpha in format.SupportedAlphaPrecisions) {
+                alphaPrecisions.Add(alpha);
+                combinations.Add(new PlatformTextureFormatCombinationDefinition(format.Id, alpha));
+            }
+        }
+        foreach (TextureAssetColorFormat format in Enum.GetValues<TextureAssetColorFormat>()) {
+            if (!helengine.editor.TextureAssetProcessorSettings.TryResolveGenericColorFormat(format.ToString(), out _)) continue;
+            formatIds.Add(format.ToString());
+            foreach (TextureAssetAlphaPrecision alpha in Enum.GetValues<TextureAssetAlphaPrecision>()) {
+                if (!TextureAssetPixelCodec.IsAlphaPrecisionSupported(format, alpha)) continue;
+                alphaPrecisions.Add(alpha);
+                combinations.Add(new PlatformTextureFormatCombinationDefinition(format.ToString(), alpha));
+            }
+        }
+        return new PlatformTextureFormatCapabilityDefinition(formatIds, alphaPrecisions.OrderBy(alpha => alpha).ToArray(), combinations);
     }
 }

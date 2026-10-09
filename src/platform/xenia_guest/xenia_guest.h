@@ -82,6 +82,9 @@ void hel_shader_gpu_probe_constants(void);
    hel_frame_begin and hel_frame_present, like everything else that writes the
    ring. */
 void hel_texture_bind(HelTexture texture);
+/* Validates and copies a native X3T1 payload directly, retaining the ordinary fenced lifetime. */
+int hel_texture_create_native(const uint8_t *colors, uint32_t colors_length,
+    uint32_t width, uint32_t height, HelTexture *out_texture);
 
 /* General-purpose heap (heap.c): the C++ runtime and the transpiled engine
    core allocate from here. GPU-visible memory uses hel_phys_alloc instead. */

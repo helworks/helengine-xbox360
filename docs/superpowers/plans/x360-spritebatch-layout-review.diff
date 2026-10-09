@@ -1,0 +1,810 @@
+﻿diff --git "a/.artifacts\\spritebatch-task2-before\\tools\\shader-probe\\backend_protocol.py" b/tools/shader-probe/backend_protocol.py
+index 8bf7997..2e01f5e 100644
+--- "a/.artifacts\\spritebatch-task2-before\\tools\\shader-probe\\backend_protocol.py"
++++ b/tools/shader-probe/backend_protocol.py
+@@ -8,40 +8,36 @@ import json
+ import pathlib
+ import sys
+ 
+ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+ 
+ import shader_probe
+ from backend_layout import LayoutError, reflect_layout
+ from lower_xenos import LoweringError, lower_spirv
++from vertex_layout import DEFAULT_VERTEX_LAYOUT, normalize_vertex_layout, profiles_abi
+ 
+ 
+ PROTOCOL_VERSION = 1
+ MAX_LINE_BYTES = 8 * 1024 * 1024
+ MAX_INCLUDE_REQUESTS = 4096
+ MAX_MICROCODE_DWORDS = 1024
+ ABI = {
+     "protocol": 1,
+     "layout": "x360-reflected-layout-v1",
+-    "vertex_inputs": {
+-        "0": ["float3", 0, "vf0", 12],
+-        "1": ["float3", 3, "vf0", 12],
+-        "2": ["float2", 6, "vf0", 12],
+-        "3": ["float4", 8, "vf0", 12],
+-    },
++    "vertex_layouts": profiles_abi(),
+     "varying_locations": [0, 7],
+     "uniform_registers": 256,
+     "texture_fetch_constant": 1,
+     "max_microcode_dwords": MAX_MICROCODE_DWORDS,
+ }
+ REQUEST_FIELDS = {
+     "protocol", "type", "source", "source_name", "stage", "entrypoint",
+     "program", "variant", "target", "shader_model", "defines", "options",
+-    "binding_policy",
++    "binding_policy", "vertex_layout",
+ }
+ OPTION_FIELDS = {"debug_info", "optimize", "warnings_as_errors"}
+ BINDING_POLICY_FIELDS = {
+     "default_space", "constant_buffer_shift", "texture_shift", "sampler_shift",
+     "storage_shift",
+ }
+ 
+ 
+@@ -86,29 +82,36 @@ def _unique_object(pairs):
+     value = {}
+     for key, item in pairs:
+         if key in value:
+             raise ProtocolError(f"duplicate JSON field {key!r}")
+         value[key] = item
+     return value
+ 
+ 
+-def _object(value, label, fields):
++def _object(value, label, fields, optional=()):
+     if not isinstance(value, dict):
+         raise ProtocolError(f"{label} must be a JSON object")
+-    missing, unknown = fields - value.keys(), value.keys() - fields
++    missing = (fields - set(optional)) - value.keys()
++    unknown = value.keys() - fields
+     if missing:
+         raise ProtocolError(f"{label} is missing required field(s): {sorted(missing)}")
+     if unknown:
+         raise ProtocolError(f"{label} has unsupported field(s): {sorted(unknown)}")
+     return value
+ 
+ 
+ def validate_request(value):
+-    value = _object(value, "compile request", REQUEST_FIELDS)
++    value = _object(value, "compile request", REQUEST_FIELDS, optional={"vertex_layout"})
++    try:
++        value["vertex_layout"] = normalize_vertex_layout(
++            value.get("vertex_layout", DEFAULT_VERTEX_LAYOUT)
++        )
++    except ValueError as error:
++        raise ProtocolError(str(error)) from error
+     if type(value["protocol"]) is not int or value["protocol"] != PROTOCOL_VERSION:
+         raise ProtocolError("unsupported protocol version; expected 1")
+     if value["type"] != "compile":
+         raise ProtocolError("unsupported message type; expected 'compile'")
+     for field in ("source", "source_name", "stage", "entrypoint", "program",
+                   "variant", "target", "shader_model"):
+         if not isinstance(value[field], str):
+             raise ProtocolError(f"{field} must be a string")
+@@ -142,16 +145,17 @@ def validate_request(value):
+ def _tool_source_paths(protocol_path=None, shader_probe_path=None):
+     protocol_path = pathlib.Path(protocol_path or __file__).resolve()
+     shader_probe_path = pathlib.Path(shader_probe_path or shader_probe.__file__).resolve()
+     probe_directory = protocol_path.parent
+     tools_directory = protocol_path.parents[1]
+     return [
+         ("backend_protocol.py", protocol_path),
+         ("backend_layout.py", probe_directory / "backend_layout.py"),
++        ("vertex_layout.py", probe_directory / "vertex_layout.py"),
+         ("shader_probe.py", shader_probe_path),
+         ("lower_xenos.py", probe_directory / "lower_xenos.py"),
+         ("spirv_parser.py", probe_directory / "spirv_parser.py"),
+         ("xenos_asm.py", tools_directory / "xenos_asm.py"),
+     ]
+ 
+ 
+ def _tool_identity(shaderc_path):
+@@ -243,18 +247,21 @@ def compile_request(request, shaderc_path, input_stream=None, output_stream=None
+             warnings_as_errors=opts["warnings_as_errors"],
+             preserve_reflection_names=opts["optimize"],
+         )
+     except (ProtocolError, OSError, TypeError, ValueError, RuntimeError) as error:
+         return {"success": False, "diagnostics": str(error)}, tool_identity
+     if not compiled.succeeded:
+         return {"success": False, "diagnostics": compiled.diagnostics}, tool_identity
+ 
+-    reflection, layout = reflect_layout(compiled.spirv, request["stage"], request["entrypoint"])
++    reflection, layout = reflect_layout(
++        compiled.spirv, request["stage"], request["entrypoint"], request["vertex_layout"]
++    )
+     lowered = lower_spirv(compiled.spirv, request["stage"], request["entrypoint"], layout)
++    lowered.metadata["vertex_layout"] = request["vertex_layout"]
+     binary = lowered.binary
+     _check_microcode(binary)
+ 
+     includes = [{"source_name": item.source_name, "sha256": item.sha256}
+                 for item in compiled.included_sources]
+     binary_base64 = base64.b64encode(binary).decode("ascii")
+     complete = {
+         "request": request,
+diff --git "a/.artifacts\\spritebatch-task2-before\\tools\\shader-probe\\backend_layout.py" b/tools/shader-probe/backend_layout.py
+index 4833a35..311868e 100644
+--- "a/.artifacts\\spritebatch-task2-before\\tools\\shader-probe\\backend_layout.py"
++++ b/tools/shader-probe/backend_layout.py
+@@ -1,25 +1,18 @@
+ """SPIR-V reflection and the bounded Phase 2d Xenos host layout."""
+ 
+ from spirv_parser import STORAGE_NAMES, decode_string, parse_spirv
++from vertex_layout import DEFAULT_VERTEX_LAYOUT, profile_for
+ 
+ 
+ class LayoutError(ValueError):
+     """The compiled module cannot be represented by the published host ABI."""
+ 
+ 
+-_VERTEX_INPUTS = {
+-    0: ("float3", 0, "32_32_32_FLOAT"),
+-    1: ("float3", 3, "32_32_32_FLOAT"),
+-    2: ("float2", 6, "32_32_FLOAT"),
+-    3: ("float4", 8, "32_32_32_32_FLOAT"),
+-}
+-
+-
+ def _type_format(module, type_id, context):
+     item = module.types.get(type_id)
+     if item is None:
+         raise LayoutError(f"{context} has an unknown SPIR-V type %{type_id}")
+     if item.opcode == 22 and len(item.operands) == 2 and item.operands[1] == 32:
+         return "float"
+     if item.opcode == 23 and len(item.operands) == 3:
+         scalar = module.types.get(item.operands[1])
+@@ -184,20 +177,24 @@ def _reflect_resources(module, stage):
+     if bool(textures) != bool(samplers):
+         raise LayoutError("a Texture2D and separate sampler must both be present")
+     if textures and samplers and stage != "pixel":
+         raise LayoutError("Texture2D and sampler resources are pixel-stage only")
+     resources.sort(key=lambda item: (item["set"], item["binding"], item["kind"], item["name"]))
+     return resources, uniform_register_count, textures, samplers
+ 
+ 
+-def reflect_layout(binary, stage, entrypoint):
++def reflect_layout(binary, stage, entrypoint, vertex_layout=DEFAULT_VERTEX_LAYOUT):
+     """Return actual SPIR-V reflection and its deterministic lowerer layout."""
+     if stage not in ("vertex", "pixel"):
+         raise LayoutError(f"unsupported shader stage {stage!r}")
++    try:
++        selected_layout = profile_for(vertex_layout)
++    except ValueError as error:
++        raise LayoutError(str(error)) from error
+     module = parse_spirv(binary)
+     matches = [entry for entry in module.entry_points if entry[2] == entrypoint]
+     if len(matches) != 1:
+         raise LayoutError(f"{stage} entry point {entrypoint!r} is missing or ambiguous")
+     model, _function, _name, interface_ids = matches[0]
+     if model != (0 if stage == "vertex" else 4):
+         raise LayoutError(f"{stage} entry point has the wrong execution model")
+ 
+@@ -241,25 +238,28 @@ def reflect_layout(binary, stage, entrypoint):
+     _validate_interfaces(interfaces, stage)
+     resources, register_count, textures, samplers = _reflect_resources(module, stage)
+ 
+     layout = {"vertex_inputs": {}, "varyings": {}, "uniforms": {}, "texture_bindings": []}
+     if stage == "vertex":
+         for item in interfaces["inputs"]:
+             location = item["location"]
+             fmt = item["format"]
+-            if location not in _VERTEX_INPUTS:
++            attribute = selected_layout.inputs.get(location)
++            if attribute is None:
+                 raise LayoutError(f"vertex input location {location} is outside the published ABI")
+-            expected, offset, fetch_format = _VERTEX_INPUTS[location]
+-            if fmt != expected:
++            if fmt != attribute.format:
+                 raise LayoutError(
+-                    f"vertex input location {location} must be {expected}, got {fmt}"
++                    f"vertex input location {location} must be {attribute.format}, got {fmt}"
+                 )
+             layout["vertex_inputs"][str(location)] = {
+-                "fetch_constant": 0, "stride": 12, "offset": offset, "format": fetch_format,
++                "fetch_constant": 0,
++                "stride": selected_layout.stride,
++                "offset": attribute.offset,
++                "format": attribute.hardware_format,
+             }
+         layout["varyings"] = {
+             str(item["location"]): item["location"]
+             for item in interfaces["outputs"] if item["location"] is not None
+         }
+     else:
+         layout["varyings"] = {
+             str(item["location"]): item["location"]
+diff --git "a/.artifacts\\spritebatch-task2-before\\tools\\shader-probe\\lower_xenos.py" b/tools/shader-probe/lower_xenos.py
+index a65ea1f..e57405f 100644
+--- "a/.artifacts\\spritebatch-task2-before\\tools\\shader-probe\\lower_xenos.py"
++++ b/tools/shader-probe/lower_xenos.py
+@@ -740,16 +740,28 @@ class _Lowerer:
+         else:
+             matrix_id, vector_id = a[2:]
+         matrix = self.value[matrix_id]
+         vector = self._vector(self.value[vector_id])
+         if not isinstance(matrix, Matrix) or len(matrix.memory_vectors) != 4 or len(vector.lanes) != 4:
+             raise LoweringError("only a float4x4 times float4 transform is supported")
+         expected_major = "row_major" if op == 144 else "column_major"
+         if matrix.major != expected_major:
++            if op == 145 and matrix.major == "row_major":
++                # Row-major storage exposes matrix rows directly; each result
++                # component is the dot product of one row with the vector.
++                dest = self._new_reg("row-major matrix transform")
++                vector_source = self._source(vector)
++                for component, row in enumerate(matrix.memory_vectors):
++                    self.alu.append(
++                        f"dp4 r{dest}.{'xyzw'[component]}, "
++                        f"{self._source(row)}, {vector_source}"
++                    )
++                self.value[result_id] = self._reg_vector(dest, type_id)
++                return
+             raise LoweringError(
+                 f"{OP_NAMES[op]} requires {expected_major} matrix storage in this lowering"
+             )
+         first = None
+         for memory_vector, scalar in zip(matrix.memory_vectors, vector.lanes):
+             if isinstance(scalar, (int, float)):
+                 if float(scalar) == 0.0:
+                     continue
+diff --git "a/.artifacts\\spritebatch-task2-before\\tests\\shader_backend_protocol_test.py" b/tests/shader_backend_protocol_test.py
+index caaa50b..138c755 100644
+--- "a/.artifacts\\spritebatch-task2-before\\tests\\shader_backend_protocol_test.py"
++++ b/tests/shader_backend_protocol_test.py
+@@ -581,16 +581,20 @@ class BackendProtocolTests(unittest.TestCase):
+ 
+     def test_tool_identity_sources_follow_bundled_shader_tools_layout(self):
+         from backend_protocol import _tool_source_paths
+ 
+         bundle_root = pathlib.Path("C:/builder/output") / "shader-tools"
+         protocol_path = bundle_root / "shader-probe" / "backend_protocol.py"
+         frontend_path = bundle_root / "shader-probe" / "shader_probe.py"
+         sources = _tool_source_paths(protocol_path, frontend_path)
++        self.assertIn(
++            ("vertex_layout.py", bundle_root / "shader-probe" / "vertex_layout.py"),
++            sources,
++        )
+         self.assertEqual(sources[-1][1], bundle_root / "xenos_asm.py")
+ 
+     def test_invalid_request_and_missing_shaderc_return_failure_without_binary(self):
+         malformed = request("float4 main() : SV_Target0 { return 1; }", "pixel")
+         malformed["binding_policy"]["default_space"] = 1
+         code, result, _stderr = run_protocol(malformed)
+         self.assertNotEqual(code, 0)
+         self.assertIsNotNone(result)
+diff --git "a/.artifacts\\spritebatch-task2-before\\tests\\shader_lowering_test.py" b/tests/shader_lowering_test.py
+index 77fa293..27dce2e 100644
+--- "a/.artifacts\\spritebatch-task2-before\\tests\\shader_lowering_test.py"
++++ b/tests/shader_lowering_test.py
+@@ -10,16 +10,18 @@ import sys
+ import tempfile
+ import unittest
+ 
+ ROOT = pathlib.Path(__file__).resolve().parents[1]
+ sys.path.insert(0, str(ROOT / "tools" / "shader-probe"))
+ sys.path.insert(0, str(ROOT / "tools"))
+ 
+ import shader_probe  # noqa: E402
++import xenos_asm  # noqa: E402
++from backend_layout import reflect_layout  # noqa: E402
+ from spirv_parser import SpirvError, parse_spirv  # noqa: E402
+ from lower_xenos import LoweringError, Vector, _Lowerer, lower_spirv  # noqa: E402
+ 
+ 
+ SHADERC = pathlib.Path(
+     r"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows"
+     r"\runtimes\win-x64\native\shaderc_shared.dll"
+ )
+@@ -203,16 +205,24 @@ def execute_xenos(binary, constants, vertex_buffers=None, input_registers=None,
+                 operands.append(source(selector, reg_index, swizzle,
+                                        bool(_field(d1, neg_bit, 1))))
+             if operation == 0:
+                 result = [_f32(x + y) for x, y in zip(*operands)]
+             elif operation == 1:
+                 result = [_f32(x * y) for x, y in zip(*operands)]
+             elif operation == 2:
+                 result = [_f32(max(x, y)) for x, y in zip(*operands)]
++            elif operation == 15:
++                # Xenia Canary src/xenia/gpu/ucode.h:1482-1486 defines DOT4v:
++                # opcode 15 sums four component products, then the encoded
++                # destination mask controls which lanes are kept.
++                dot = 0.0
++                for x, y in zip(*operands):
++                    dot = _f32(dot + _f32(x * y))
++                result = [dot] * 4
+             elif operation == 11:
+                 result = [_f32(_f32(x * y) + z) for x, y, z in zip(*operands)]
+             else:
+                 raise AssertionError(f"unknown ALU opcode {operation}")
+             if export:
+                 if dest == 62:
+                     name = "oPos"
+                 else:
+@@ -318,16 +328,33 @@ class LoweringTests(unittest.TestCase):
+     def setUpClass(cls):
+         cls.library, _path = shader_probe.load_shaderc(SHADERC)
+ 
+     def compile(self, name, stage):
+         return shader_probe.compile_hlsl(
+             self.library, FIXTURES / name, stage, "main"
+         )
+ 
++    def test_test_executor_dp4_sums_four_components_and_preserves_masked_lanes(self):
++        dwords, _listing = xenos_asm.assemble(
++            "alloc position\n"
++            "exec\n"
++            "  dp4 r1.x, r0, c0\n"
++            "  dp4 r1.z, r0, c1\n"
++            "exece\n"
++            "  max oPos, r1, r1\n"
++        )
++        binary = struct.pack(">%dI" % len(dwords), *dwords)
++        result = execute_xenos(
++            binary,
++            [[2, 3, 5, 7], [11, 13, 17, 19]],
++            input_registers={0: [1, 2, 3, 1]},
++        )
++        self.assertEqual(result["oPos"], [30, 0, 107, 0])
++
+     def test_vertex_transform_uses_source_expression_and_explicit_maps(self):
+         spirv = self.compile("transform_vs.hlsl", "vertex")
+         layout = {
+             "vertex_inputs": {
+                 "0": {"fetch_constant": 0, "stride": 12, "offset": 0,
+                       "format": "32_32_32_FLOAT"},
+                 "2": {"fetch_constant": 0, "stride": 12, "offset": 6,
+                       "format": "32_32_FLOAT"},
+@@ -352,16 +379,96 @@ class LoweringTests(unittest.TestCase):
+         self.assertEqual(outputs["o1"][:2], [.125, .25])
+         uniform = lowered.metadata["uniforms"]["0"]
+         self.assertEqual(uniform["raw_memory_order"], "consecutive_uploaded_vec4_registers")
+         self.assertEqual(uniform["register_values"], layout["uniforms"]["0"])
+         self.assertEqual([member["offset_bytes"] for member in uniform["members"]], [0, 64])
+         self.assertEqual(uniform["members"][0]["major"], "row_major")
+         self.assertEqual(uniform["members"][0]["matrix_stride_bytes"], 16)
+ 
++    def test_shared_textured_row_major_matrix_transform_matches_hand_calculation(self):
++        shared_path = pathlib.Path(
++            r"C:\dev\helworks\helengine\engine\helengine.editor"
++            r"\shaders\builtin\SpriteBatchShader.hlsl"
++        )
++        source = shared_path.read_text(encoding="utf-8")
++        # HLSL mul(input.position, projection) is emitted by shaderc as
++        # OpMatrixTimesVector with the cbuffer member decorated RowMajor.
++        # These four uploaded vec4s are therefore matrix rows. Expected results
++        # below are hand-computed row dot products, independent of the lowerer.
++        matrix_rows = [
++            [2, 3, 5, 7],
++            [11, 13, 17, 19],
++            [23, 29, 31, 37],
++            [41, 43, 47, 53],
++        ]
++        vertices = [
++            ([1, 2, 3, 1], [.125, .375, .5, 1], [.25, .5, .75, 1]),
++            ([-2, .5, 4, 1], [.625, .875, 0, 1], [1, .125, .375, .5]),
++        ]
++        vertex_data = []
++        for position, tex_local, color in vertices:
++            vertex_data.extend(position + tex_local + color + [0.0] * 12)
++
++        expected_positions = [
++            [30, 107, 211, 321],
++            [24.5, 71.5, 129.5, 180.5],
++        ]
++        for optimize in (False, True):
++            with self.subTest(optimize=optimize):
++                compiled = shader_probe.compile_hlsl_from_source(
++                    self.library,
++                    source.encode("utf-8"),
++                    str(shared_path),
++                    "vertex",
++                    "VS",
++                    defines={},
++                    debug_info=False,
++                    optimize=optimize,
++                    warnings_as_errors=False,
++                    preserve_reflection_names=optimize,
++                )
++                self.assertTrue(compiled.succeeded, compiled.diagnostics)
++                reflection, layout = reflect_layout(
++                    compiled.spirv, "vertex", "VS", "batch2d-v1"
++                )
++                self.assertEqual(
++                    [(item["location"], item["format"])
++                     for item in reflection["inputs"]],
++                    [(0, "float4"), (1, "float4"), (2, "float4")],
++                )
++                self.assertEqual(
++                    {location: (item["offset"], item["stride"])
++                     for location, item in layout["vertex_inputs"].items()},
++                    {"0": (0, 24), "1": (4, 24), "2": (8, 24)},
++                )
++                projection = next(
++                    item for item in reflection["bindings"]
++                    if item["kind"] == "constant_buffer"
++                )
++                self.assertEqual(projection["members"][0]["name"], "projection")
++                self.assertEqual(layout["uniforms"]["0"], {"register_count": 4})
++                lowered = lower_spirv(compiled.spirv, "vertex", "VS", layout)
++                self.assertEqual(
++                    lowered.metadata["uniforms"]["0"]["members"][0]["major"],
++                    "row_major",
++                )
++
++                for vertex_index, (position, tex_local, color) in enumerate(vertices):
++                    with self.subTest(optimize=optimize, vertex=vertex_index):
++                        outputs = execute_xenos(
++                            lowered.binary,
++                            matrix_rows,
++                            vertex_buffers={0: vertex_data},
++                            input_registers={0: [vertex_index, 0, 0, 0]},
++                        )
++                        self.assertEqual(outputs["oPos"], expected_positions[vertex_index])
++                        self.assertEqual(outputs["o0"][:2], tex_local[:2])
++                        self.assertEqual(outputs["o1"], color)
++
+     def test_pixel_uniform_color_exports_uploaded_value(self):
+         spirv = self.compile("uniform_color_ps.hlsl", "pixel")
+         lowered = lower_spirv(
+             spirv, "pixel", "main", {"uniforms": {"0": [[.2, .4, .6, 1]]}}
+         )
+         self.assertIn("alloc colors", lowered.assembly)
+         outputs = execute_xenos(lowered.binary, [[.2, .4, .6, 1]], pixel=True)
+         for actual, expected in zip(outputs["oC0"], [.2, .4, .6, 1]):
+diff --git "a/.artifacts\\spritebatch-task2-before\\docs\\x360-shader-host-protocol.md" b/docs/x360-shader-host-protocol.md
+index b4d8e8c..b7f04dd 100644
+--- "a/.artifacts\\spritebatch-task2-before\\docs\\x360-shader-host-protocol.md"
++++ b/docs/x360-shader-host-protocol.md
+@@ -14,34 +14,47 @@ diagnostic text to stdout; its only stdout messages are protocol JSON lines.
+ 
+ Each UTF-8 JSON line is limited to 8 MiB. The first line is the frozen protocol
+ 1 `compile` message described in
+ [`x360-shader-host-protocol-brief.md`](superpowers/plans/x360-shader-host-protocol-brief.md).
+ It requires the complete field set, exact `x360`/`4.0` target, vertex or pixel
+ stage, boolean option flags, and integer binding shifts. `default_space` must be
+ zero. Defines are passed unchanged to the in-memory HLSL frontend, which
+ validates identifiers and NULs. The host performs no file-based source or
+-include lookup.
++include lookup. The optional string field `vertex_layout` accepts exactly
++`mesh3d-v1` or `batch2d-v1`; omission is normalized to `mesh3d-v1`, while null,
++non-string, and unknown values fail request validation before shaderc loads.
++The normalized ID participates in compile identity for vertex and pixel stages.
+ 
+ For an active shaderc include, the host flushes an `include` message with a
+ monotonically increasing ID, then waits for an `include_result` with the same
+ protocol and ID. The caller supplies the resolved source name and contents, or
+ an error. Nested includes repeat this exchange; inactive preprocessor branches
+ do not generate requests. The host accepts at most 4096 requests and the
+ frontend enforces nesting depth 64. A missing or malformed response fails the
+ compile and produces no binary.
+ 
+ The host compiles the supplied HLSL bytes through `shader_probe`, reflects the
+ resulting SPIR-V through `backend_layout`, derives the bounded platform layout,
+-and passes that layout to `lower_xenos`. Uniforms use symbolic register
++and passes that layout to `lower_xenos`. A successful result's metadata reports
++the normalized `vertex_layout` for both stages. Uniforms use symbolic register
+ capacity; no constant values are fabricated. Resource set/binding values and
+ texture/sampler pairs remain the native reflected values. The requested
+ binding-policy shifts are retained in request identity; the managed consumer
+ uses them to calculate shared logical slots. Texture/sampler pairs map to
+-physical `tf1`; vertex inputs map to the published 12-dword `vf0` layout.
++physical `tf1`; the selected vertex profile maps inputs to `vf0`.
++
++`mesh3d-v1` preserves the original 12-dword stride mapping: location 0 is
++`float3` at offset 0, location 1 is `float3` at offset 3, location 2 is
++`float2` at offset 6, and location 3 is `float4` at offset 8. `batch2d-v1`
++uses a 24-dword stride and six `float4` fields at locations 0..5 with offsets
++0, 4, 8, 12, 16, and 20. Active sparse inputs keep their declared profile
++offsets and full profile stride. Selection is explicit and does not depend on
++shader names or the reflected subset. Both profiles use `vf0`; pixel textures
++remain disjoint on `tf1`.
+ 
+ Success returns the frozen `result` message with base64 microcode, existing
+ lowerer metadata, actual SPIR-V interface/resource reflection, include content
+ hashes, and identities. Resource and member names come from SPIR-V `OpName` and
+ `OpMemberName` data. Unsupported or absent names needed for resource reflection
+ fail explicitly. Failure returns only `protocol`, `type`, `success:false`, and
+ diagnostics; the process exits nonzero and does not reuse output from another
+ invocation.
+@@ -49,18 +62,19 @@ invocation.
+ The host enables shaderc debug metadata internally when `optimize` is true so
+ reflection names survive performance optimization. The caller's `debug_info`
+ flag remains independent and both request flags remain unchanged in the compile
+ identity; `optimize:true` still selects shaderc's performance optimization
+ level. The intermediate SPIR-V is not returned. During Xenos lowering only
+ `OpLine` and `OpNoLine` source-location directives are skipped; unsupported
+ runtime instructions continue to fail explicitly.
+ 
+-`tool_identity` covers protocol/layout ABI version 1, shaderc DLL bytes, and
+-the protocol, layout, frontend, lowerer, parser, and assembler Python sources.
++`tool_identity` covers protocol/layout ABI version 1, both physical vertex
++profile schemas, shaderc DLL bytes, and the protocol, layout, vertex profile,
++frontend, lowerer, parser, and assembler Python sources.
+ `compile_identity` covers the canonical full request, resolved include
+ identities, tool identity, emitted binary, lowerer metadata, and reflection.
+ There is no host cache. A successful stage is limited to 1024 nonempty,
+ aligned microcode dwords. This per-stage bound does not prove that an arbitrary
+ vertex/pixel pair fits the runtime ring.
+ 
+ Focused real-DLL tests run with:
+ 
+diff --git a/tools/shader-probe/vertex_layout.py b/tools/shader-probe/vertex_layout.py
+new file mode 100644
+index 0000000..f05c426
+--- /dev/null
++++ b/tools/shader-probe/vertex_layout.py
+@@ -0,0 +1,72 @@
++"""Explicit, versioned physical vertex-fetch layouts supported by the host."""
++
++from dataclasses import dataclass
++from types import MappingProxyType
++
++
++DEFAULT_VERTEX_LAYOUT = "mesh3d-v1"
++
++
++@dataclass(frozen=True)
++class VertexAttribute:
++    format: str
++    offset: int
++    hardware_format: str
++
++
++@dataclass(frozen=True)
++class VertexLayoutProfile:
++    name: str
++    stride: int
++    inputs: object
++
++
++PROFILES = MappingProxyType({
++    "mesh3d-v1": VertexLayoutProfile(
++        "mesh3d-v1",
++        12,
++        MappingProxyType({
++            0: VertexAttribute("float3", 0, "32_32_32_FLOAT"),
++            1: VertexAttribute("float3", 3, "32_32_32_FLOAT"),
++            2: VertexAttribute("float2", 6, "32_32_FLOAT"),
++            3: VertexAttribute("float4", 8, "32_32_32_32_FLOAT"),
++        }),
++    ),
++    "batch2d-v1": VertexLayoutProfile(
++        "batch2d-v1",
++        24,
++        MappingProxyType({
++            location: VertexAttribute("float4", location * 4, "32_32_32_32_FLOAT")
++            for location in range(6)
++        }),
++    ),
++})
++
++
++def normalize_vertex_layout(value=DEFAULT_VERTEX_LAYOUT):
++    """Return a supported profile ID, rejecting implicit type coercion."""
++    if type(value) is not str:
++        raise ValueError("vertex_layout must be a string")
++    if value not in PROFILES:
++        raise ValueError(
++            f"unsupported vertex_layout {value!r}; expected one of {sorted(PROFILES)}"
++        )
++    return value
++
++
++def profile_for(value=DEFAULT_VERTEX_LAYOUT):
++    return PROFILES[normalize_vertex_layout(value)]
++
++
++def profiles_abi():
++    """Return canonical JSON-compatible layout schema for tool identity."""
++    return {
++        name: {
++            "stride": profile.stride,
++            "inputs": {
++                str(location): [item.format, item.offset, item.hardware_format]
++                for location, item in profile.inputs.items()
++            },
++        }
++        for name, profile in PROFILES.items()
++    }
+diff --git a/tests/shader_vertex_layout_test.py b/tests/shader_vertex_layout_test.py
+new file mode 100644
+index 0000000..d8e3f86
+--- /dev/null
++++ b/tests/shader_vertex_layout_test.py
+@@ -0,0 +1,192 @@
++"""Real-shaderc tests for explicit physical Xenos vertex layouts."""
++
++import base64
++import hashlib
++import pathlib
++import sys
++import unittest
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "tools" / "shader-probe"))
++from backend_protocol import ProtocolError, compile_request
++from shader_backend_protocol_test import SHADERC, request, run_protocol
++
++SHARED_SOURCE = pathlib.Path(
++    r"C:\dev\helworks\helengine\engine\helengine.editor"
++    r"\shaders\builtin\SpriteBatchShader.hlsl"
++)
++
++
++class VertexLayoutProtocolTests(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.shared_source = SHARED_SOURCE.read_text(encoding="utf-8")
++
++    def _compile_vertex(self, source, *, profile=None):
++        changes = {"entrypoint": "VS", "variant": "Textured"}
++        if profile is not None:
++            changes["vertex_layout"] = profile
++        code, result, stderr = run_protocol(request(source, "vertex", **changes))
++        self.assertEqual(code, 0, stderr + str(result))
++        self.assertTrue(result["success"], result["diagnostics"])
++        return result
++
++    def test_shared_textured_vertex_uses_explicit_batch_layout_with_both_optimization_modes(self):
++        expected_inputs = [(0, "float4"), (1, "float4"), (2, "float4")]
++        expected_offsets = {"0": 0, "1": 4, "2": 8}
++        for optimize in (False, True):
++            with self.subTest(optimize=optimize):
++                options = {
++                    "debug_info": False,
++                    "optimize": optimize,
++                    "warnings_as_errors": False,
++                }
++                code, result, stderr = run_protocol(request(
++                    self.shared_source,
++                    "vertex",
++                    source_name=str(SHARED_SOURCE),
++                    entrypoint="VS",
++                    variant="Textured",
++                    defines={},
++                    options=options,
++                    vertex_layout="batch2d-v1",
++                ))
++                self.assertEqual(code, 0, stderr + str(result))
++                self.assertTrue(result["success"], result["diagnostics"])
++                self.assertEqual(result["metadata"]["vertex_layout"], "batch2d-v1")
++                self.assertEqual(
++                    [(item["location"], item["format"])
++                     for item in result["reflection"]["inputs"]],
++                    expected_inputs,
++                )
++                self.assertEqual(set(result["metadata"]["inputs"]), {"0", "1", "2"})
++                for location, item in result["metadata"]["inputs"].items():
++                    self.assertEqual(item["fetch_constant"], 0)
++                    self.assertEqual(item["stride"], 24)
++                    self.assertEqual(item["offset"], expected_offsets[location])
++                    self.assertEqual(item["format"], "32_32_32_32_FLOAT")
++                camera = next(
++                    item for item in result["reflection"]["bindings"]
++                    if item["kind"] == "constant_buffer"
++                )
++                self.assertEqual(camera["name"], "BatchCameraBuffer")
++                self.assertEqual(camera["members"][0]["name"], "projection")
++
++    def test_shared_textured_vertex_defaults_to_mesh_and_rejects_float4_position(self):
++        code, result, stderr = run_protocol(request(
++            self.shared_source,
++            "vertex",
++            source_name=str(SHARED_SOURCE),
++            entrypoint="VS",
++            variant="Textured",
++            defines={},
++        ))
++        self.assertNotEqual(code, 0, stderr + str(result))
++        self.assertFalse(result["success"])
++        self.assertNotIn("binary_base64", result)
++        self.assertRegex(result["diagnostics"], r"vertex input location 0 must be float3, got float4")
++
++    def test_invalid_profiles_fail_request_validation_before_shaderc_load(self):
++        invalid_profiles = (
++            (None, "vertex_layout must be a string"),
++            (True, "vertex_layout must be a string"),
++            (17, "vertex_layout must be a string"),
++            ("batch2d-v2", "unsupported vertex_layout"),
++        )
++        for profile, expected in invalid_profiles:
++            with self.subTest(profile=profile):
++                value = request("", "vertex", vertex_layout=profile)
++                with self.assertRaisesRegex(ProtocolError, expected):
++                    compile_request(value, ROOT / "missing-shaderc.dll")
++
++    def test_sparse_batch_inputs_keep_physical_offsets_and_full_stride(self):
++        source = (
++            "struct Input {\n"
++            " [[vk::location(1)]] float4 texLocal : TEXCOORD0;\n"
++            " [[vk::location(4)]] float4 borderColor : COLOR1;\n"
++            "};\n"
++            "struct Output { float4 position : SV_Position; };\n"
++            "Output VS(Input input) { Output output;\n"
++            " output.position = input.texLocal + input.borderColor;\n"
++            " return output; }\n"
++        )
++        result = self._compile_vertex(source, profile="batch2d-v1")
++        self.assertEqual(set(result["metadata"]["inputs"]), {"1", "4"})
++        self.assertEqual(
++            {location: (item["offset"], item["stride"])
++             for location, item in result["metadata"]["inputs"].items()},
++            {"1": (4, 24), "4": (16, 24)},
++        )
++
++    def test_batch_profile_rejects_wrong_width_and_out_of_profile_location(self):
++        cases = (
++            (
++                "struct Input { [[vk::location(0)]] float3 value : POSITION0; };\n"
++                "float4 main(Input input) : SV_Position { return float4(input.value, 1); }\n",
++                r"vertex input location 0 must be float4, got float3",
++            ),
++            (
++                "struct Input { [[vk::location(6)]] float4 value : TEXCOORD6; };\n"
++                "float4 main(Input input) : SV_Position { return input.value; }\n",
++                r"vertex input location 6 is outside the published ABI",
++            ),
++        )
++        for source, diagnostic in cases:
++            with self.subTest(diagnostic=diagnostic):
++                code, result, stderr = run_protocol(request(
++                    source, "vertex", entrypoint="main", vertex_layout="batch2d-v1"
++                ))
++                self.assertNotEqual(code, 0, stderr + str(result))
++                self.assertFalse(result["success"])
++                self.assertRegex(result["diagnostics"], diagnostic)
++
++    def test_sparse_mesh_fixture_keeps_legacy_offsets_stride_and_binary_hash(self):
++        source = (ROOT / "tests" / "shaders" / "fixtures" / "transform_vs.hlsl").read_text(
++            encoding="utf-8"
++        )
++        code, result, stderr = run_protocol(request(source, "vertex"))
++        self.assertEqual(code, 0, stderr + str(result))
++        self.assertTrue(result["success"], result["diagnostics"])
++        binary = base64.b64decode(result["binary_base64"], validate=True)
++        self.assertEqual(
++            hashlib.sha256(binary).hexdigest().upper(),
++            "40C01033D5B097352583DE0F004FF1D37D5640C456BCAADF1941D9B7CEC284EF",
++        )
++        self.assertEqual(result["metadata"]["vertex_layout"], "mesh3d-v1")
++        self.assertEqual(
++            {location: (item["offset"], item["stride"])
++             for location, item in result["metadata"]["inputs"].items()},
++            {"0": (0, 12), "2": (6, 12), "3": (8, 12)},
++        )
++
++    def test_compile_identity_tracks_profile_for_pixel_and_normalizes_mesh_default(self):
++        source = (ROOT / "tests" / "shaders" / "fixtures" / "texture_ps.hlsl").read_text(
++            encoding="utf-8"
++        )
++        omitted = request(source, "pixel")
++        explicit_mesh = request(source, "pixel", vertex_layout="mesh3d-v1")
++        batch = request(source, "pixel", vertex_layout="batch2d-v1")
++        results = []
++        for value in (omitted, explicit_mesh, batch):
++            code, result, stderr = run_protocol(value)
++            self.assertEqual(code, 0, stderr + str(result))
++            self.assertTrue(result["success"], result["diagnostics"])
++            results.append(result)
++        self.assertEqual(results[0]["compile_identity"], results[1]["compile_identity"])
++        self.assertNotEqual(results[0]["compile_identity"], results[2]["compile_identity"])
++        self.assertEqual(
++            [item["binary_base64"] for item in results],
++            [results[0]["binary_base64"]] * 3,
++        )
++        self.assertEqual(
++            [item["metadata"]["vertex_layout"] for item in results],
++            ["mesh3d-v1", "mesh3d-v1", "batch2d-v1"],
++        )
++        self.assertEqual(
++            [item["reflection"]["bindings"] for item in results],
++            [item["reflection"]["bindings"] for item in results[:1]] * 3,
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()

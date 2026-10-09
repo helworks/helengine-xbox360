@@ -1,0 +1,1138 @@
+﻿diff --git a/tools/shader-probe/backend_protocol.py b/tools/shader-probe/backend_protocol.py
+new file mode 100644
+index 0000000..efd983f
+--- /dev/null
++++ b/tools/shader-probe/backend_protocol.py
+@@ -0,0 +1,310 @@
++#!/usr/bin/env python3
++"""One-shot JSON-lines host for the bounded Xenos shader compiler."""
++
++import argparse
++import base64
++import hashlib
++import json
++import pathlib
++import sys
++
++sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
++
++import shader_probe
++from backend_layout import LayoutError, reflect_layout
++from lower_xenos import LoweringError, lower_spirv
++
++
++PROTOCOL_VERSION = 1
++MAX_LINE_BYTES = 8 * 1024 * 1024
++MAX_INCLUDE_REQUESTS = 4096
++MAX_MICROCODE_DWORDS = 1024
++ABI = {
++    "protocol": 1,
++    "layout": "x360-reflected-layout-v1",
++    "vertex_inputs": {
++        "0": ["float3", 0, "vf0", 12],
++        "1": ["float3", 3, "vf0", 12],
++        "2": ["float2", 6, "vf0", 12],
++        "3": ["float4", 8, "vf0", 12],
++    },
++    "varying_locations": [0, 7],
++    "uniform_registers": 256,
++    "texture_fetch_constant": 1,
++    "max_microcode_dwords": MAX_MICROCODE_DWORDS,
++}
++REQUEST_FIELDS = {
++    "protocol", "type", "source", "source_name", "stage", "entrypoint",
++    "program", "variant", "target", "shader_model", "defines", "options",
++    "binding_policy",
++}
++OPTION_FIELDS = {"debug_info", "optimize", "warnings_as_errors"}
++BINDING_POLICY_FIELDS = {
++    "default_space", "constant_buffer_shift", "texture_shift", "sampler_shift",
++    "storage_shift",
++}
++
++
++class ProtocolError(ValueError):
++    """Malformed host request or include exchange."""
++
++
++def _canonical_bytes(value):
++    return json.dumps(value, ensure_ascii=False, sort_keys=True,
++                      separators=(",", ":"), allow_nan=False).encode("utf-8")
++
++
++def _sha256(data):
++    return hashlib.sha256(data).hexdigest().upper()
++
++
++def _read_line(stream):
++    raw = stream.readline(MAX_LINE_BYTES + 1)
++    if len(raw) > MAX_LINE_BYTES:
++        raise ProtocolError(f"protocol line exceeds {MAX_LINE_BYTES} UTF-8 bytes")
++    if not raw:
++        raise ProtocolError("unexpected EOF while reading protocol message")
++    try:
++        text = raw.decode("utf-8")
++    except UnicodeDecodeError as error:
++        raise ProtocolError(f"protocol line is not valid UTF-8: {error}") from error
++    try:
++        return json.loads(text, object_pairs_hook=_unique_object)
++    except (json.JSONDecodeError, ProtocolError) as error:
++        raise ProtocolError(f"malformed protocol JSON: {error}") from error
++
++
++def _write_protocol_line(stream, value):
++    encoded = _canonical_bytes(value)
++    if len(encoded) + 1 > MAX_LINE_BYTES:
++        raise ProtocolError(f"protocol line exceeds {MAX_LINE_BYTES} UTF-8 bytes")
++    stream.write(encoded + b"\n")
++    stream.flush()
++
++
++def _unique_object(pairs):
++    value = {}
++    for key, item in pairs:
++        if key in value:
++            raise ProtocolError(f"duplicate JSON field {key!r}")
++        value[key] = item
++    return value
++
++
++def _object(value, label, fields):
++    if not isinstance(value, dict):
++        raise ProtocolError(f"{label} must be a JSON object")
++    missing, unknown = fields - value.keys(), value.keys() - fields
++    if missing:
++        raise ProtocolError(f"{label} is missing required field(s): {sorted(missing)}")
++    if unknown:
++        raise ProtocolError(f"{label} has unsupported field(s): {sorted(unknown)}")
++    return value
++
++
++def validate_request(value):
++    value = _object(value, "compile request", REQUEST_FIELDS)
++    if type(value["protocol"]) is not int or value["protocol"] != PROTOCOL_VERSION:
++        raise ProtocolError("unsupported protocol version; expected 1")
++    if value["type"] != "compile":
++        raise ProtocolError("unsupported message type; expected 'compile'")
++    for field in ("source", "source_name", "stage", "entrypoint", "program",
++                  "variant", "target", "shader_model"):
++        if not isinstance(value[field], str):
++            raise ProtocolError(f"{field} must be a string")
++    for field in ("source_name", "entrypoint", "program", "variant"):
++        if not value[field]:
++            raise ProtocolError(f"{field} must be nonempty")
++    if value["stage"] not in ("vertex", "pixel"):
++        raise ProtocolError("unsupported stage; expected 'vertex' or 'pixel'")
++    if value["target"] != "x360":
++        raise ProtocolError("unsupported target; expected 'x360'")
++    if value["shader_model"] != "4.0":
++        raise ProtocolError("unsupported shader_model; expected '4.0'")
++    if not isinstance(value["defines"], dict):
++        raise ProtocolError("defines must be an object mapping names to string values")
++    for name, define_value in value["defines"].items():
++        if not isinstance(name, str) or not isinstance(define_value, str):
++            raise ProtocolError("defines must map string names to string values")
++    options = _object(value["options"], "options", OPTION_FIELDS)
++    for name, flag in options.items():
++        if type(flag) is not bool:
++            raise ProtocolError(f"options.{name} must be boolean")
++    policy = _object(value["binding_policy"], "binding_policy", BINDING_POLICY_FIELDS)
++    for name, number in policy.items():
++        if type(number) is not int or number < 0:
++            raise ProtocolError(f"binding_policy.{name} must be a nonnegative integer")
++    if policy["default_space"] != 0:
++        raise ProtocolError("binding_policy.default_space must be 0")
++    return value
++
++
++def _tool_source_paths(protocol_path=None, shader_probe_path=None):
++    protocol_path = pathlib.Path(protocol_path or __file__).resolve()
++    shader_probe_path = pathlib.Path(shader_probe_path or shader_probe.__file__).resolve()
++    probe_directory = protocol_path.parent
++    tools_directory = protocol_path.parents[1]
++    return [
++        ("backend_protocol.py", protocol_path),
++        ("backend_layout.py", probe_directory / "backend_layout.py"),
++        ("shader_probe.py", shader_probe_path),
++        ("lower_xenos.py", probe_directory / "lower_xenos.py"),
++        ("spirv_parser.py", probe_directory / "spirv_parser.py"),
++        ("xenos_asm.py", tools_directory / "xenos_asm.py"),
++    ]
++
++
++def _tool_identity(shaderc_path):
++    source_paths = _tool_source_paths()
++    digest = hashlib.sha256()
++    digest.update(_canonical_bytes(ABI))
++    for label, path in source_paths:
++        data = path.read_bytes()
++        digest.update(_canonical_bytes({"file": label, "size": len(data)}))
++        digest.update(data)
++    library = pathlib.Path(shaderc_path).read_bytes()
++    digest.update(_canonical_bytes({"file": "shaderc_shared.dll", "size": len(library)}))
++    digest.update(library)
++    return digest.hexdigest().upper()
++
++
++def _read_include_response(stream, expected_id):
++    value = _read_line(stream)
++    if not isinstance(value, dict):
++        raise ProtocolError("include response must be a JSON object")
++    if (type(value.get("protocol")) is not int or
++            value["protocol"] != PROTOCOL_VERSION or value.get("type") != "include_result"):
++        raise ProtocolError("include response protocol/type mismatch")
++    if type(value.get("id")) is not int or value["id"] != expected_id:
++        raise ProtocolError(f"include response ID mismatch; expected {expected_id}")
++    if "error" in value:
++        if set(value) != {"protocol", "type", "id", "error"} or not isinstance(value["error"], str):
++            raise ProtocolError("include error response must contain only a string error")
++        raise ProtocolError(f"include resolution failed: {value['error'] or 'unspecified error'}")
++    expected = {"protocol", "type", "id", "source_name", "source"}
++    if set(value) != expected:
++        raise ProtocolError("successful include response has missing or unsupported fields")
++    if not isinstance(value["source_name"], str) or not isinstance(value["source"], str):
++        raise ProtocolError("include source_name and source must be strings")
++    if not value["source_name"]:
++        raise ProtocolError("include source_name must be nonempty")
++    return value["source_name"], value["source"].encode("utf-8")
++
++
++def _check_microcode(binary):
++    if not binary or len(binary) % 4:
++        raise LoweringError("lowered microcode is empty or not dword-aligned")
++    dword_count = len(binary) // 4
++    if dword_count > MAX_MICROCODE_DWORDS:
++        raise LoweringError(
++            f"lowered microcode has {dword_count} dwords; stage limit is {MAX_MICROCODE_DWORDS}"
++        )
++
++
++def compile_request(request, shaderc_path, input_stream=None, output_stream=None):
++    request = validate_request(request)
++    input_stream = input_stream or sys.stdin.buffer
++    output_stream = output_stream or sys.stdout.buffer
++    library, loaded_path = shader_probe.load_shaderc(shaderc_path)
++    tool_identity = _tool_identity(loaded_path)
++    include_count = 0
++
++    def resolve_include(requesting_source, include_name):
++        nonlocal include_count
++        include_count += 1
++        if include_count > MAX_INCLUDE_REQUESTS:
++            raise ProtocolError(f"include request limit {MAX_INCLUDE_REQUESTS} exceeded")
++        request_source = requesting_source
++        request_name = include_name
++        if not isinstance(request_source, str) or not isinstance(request_name, str):
++            raise ProtocolError("shaderc include names must be strings")
++        message = {
++            "protocol": PROTOCOL_VERSION,
++            "type": "include",
++            "id": include_count,
++            "requesting_source": request_source,
++            "include_name": request_name,
++        }
++        _write_protocol_line(output_stream, message)
++        return _read_include_response(input_stream, include_count)
++
++    opts = request["options"]
++    try:
++        compiled = shader_probe.compile_hlsl_from_source(
++            library,
++            request["source"].encode("utf-8"),
++            request["source_name"],
++            request["stage"],
++            request["entrypoint"],
++            defines=request["defines"],
++            include_resolver=resolve_include,
++            debug_info=opts["debug_info"],
++            optimize=opts["optimize"],
++            warnings_as_errors=opts["warnings_as_errors"],
++        )
++    except (ProtocolError, OSError, TypeError, ValueError, RuntimeError) as error:
++        return {"success": False, "diagnostics": str(error)}, tool_identity
++    if not compiled.succeeded:
++        return {"success": False, "diagnostics": compiled.diagnostics}, tool_identity
++
++    reflection, layout = reflect_layout(compiled.spirv, request["stage"], request["entrypoint"])
++    lowered = lower_spirv(compiled.spirv, request["stage"], request["entrypoint"], layout)
++    binary = lowered.binary
++    _check_microcode(binary)
++
++    includes = [{"source_name": item.source_name, "sha256": item.sha256}
++                for item in compiled.included_sources]
++    binary_base64 = base64.b64encode(binary).decode("ascii")
++    complete = {
++        "request": request,
++        "includes": includes,
++        "tool_identity": tool_identity,
++        "binary_base64": binary_base64,
++        "metadata": lowered.metadata,
++        "reflection": reflection,
++    }
++    result = {
++        "success": True,
++        "binary_base64": binary_base64,
++        "metadata": lowered.metadata,
++        "reflection": reflection,
++        "diagnostics": compiled.diagnostics,
++        "includes": includes,
++        "tool_identity": tool_identity,
++        "compile_identity": _sha256(_canonical_bytes(complete)),
++    }
++    return result, tool_identity
++
++
++def _failure(diagnostics):
++    return {"protocol": PROTOCOL_VERSION, "type": "result", "success": False,
++            "diagnostics": str(diagnostics)}
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--shaderc", help="absolute path to shaderc_shared.dll")
++    args = parser.parse_args(argv)
++    try:
++        if not args.shaderc:
++            raise ProtocolError("--shaderc ABSOLUTE_DLL_PATH is required")
++        if not pathlib.Path(args.shaderc).is_absolute():
++            raise ProtocolError("--shaderc must be an absolute DLL path")
++        request = _read_line(sys.stdin.buffer)
++        payload, tool_identity = compile_request(request, args.shaderc)
++        payload.update({"protocol": PROTOCOL_VERSION, "type": "result"})
++        if payload["success"]:
++            payload["tool_identity"] = tool_identity
++    except (ProtocolError, OSError, RuntimeError, TypeError, ValueError,
++            LayoutError, LoweringError) as error:
++        payload = _failure(error)
++    try:
++        _write_protocol_line(sys.stdout.buffer, payload)
++    except ProtocolError as error:
++        payload = _failure(error)
++        _write_protocol_line(sys.stdout.buffer, payload)
++    return 0 if payload["success"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/shader-probe/backend_layout.py b/tools/shader-probe/backend_layout.py
+new file mode 100644
+index 0000000..4833a35
+--- /dev/null
++++ b/tools/shader-probe/backend_layout.py
+@@ -0,0 +1,299 @@
++"""SPIR-V reflection and the bounded Phase 2d Xenos host layout."""
++
++from spirv_parser import STORAGE_NAMES, decode_string, parse_spirv
++
++
++class LayoutError(ValueError):
++    """The compiled module cannot be represented by the published host ABI."""
++
++
++_VERTEX_INPUTS = {
++    0: ("float3", 0, "32_32_32_FLOAT"),
++    1: ("float3", 3, "32_32_32_FLOAT"),
++    2: ("float2", 6, "32_32_FLOAT"),
++    3: ("float4", 8, "32_32_32_32_FLOAT"),
++}
++
++
++def _type_format(module, type_id, context):
++    item = module.types.get(type_id)
++    if item is None:
++        raise LayoutError(f"{context} has an unknown SPIR-V type %{type_id}")
++    if item.opcode == 22 and len(item.operands) == 2 and item.operands[1] == 32:
++        return "float"
++    if item.opcode == 23 and len(item.operands) == 3:
++        scalar = module.types.get(item.operands[1])
++        if scalar is not None and scalar.opcode == 22 and scalar.operands[1] == 32:
++            width = item.operands[2]
++            if 2 <= width <= 4:
++                return "float" + str(width)
++    raise LayoutError(f"{context} uses an unsupported interface type")
++
++
++def _pointer_pointee(module, pointer_id, context):
++    pointer = module.types.get(pointer_id)
++    if pointer is None or pointer.opcode != 32 or len(pointer.operands) != 3:
++        raise LayoutError(f"{context} has an unsupported pointer type")
++    return pointer.operands[2]
++
++
++def _member_names(module):
++    names = {}
++    for instruction in module.instructions:
++        if instruction.opcode == 6:  # OpMemberName is not indexed by the parser.
++            struct_id, member_index = instruction.operands[:2]
++            names[(struct_id, member_index)] = decode_string(instruction.operands[2:])[0]
++    return names
++
++
++def _uniform_member(module, struct_id, index, member_type, names):
++    name = names.get((struct_id, index))
++    if not name:
++        raise LayoutError(f"uniform struct %{struct_id} member {index} has no OpMemberName")
++    decorations = module.member_decorations.get((struct_id, index), {})
++    offset = decorations.get(35, (None,))[0]
++    if type(offset) is not int:
++        raise LayoutError(f"uniform member {name!r} has no valid Offset decoration")
++    if offset < 0 or offset % 16:
++        raise LayoutError(f"uniform member {name!r} offset must be nonnegative and vec4-aligned")
++
++    type_item = module.types.get(member_type)
++    major_decorations = [(decoration, major) for decoration, major in
++                         ((4, "row_major"), (5, "column_major"))
++                         if decoration in decorations]
++    if type_item is None:
++        raise LayoutError(f"uniform member {name!r} has an unknown SPIR-V type")
++    if type_item.opcode == 24:
++        if len(type_item.operands) != 3:
++            raise LayoutError(f"uniform matrix {name!r} has a malformed type")
++        column_type = module.types.get(type_item.operands[1])
++        if (column_type is None or column_type.opcode != 23 or
++                len(column_type.operands) != 3 or type_item.operands[2] != 4 or
++                column_type.operands[2] != 4):
++            raise LayoutError(f"uniform matrix {name!r} must be float4x4")
++        scalar = module.types.get(column_type.operands[1])
++        if scalar is None or scalar.opcode != 22 or scalar.operands[1] != 32:
++            raise LayoutError(f"uniform matrix {name!r} must be float32")
++        stride = decorations.get(7, (None,))[0]
++        if len(major_decorations) != 1 or stride != 16:
++            raise LayoutError(
++                f"uniform matrix {name!r} requires exactly one major decoration and MatrixStride 16"
++            )
++        return ({"name": name, "type": "float4x4", "offset": offset, "size": 64},
++                offset + 64)
++
++    if major_decorations or 7 in decorations:
++        raise LayoutError(f"non-matrix uniform member {name!r} has matrix decorations")
++    fmt = _type_format(module, member_type, f"uniform member {name!r}")
++    size = {"float": 4, "float2": 8, "float3": 12, "float4": 16}[fmt]
++    return ({"name": name, "type": fmt, "offset": offset, "size": size}, offset + size)
++
++
++def _reflect_uniform(module, variable, pointer_type, set_index, binding, names):
++    name = module.names.get(variable) or f"%{variable}"
++    if set_index != 0 or binding != 0:
++        raise LayoutError(
++            f"only constant buffer b0/set0 is supported; {name!r} has set={set_index}, binding={binding}"
++        )
++    struct_id = _pointer_pointee(module, pointer_type, f"constant buffer {name!r}")
++    struct_type = module.types.get(struct_id)
++    if struct_type is None or struct_type.opcode != 30:
++        raise LayoutError(f"constant buffer {name!r} must point to a struct")
++    name = module.names.get(variable) or module.names.get(struct_id)
++    if not name:
++        raise LayoutError(f"constant buffer %{variable} and its struct %{struct_id} have no OpName")
++    members = []
++    end = 0
++    for index, member_type in enumerate(struct_type.operands[1:]):
++        member, member_end = _uniform_member(module, struct_id, index, member_type, names)
++        if member["offset"] < end:
++            raise LayoutError(f"uniform member {member['name']!r} overlaps a previous member")
++        members.append(member)
++        end = member_end
++    if not members:
++        raise LayoutError(f"constant buffer {name!r} has no declared members")
++    size = (end + 15) // 16 * 16
++    register_count = size // 16
++    if register_count > 256:
++        raise LayoutError(f"constant buffer {name!r} exceeds 256 float4 registers")
++    return ({"name": name, "kind": "constant_buffer", "set": set_index,
++             "binding": binding, "size": size, "members": members}, register_count)
++
++
++def _reflect_resources(module, stage):
++    resources = []
++    uniform_register_count = None
++    textures = []
++    samplers = []
++    member_names = _member_names(module)
++    for variable, (pointer_type, storage, _initializer) in module.variables.items():
++        decorations = module.decorations.get(variable, {})
++        if storage == 2:
++            if uniform_register_count is not None:
++                raise LayoutError("only one uniform buffer b0/set0 is supported")
++            set_index = decorations.get(34, (None,))[0]
++            binding = decorations.get(33, (None,))[0]
++            if type(set_index) is not int or type(binding) is not int:
++                raise LayoutError("constant buffer requires DescriptorSet and Binding decorations")
++            resource, uniform_register_count = _reflect_uniform(
++                module, variable, pointer_type, set_index, binding, member_names
++            )
++            resources.append(resource)
++        elif storage == 0:
++            name = module.names.get(variable)
++            if not name:
++                raise LayoutError(f"resource variable %{variable} has no OpName")
++            resource_type_id = _pointer_pointee(module, pointer_type, f"resource {name!r}")
++            resource_type = module.types.get(resource_type_id)
++            if resource_type is None:
++                raise LayoutError(f"resource {name!r} has an unknown type")
++            if resource_type.opcode in (28, 29):
++                raise LayoutError(f"resource arrays are unsupported for {name!r}")
++            if resource_type.opcode == 25:
++                a = resource_type.operands
++                if (len(a) != 8 or a[2] != 1 or a[3] != 0 or a[4] != 0 or
++                        a[5] != 0 or a[6] != 1 or a[7] != 0):
++                    raise LayoutError(f"resource {name!r} is not a sampled Texture2D<float4>")
++                sample = module.types.get(a[1])
++                if (sample is None or sample.opcode != 22 or
++                        len(sample.operands) != 2 or sample.operands[1] != 32):
++                    raise LayoutError(f"resource {name!r} is not a sampled Texture2D<float4>")
++                kind = "texture2d"
++            elif resource_type.opcode == 26:
++                kind = "sampler"
++            else:
++                raise LayoutError(f"unsupported UniformConstant resource type on {name!r}")
++            set_index = decorations.get(34, (0,))[0]
++            binding = decorations.get(33, (None,))[0]
++            if type(set_index) is not int or type(binding) is not int:
++                raise LayoutError(f"resource {name!r} requires valid DescriptorSet and Binding decorations")
++            if set_index != 0 or stage != "pixel":
++                raise LayoutError(f"{kind} resources are supported only in pixel stage set 0")
++            resource = {"name": name, "kind": kind, "set": set_index,
++                        "binding": binding, "size": 0, "members": []}
++            resources.append(resource)
++            (textures if kind == "texture2d" else samplers).append(resource)
++        elif storage not in (1, 3, 6, 7):
++            storage_name = STORAGE_NAMES.get(storage, str(storage))
++            raise LayoutError(
++                f"unsupported SPIR-V storage class {storage_name} ({storage})"
++            )
++
++    if len(textures) > 1 or len(samplers) > 1:
++        raise LayoutError("at most one Texture2D and one separate sampler are supported")
++    if bool(textures) != bool(samplers):
++        raise LayoutError("a Texture2D and separate sampler must both be present")
++    if textures and samplers and stage != "pixel":
++        raise LayoutError("Texture2D and sampler resources are pixel-stage only")
++    resources.sort(key=lambda item: (item["set"], item["binding"], item["kind"], item["name"]))
++    return resources, uniform_register_count, textures, samplers
++
++
++def reflect_layout(binary, stage, entrypoint):
++    """Return actual SPIR-V reflection and its deterministic lowerer layout."""
++    if stage not in ("vertex", "pixel"):
++        raise LayoutError(f"unsupported shader stage {stage!r}")
++    module = parse_spirv(binary)
++    matches = [entry for entry in module.entry_points if entry[2] == entrypoint]
++    if len(matches) != 1:
++        raise LayoutError(f"{stage} entry point {entrypoint!r} is missing or ambiguous")
++    model, _function, _name, interface_ids = matches[0]
++    if model != (0 if stage == "vertex" else 4):
++        raise LayoutError(f"{stage} entry point has the wrong execution model")
++
++    interfaces = {"inputs": [], "outputs": []}
++    for variable in interface_ids:
++        entry = module.variables.get(variable)
++        if entry is None:
++            raise LayoutError(f"entry point interface %{variable} is not a variable")
++        pointer_type, storage, _initializer = entry
++        if storage not in (1, 3):
++            continue
++        type_id = _pointer_pointee(module, pointer_type, f"interface variable %{variable}")
++        fmt = _type_format(module, type_id, f"interface variable %{variable}")
++        decorations = module.decorations.get(variable, {})
++        location = decorations.get(30, (None,))[0]
++        builtin = decorations.get(11, (None,))[0]
++        if (location is None) == (builtin is None):
++            raise LayoutError(f"interface variable %{variable} must have exactly one Location or BuiltIn")
++        if location is not None and type(location) is not int:
++            raise LayoutError(f"interface variable %{variable} has an invalid Location")
++        if builtin is not None and type(builtin) is not int:
++            raise LayoutError(f"interface variable %{variable} has an invalid BuiltIn")
++        key = "inputs" if storage == 1 else "outputs"
++        interfaces[key].append({
++            "name": module.names.get(variable, f"%{variable}"),
++            "location": location,
++            "builtin": builtin,
++            "format": fmt,
++        })
++
++    for key, values in interfaces.items():
++        locations = [item["location"] for item in values if item["location"] is not None]
++        builtins = [item["builtin"] for item in values if item["builtin"] is not None]
++        if len(locations) != len(set(locations)) or len(builtins) != len(set(builtins)):
++            raise LayoutError(f"duplicate {key[:-1]} location or builtin")
++        values.sort(key=lambda item: (
++            item["location"] is None,
++            item["location"] if item["location"] is not None else item["builtin"],
++        ))
++
++    _validate_interfaces(interfaces, stage)
++    resources, register_count, textures, samplers = _reflect_resources(module, stage)
++
++    layout = {"vertex_inputs": {}, "varyings": {}, "uniforms": {}, "texture_bindings": []}
++    if stage == "vertex":
++        for item in interfaces["inputs"]:
++            location = item["location"]
++            fmt = item["format"]
++            if location not in _VERTEX_INPUTS:
++                raise LayoutError(f"vertex input location {location} is outside the published ABI")
++            expected, offset, fetch_format = _VERTEX_INPUTS[location]
++            if fmt != expected:
++                raise LayoutError(
++                    f"vertex input location {location} must be {expected}, got {fmt}"
++                )
++            layout["vertex_inputs"][str(location)] = {
++                "fetch_constant": 0, "stride": 12, "offset": offset, "format": fetch_format,
++            }
++        layout["varyings"] = {
++            str(item["location"]): item["location"]
++            for item in interfaces["outputs"] if item["location"] is not None
++        }
++    else:
++        layout["varyings"] = {
++            str(item["location"]): item["location"]
++            for item in interfaces["inputs"] if item["location"] is not None
++        }
++    if register_count is not None:
++        layout["uniforms"]["0"] = {"register_count": register_count}
++    if textures:
++        layout["texture_bindings"] = [{
++            "texture_set": textures[0]["set"],
++            "texture_binding": textures[0]["binding"],
++            "sampler_set": samplers[0]["set"],
++            "sampler_binding": samplers[0]["binding"],
++            "fetch_constant": 1,
++        }]
++    return {**interfaces, "bindings": resources}, layout
++
++
++def _validate_interfaces(interfaces, stage):
++    for direction in ("inputs", "outputs"):
++        for item in interfaces[direction]:
++            if item["builtin"] is not None:
++                if stage == "vertex" and direction == "outputs" and item["builtin"] == 0:
++                    if item["format"] != "float4":
++                        raise LayoutError("vertex BuiltIn Position must be float4")
++                    continue
++                raise LayoutError(f"{stage} {direction[:-1]} BuiltIn {item['builtin']} is unsupported")
++            if not 0 <= item["location"] <= 7:
++                raise LayoutError(f"{stage} {direction[:-1]} location must be in 0..7")
++    if stage == "vertex":
++        positions = [item for item in interfaces["outputs"] if item["builtin"] == 0]
++        if len(positions) != 1:
++            raise LayoutError("vertex shader must output BuiltIn Position as float4")
++    else:
++        outputs = interfaces["outputs"]
++        if len(outputs) != 1 or outputs[0]["location"] != 0 or outputs[0]["format"] != "float4":
++            raise LayoutError("pixel shader must have exactly one float4 output at location 0")
+diff --git a/tests/shader_backend_protocol_test.py b/tests/shader_backend_protocol_test.py
+new file mode 100644
+index 0000000..9a44f29
+--- /dev/null
++++ b/tests/shader_backend_protocol_test.py
+@@ -0,0 +1,444 @@
++"""Real-shaderc tests for the reusable host protocol and platform layout."""
++
++import base64
++import hashlib
++import json
++import pathlib
++import queue
++import subprocess
++import sys
++import tempfile
++import threading
++import time
++import unittest
++
++ROOT = pathlib.Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "tools" / "shader-probe"))
++PROTOCOL = ROOT / "tools" / "shader-probe" / "backend_protocol.py"
++SHADERC = pathlib.Path(
++    r"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows"
++    r"\runtimes\win-x64\native\shaderc_shared.dll"
++)
++FIXTURES = ROOT / "tests" / "shaders" / "fixtures"
++
++
++def request(source, stage, source_name="memory/main.hlsl", **changes):
++    value = {
++        "protocol": 1,
++        "type": "compile",
++        "source": source,
++        "source_name": source_name,
++        "stage": stage,
++        "entrypoint": "main",
++        "program": "test-program",
++        "variant": "default",
++        "target": "x360",
++        "shader_model": "4.0",
++        "defines": {},
++        "options": {
++            "debug_info": False,
++            "optimize": False,
++            "warnings_as_errors": False,
++        },
++        "binding_policy": {
++            "default_space": 0,
++            "constant_buffer_shift": 0,
++            "texture_shift": 32,
++            "sampler_shift": 64,
++            "storage_shift": 96,
++        },
++    }
++    value.update(changes)
++    return value
++
++
++def run_raw_protocol(data, shaderc=SHADERC):
++    return subprocess.run(
++        [sys.executable, "-u", str(PROTOCOL), "--shaderc", str(shaderc)],
++        input=data,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        cwd=ROOT,
++        timeout=20,
++    )
++
++
++def run_protocol(message, include_sources=None, shaderc=SHADERC, include_events=None,
++                 response_id_delta=0, *, script_path=PROTOCOL, timeout_seconds=20.0,
++                 process_observer=None):
++    process = subprocess.Popen(
++        [sys.executable, "-u", str(script_path), "--shaderc", str(shaderc)],
++        stdin=subprocess.PIPE,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        cwd=ROOT,
++    )
++    if process_observer is not None:
++        process_observer.append(process)
++    output_lines = queue.Queue()
++
++    def read_stdout():
++        try:
++            for output_line in process.stdout:
++                output_lines.put(("line", output_line))
++        except BaseException as error:
++            output_lines.put(("error", error))
++        finally:
++            output_lines.put(("eof", None))
++
++    reader = threading.Thread(target=read_stdout, daemon=True)
++    reader.start()
++    deadline = time.monotonic() + timeout_seconds
++    value = None
++    include_sources = include_sources or {}
++    try:
++        process.stdin.write(json.dumps(message, ensure_ascii=False).encode("utf-8") + b"\n")
++        process.stdin.flush()
++        while True:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                raise TimeoutError
++            try:
++                kind, line = output_lines.get(timeout=remaining)
++            except queue.Empty as error:
++                raise TimeoutError from error
++            if kind == "error":
++                raise line
++            if kind == "eof":
++                break
++            value = json.loads(line.decode("utf-8"))
++            if value.get("type") != "include":
++                break
++            if include_events is not None:
++                include_events.append(value)
++            include_name = value["include_name"]
++            resolved = include_sources.get(include_name)
++            response = {
++                "protocol": 1,
++                "type": "include_result",
++                "id": value["id"] + response_id_delta,
++            }
++            if resolved is None:
++                response["error"] = "test include not found"
++            else:
++                response["source_name"], response["source"] = resolved
++            process.stdin.write(json.dumps(response).encode("utf-8") + b"\n")
++            process.stdin.flush()
++        process.stdin.close()
++        remaining = deadline - time.monotonic()
++        if remaining <= 0:
++            raise TimeoutError
++        try:
++            code = process.wait(timeout=remaining)
++        except subprocess.TimeoutExpired as error:
++            raise TimeoutError from error
++        stderr = process.stderr.read().decode("utf-8", errors="replace")
++        reader.join(timeout=1)
++        return code, value, stderr
++    except TimeoutError as error:
++        raise TimeoutError(
++            f"protocol deadline of {timeout_seconds:.3f}s exceeded"
++        ) from error
++    finally:
++        if process.stdin is not None and not process.stdin.closed:
++            process.stdin.close()
++        if process.poll() is None:
++            process.kill()
++            try:
++                process.wait(timeout=2)
++            except subprocess.TimeoutExpired:
++                process.kill()
++                process.wait()
++        reader.join(timeout=1)
++        process.stdout.close()
++        process.stderr.close()
++
++
++class BackendProtocolTests(unittest.TestCase):
++    def test_protocol_harness_deadline_kills_its_own_hung_child(self):
++        with tempfile.TemporaryDirectory() as directory:
++            hanging_script = pathlib.Path(directory) / "hanging_protocol.py"
++            hanging_script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
++            owned_processes = []
++            started = time.monotonic()
++            with self.assertRaisesRegex(TimeoutError, "protocol deadline"):
++                run_protocol(
++                    request("", "pixel"),
++                    script_path=hanging_script,
++                    timeout_seconds=0.2,
++                    process_observer=owned_processes,
++                )
++            self.assertLess(time.monotonic() - started, 3.0)
++            self.assertEqual(len(owned_processes), 1)
++            self.assertIsNotNone(owned_processes[0].poll())
++
++    def test_reflection_rejects_unknown_storage_classes_but_skips_nonresources(self):
++        from backend_layout import LayoutError, _reflect_resources
++        from spirv_parser import SpirvModule
++
++        for storage in (1, 3, 6, 7):
++            module = SpirvModule(0x00010000, 0, 100, 0,
++                                 variables={1: (2, storage, ())})
++            self.assertEqual(_reflect_resources(module, "pixel"), ([], None, [], []))
++
++        for storage in (4, 5, 8, 9, 10, 11, 12, 13):
++            module = SpirvModule(0x00010000, 0, 100, 0,
++                                 variables={1: (2, storage, ())})
++            with self.subTest(storage=storage), self.assertRaisesRegex(
++                    LayoutError, rf"unsupported SPIR-V storage class.*{storage}"):
++                _reflect_resources(module, "pixel")
++
++    def test_transform_round_trip_reflects_real_interfaces_and_uniform_members(self):
++        source = (FIXTURES / "transform_vs.hlsl").read_text(encoding="utf-8")
++        code, result, stderr = run_protocol(request(source, "vertex"))
++
++        self.assertEqual(code, 0, stderr + str(result))
++        self.assertTrue(result["success"], result["diagnostics"])
++        binary = base64.b64decode(result["binary_base64"], validate=True)
++        self.assertEqual(
++            hashlib.sha256(binary).hexdigest().upper(),
++            "40C01033D5B097352583DE0F004FF1D37D5640C456BCAADF1941D9B7CEC284EF",
++        )
++        self.assertEqual(
++            [(x["location"], x["format"]) for x in result["reflection"]["inputs"]],
++            [(0, "float3"), (2, "float2"), (3, "float4")],
++        )
++        uniform = next(x for x in result["reflection"]["bindings"]
++                       if x["kind"] == "constant_buffer")
++        self.assertEqual(uniform["name"], "Transform")
++        self.assertEqual(uniform["set"], 0)
++        self.assertEqual(uniform["binding"], 0)
++        self.assertEqual(uniform["size"], 80)
++        self.assertEqual(uniform["members"], [
++            {"name": "clipFromObject", "type": "float4x4", "offset": 0, "size": 64},
++            {"name": "tint", "type": "float4", "offset": 64, "size": 16},
++        ])
++        self.assertEqual(result["metadata"]["uniforms"]["0"]["register_count"], 5)
++        matrix = result["metadata"]["uniforms"]["0"]["members"][0]
++        self.assertEqual(matrix["major"], "row_major")
++        self.assertEqual(matrix["matrix_stride_bytes"], 16)
++        self.assertTrue(any(item["builtin"] == 0 for item in result["reflection"]["outputs"]))
++
++    def test_textured_pixel_round_trip_uses_actual_texture_pair_at_tf1(self):
++        source = (FIXTURES / "texture_ps.hlsl").read_text(encoding="utf-8")
++        code, result, stderr = run_protocol(request(source, "pixel"))
++
++        self.assertEqual(code, 0, stderr)
++        self.assertTrue(result["success"], result["diagnostics"])
++        binary = base64.b64decode(result["binary_base64"], validate=True)
++        self.assertEqual(
++            hashlib.sha256(binary).hexdigest().upper(),
++            "D70B3ADAFE4D38E2DEE8C77E038B06B712836C58F28E48CE850A2795F547016A",
++        )
++        resources = {item["kind"]: item for item in result["reflection"]["bindings"]}
++        self.assertEqual(resources["texture2d"]["name"], "texture0")
++        self.assertEqual(resources["sampler"]["name"], "sampler0")
++        self.assertEqual((resources["texture2d"]["set"], resources["texture2d"]["binding"]), (0, 0))
++        self.assertEqual((resources["sampler"]["set"], resources["sampler"]["binding"]), (0, 0))
++        self.assertEqual(result["metadata"]["textures"][0]["fetch_constant"], 1)
++
++    def test_includes_use_the_live_protocol_and_hash_supplied_contents(self):
++        source = (
++            '#include "active.hlsli"\n'
++            'struct Input { [[vk::location(0)]] float4 color : COLOR0; };\n'
++            'float4 main(Input input) : SV_Target0 { return includedColor(input.color); }\n'
++        )
++        include = "float4 includedColor(float4 color) { return color * color; }\n"
++        code, result, stderr = run_protocol(
++            request(source, "pixel", source_name="arbitrary/source.hlsl"),
++            {"active.hlsli": ("virtual/active.hlsli", include)},
++        )
++
++        self.assertEqual(code, 0, stderr + str(result))
++        self.assertTrue(result["success"], result["diagnostics"])
++        self.assertEqual(result["includes"], [{
++            "source_name": "virtual/active.hlsli",
++            "sha256": hashlib.sha256(include.encode("utf-8")).hexdigest(),
++        }])
++
++    def test_nested_conditional_includes_request_only_active_files(self):
++        source = (
++            '#if ENABLED\n#include "outer.hlsli"\n'
++            '#else\n#include "inactive.hlsli"\n#endif\n'
++            'struct Input { [[vk::location(0)]] float4 color : COLOR0; };\n'
++            'float4 main(Input input) : SV_Target0 { return includedColor(input.color); }\n'
++        )
++        includes = {
++            "outer.hlsli": ("virtual/outer.hlsli", '#include "inner.hlsli"\n'),
++            "inner.hlsli": (
++                "virtual/inner.hlsli",
++                "float4 includedColor(float4 color) { return color * color; }\n",
++            ),
++        }
++        events = []
++        code, result, stderr = run_protocol(
++            request(source, "pixel", defines={"ENABLED": "1"}),
++            includes,
++            include_events=events,
++        )
++
++        self.assertEqual(code, 0, stderr + str(result))
++        self.assertTrue(result["success"], result["diagnostics"])
++        self.assertEqual([event["include_name"] for event in events], ["outer.hlsli", "inner.hlsli"])
++        self.assertEqual([event["id"] for event in events], [1, 2])
++        self.assertEqual([item["source_name"] for item in result["includes"]],
++                         ["virtual/outer.hlsli", "virtual/inner.hlsli"])
++
++    def test_wrong_include_id_fails_without_emitting_binary(self):
++        source = '#include "active.hlsli"\nfloat4 main() : SV_Target0 { return input.color; }\n'
++        code, result, _stderr = run_protocol(
++            request(source, "pixel"),
++            {"active.hlsli": ("virtual/active.hlsli", "")},
++            response_id_delta=1,
++        )
++        self.assertNotEqual(code, 0)
++        self.assertFalse(result["success"])
++        self.assertNotIn("binary_base64", result)
++        self.assertIn("ID mismatch", result["diagnostics"])
++
++    def test_missing_include_is_reported_and_never_looked_up_implicitly(self):
++        source = (
++            '#include "not-provided.hlsli"\n'
++            'struct Input { [[vk::location(0)]] float4 color : COLOR0; };\n'
++            'float4 main(Input input) : SV_Target0 { return includedColor(input.color); }\n'
++        )
++        code, result, _stderr = run_protocol(
++            request(source, "pixel", source_name="virtual/main.hlsl"), {}
++        )
++        self.assertNotEqual(code, 0)
++        self.assertFalse(result["success"])
++        self.assertNotIn("binary_base64", result)
++        self.assertIn("test include not found", result["diagnostics"])
++
++    def test_changed_supported_expression_and_variant_change_identity(self):
++        prefix = "struct Input { [[vk::location(0)]] float4 color : COLOR0; };\n"
++        first_source = prefix + "float4 main(Input i) : SV_Target0 { return i.color * i.color; }\n"
++        second_source = prefix + "float4 main(Input i) : SV_Target0 { return i.color + i.color; }\n"
++        code_a, first, stderr_a = run_protocol(request(first_source, "pixel"))
++        code_b, second, stderr_b = run_protocol(request(second_source, "pixel"))
++        self.assertEqual((code_a, code_b), (0, 0), stderr_a + stderr_b)
++        self.assertNotEqual(first["binary_base64"], second["binary_base64"])
++        self.assertNotEqual(first["compile_identity"], second["compile_identity"])
++
++        variant = request(first_source, "pixel", variant="alternate")
++        code_c, third, stderr_c = run_protocol(variant)
++        self.assertEqual(code_c, 0, stderr_c)
++        self.assertEqual(first["binary_base64"], third["binary_base64"])
++        self.assertNotEqual(first["compile_identity"], third["compile_identity"])
++        self.assertEqual(first["tool_identity"], third["tool_identity"])
++
++        invalid = request(first_source, "pixel")
++        invalid["target"] = "other"
++        failed_code, failed, _stderr = run_protocol(invalid)
++        self.assertNotEqual(failed_code, 0)
++        self.assertFalse(failed["success"])
++        self.assertNotIn("binary_base64", failed)
++        fresh_code, fresh, fresh_stderr = run_protocol(request(first_source, "pixel"))
++        self.assertEqual(fresh_code, 0, fresh_stderr)
++        self.assertTrue(fresh["success"])
++        self.assertEqual(fresh["binary_base64"], first["binary_base64"])
++
++    def test_include_contents_and_options_change_compile_identity(self):
++        source = (
++            '#include "color.hlsli"\n'
++            'struct Input { [[vk::location(0)]] float4 color : COLOR0; };\n'
++            'float4 main(Input input) : SV_Target0 { return includedColor(input.color); }\n'
++        )
++        first_include = "float4 includedColor(float4 color) { return color * color; }\n"
++        second_include = first_include.rstrip() + " // comment changes include bytes\n"
++        first_request = request(source, "pixel")
++        first_request["options"]["warnings_as_errors"] = False
++        code_a, first, stderr_a = run_protocol(
++            first_request, {"color.hlsli": ("virtual/color.hlsli", first_include)}
++        )
++        code_b, second, stderr_b = run_protocol(
++            first_request, {"color.hlsli": ("virtual/color.hlsli", second_include)}
++        )
++        self.assertEqual((code_a, code_b), (0, 0), stderr_a + stderr_b)
++        self.assertEqual(first["binary_base64"], second["binary_base64"])
++        self.assertNotEqual(first["includes"][0]["sha256"], second["includes"][0]["sha256"])
++        self.assertNotEqual(first["compile_identity"], second["compile_identity"])
++
++        option_request = request(source, "pixel")
++        option_request["options"]["warnings_as_errors"] = True
++        code_c, third, stderr_c = run_protocol(
++            option_request, {"color.hlsli": ("virtual/color.hlsli", first_include)}
++        )
++        self.assertEqual(code_c, 0, stderr_c)
++        self.assertEqual(first["binary_base64"], third["binary_base64"])
++        self.assertNotEqual(first["compile_identity"], third["compile_identity"])
++
++    def test_malformed_protocol_and_wrong_interface_fail_without_binary(self):
++        malformed = run_raw_protocol(b"{not json}\n")
++        self.assertNotEqual(malformed.returncode, 0)
++        malformed_result = json.loads(malformed.stdout.decode("utf-8"))
++        self.assertFalse(malformed_result["success"])
++        self.assertNotIn("binary_base64", malformed_result)
++
++        source = (
++            "struct Input { [[vk::location(8)]] float4 color : COLOR0; };\n"
++            "float4 main(Input input) : SV_Target0 { return input.color; }\n"
++        )
++        code, result, stderr = run_protocol(request(source, "pixel"))
++        self.assertNotEqual(code, 0)
++        self.assertFalse(result["success"], stderr)
++        self.assertNotIn("binary_base64", result)
++        self.assertIn("location must be in 0..7", result["diagnostics"])
++
++    def test_line_and_microcode_limits_reject_invalid_sizes(self):
++        import io
++
++        from backend_protocol import MAX_LINE_BYTES, _check_microcode, _write_protocol_line
++        from lower_xenos import LoweringError
++
++        process = subprocess.Popen(
++            [sys.executable, "-u", str(PROTOCOL), "--shaderc", str(SHADERC)],
++            stdin=subprocess.PIPE,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.PIPE,
++            cwd=ROOT,
++        )
++        stdout, stderr = process.communicate(b" " * (MAX_LINE_BYTES + 1) + b"\n", timeout=10)
++        self.assertNotEqual(process.returncode, 0)
++        result = json.loads(stdout.decode("utf-8"))
++        self.assertFalse(result["success"])
++        self.assertIn("exceeds", result["diagnostics"])
++        self.assertEqual(stderr, b"")
++
++        _check_microcode(b"\0" * (1024 * 4))
++        for bad in (b"", b"\0", b"\0" * (1025 * 4)):
++            with self.subTest(size=len(bad)), self.assertRaises(LoweringError):
++                _check_microcode(bad)
++        with self.assertRaisesRegex(ValueError, "exceeds"):
++            _write_protocol_line(io.BytesIO(), {"value": "x" * MAX_LINE_BYTES})
++
++    def test_tool_identity_sources_follow_bundled_shader_tools_layout(self):
++        from backend_protocol import _tool_source_paths
++
++        bundle_root = pathlib.Path("C:/builder/output") / "shader-tools"
++        protocol_path = bundle_root / "shader-probe" / "backend_protocol.py"
++        frontend_path = bundle_root / "shader-probe" / "shader_probe.py"
++        sources = _tool_source_paths(protocol_path, frontend_path)
++        self.assertEqual(sources[-1][1], bundle_root / "xenos_asm.py")
++
++    def test_invalid_request_and_missing_shaderc_return_failure_without_binary(self):
++        malformed = request("float4 main() : SV_Target0 { return 1; }", "pixel")
++        malformed["binding_policy"]["default_space"] = 1
++        code, result, _stderr = run_protocol(malformed)
++        self.assertNotEqual(code, 0)
++        self.assertIsNotNone(result)
++        self.assertFalse(result["success"])
++        self.assertNotIn("binary_base64", result)
++
++        code, result, _stderr = run_protocol(
++            request("float4 main() : SV_Target0 { return 1; }", "pixel"),
++            shaderc=ROOT / "missing-shaderc.dll",
++        )
++        self.assertNotEqual(code, 0)
++        self.assertIsNotNone(result)
++        self.assertFalse(result["success"])
++        self.assertNotIn("binary_base64", result)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/docs/x360-shader-host-protocol.md b/docs/x360-shader-host-protocol.md
+new file mode 100644
+index 0000000..6ed254b
+--- /dev/null
++++ b/docs/x360-shader-host-protocol.md
+@@ -0,0 +1,61 @@
++# Xbox 360 shader host protocol
++
++The reusable host compiler runs one request per process:
++
++```text
++python -u <shader-probe/backend_protocol.py> --shaderc <absolute shaderc_shared.dll path>
++```
++
++In the source checkout the script is `tools/shader-probe/backend_protocol.py`.
++Builder deployments place it at `shader-tools/shader-probe/backend_protocol.py`
++and place `xenos_asm.py` in the parent `shader-tools` directory. The script
++resolves that sibling layout from its own location. Python writes no progress or
++diagnostic text to stdout; its only stdout messages are protocol JSON lines.
++
++Each UTF-8 JSON line is limited to 8 MiB. The first line is the frozen protocol
++1 `compile` message described in
++[`x360-shader-host-protocol-brief.md`](superpowers/plans/x360-shader-host-protocol-brief.md).
++It requires the complete field set, exact `x360`/`4.0` target, vertex or pixel
++stage, boolean option flags, and integer binding shifts. `default_space` must be
++zero. Defines are passed unchanged to the in-memory HLSL frontend, which
++validates identifiers and NULs. The host performs no file-based source or
++include lookup.
++
++For an active shaderc include, the host flushes an `include` message with a
++monotonically increasing ID, then waits for an `include_result` with the same
++protocol and ID. The caller supplies the resolved source name and contents, or
++an error. Nested includes repeat this exchange; inactive preprocessor branches
++do not generate requests. The host accepts at most 4096 requests and the
++frontend enforces nesting depth 64. A missing or malformed response fails the
++compile and produces no binary.
++
++The host compiles the supplied HLSL bytes through `shader_probe`, reflects the
++resulting SPIR-V through `backend_layout`, derives the bounded platform layout,
++and passes that layout to `lower_xenos`. Uniforms use symbolic register
++capacity; no constant values are fabricated. Resource set/binding values and
++texture/sampler pairs remain the native reflected values. The requested
++binding-policy shifts are retained in request identity; the managed consumer
++uses them to calculate shared logical slots. Texture/sampler pairs map to
++physical `tf1`; vertex inputs map to the published 12-dword `vf0` layout.
++
++Success returns the frozen `result` message with base64 microcode, existing
++lowerer metadata, actual SPIR-V interface/resource reflection, include content
++hashes, and identities. Resource and member names come from SPIR-V `OpName` and
++`OpMemberName` data. Unsupported or absent names needed for resource reflection
++fail explicitly. Failure returns only `protocol`, `type`, `success:false`, and
++diagnostics; the process exits nonzero and does not reuse output from another
++invocation.
++
++`tool_identity` covers protocol/layout ABI version 1, shaderc DLL bytes, and
++the protocol, layout, frontend, lowerer, parser, and assembler Python sources.
++`compile_identity` covers the canonical full request, resolved include
++identities, tool identity, emitted binary, lowerer metadata, and reflection.
++There is no host cache. A successful stage is limited to 1024 nonempty,
++aligned microcode dwords. This per-stage bound does not prove that an arbitrary
++vertex/pixel pair fits the runtime ring.
++
++Focused real-DLL tests run with:
++
++```powershell
++python tests/shader_backend_protocol_test.py -v
++```

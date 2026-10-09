@@ -1,0 +1,753 @@
+﻿diff --git a/tools/shader-probe/shader_probe.py b/tools/shader-probe/shader_probe.py
+new file mode 100644
+index 0000000..9915a9b
+--- /dev/null
++++ b/tools/shader-probe/shader_probe.py
+@@ -0,0 +1,392 @@
++#!/usr/bin/env python3
++"""Compile one authored HLSL entrypoint to SPIR-V using an installed Shaderc DLL."""
++
++import argparse
++import ctypes
++from dataclasses import dataclass
++import hashlib
++import os
++from pathlib import Path
++import re
++import sys
++from collections.abc import Mapping
++
++
++PROBE_VERSION = "0.1.0"
++STAGES = {"vertex": 0, "pixel": 1}
++SHADERC_ENV_VERSION_VULKAN_1_0 = 1 << 22
++MAX_INCLUDE_DEPTH = 64
++
++
++class _ShadercIncludeResult(ctypes.Structure):
++    _fields_ = [
++        ("source_name", ctypes.c_void_p),
++        ("source_name_length", ctypes.c_size_t),
++        ("content", ctypes.c_void_p),
++        ("content_length", ctypes.c_size_t),
++        ("user_data", ctypes.c_void_p),
++    ]
++
++
++@dataclass(frozen=True)
++class IncludedSource:
++    """Identity of one resolved include payload passed to shaderc."""
++
++    source_name: str
++    sha256: str
++
++
++@dataclass(frozen=True)
++class ShaderCompileResult:
++    """SPIR-V and diagnostics from one in-memory shaderc compilation."""
++
++    spirv: bytes | None
++    diagnostics: str
++    included_sources: tuple[IncludedSource, ...]
++
++    @property
++    def succeeded(self):
++        return self.spirv is not None
++
++
++class _IncludeCallbackState:
++    def __init__(self, resolver):
++        self.resolver = resolver
++        self.results = {}
++        self.sources = []
++        self.errors = []
++
++    def allocate(self, source_name, content):
++        source_buffer = ctypes.create_string_buffer(source_name)
++        content_buffer = ctypes.create_string_buffer(content)
++        result = _ShadercIncludeResult(
++            ctypes.cast(source_buffer, ctypes.c_void_p), len(source_name),
++            ctypes.cast(content_buffer, ctypes.c_void_p), len(content), None,
++        )
++        pointer = ctypes.pointer(result)
++        self.results[ctypes.addressof(result)] = (result, source_buffer, content_buffer)
++        return pointer
++
++    def release(self, address):
++        if address:
++            self.results.pop(address, None)
++
++    def resolve(self, requested_bytes, requesting_bytes, depth):
++        requested = requested_bytes.decode("utf-8", errors="replace")
++        requesting = requesting_bytes.decode("utf-8", errors="replace")
++        try:
++            if depth > MAX_INCLUDE_DEPTH:
++                raise ValueError(
++                    f"include depth limit ({MAX_INCLUDE_DEPTH}) exceeded for {requested!r}"
++                )
++            if self.resolver is None:
++                raise ValueError(f"no include resolver configured for {requested!r}")
++            resolved = self.resolver(requesting, requested)
++            if resolved is None:
++                raise ValueError(f"include not found: {requested!r}")
++            if not isinstance(resolved, (tuple, list)) or len(resolved) != 2:
++                raise TypeError("include resolver must return (resolved_source_name, source_bytes)")
++            resolved_name, content = resolved
++            if not isinstance(resolved_name, str):
++                raise TypeError("resolved include source name must be str")
++            if not isinstance(content, bytes):
++                raise TypeError("resolved include source must be bytes")
++            if "\0" in resolved_name or b"\0" in content:
++                raise ValueError("NUL byte in resolved include source name or payload")
++            name_bytes = resolved_name.encode("utf-8")
++            if b"\0" in name_bytes:
++                raise ValueError("NUL byte in resolved include source name")
++            self.sources.append(IncludedSource(resolved_name, hashlib.sha256(content).hexdigest()))
++            return self.allocate(name_bytes, content)
++        except BaseException as error:
++            message = f"Include resolution failed for {requested!r} from {requesting!r}: {type(error).__name__}: {error}"
++            self.errors.append(message)
++            error_name = b"shader-probe-include-error"
++            error_content = message.encode("utf-8", errors="replace")
++            return self.allocate(error_name, error_content)
++
++
++def load_shaderc(library_path):
++    path = Path(library_path)
++    if not path.is_file():
++        raise OSError(f"Shaderc library does not exist: {path}")
++    try:
++        library = ctypes.WinDLL(str(path)) if os.name == "nt" else ctypes.CDLL(str(path))
++    except OSError as error:
++        raise OSError(f"Could not load Shaderc native library '{path}': {error}") from error
++
++    pointer = ctypes.c_void_p
++    library.shaderc_compiler_initialize.argtypes = []
++    library.shaderc_compiler_initialize.restype = pointer
++    library.shaderc_compiler_release.argtypes = [pointer]
++    library.shaderc_compiler_release.restype = None
++    library.shaderc_compile_options_initialize.argtypes = []
++    library.shaderc_compile_options_initialize.restype = pointer
++    library.shaderc_compile_options_release.argtypes = [pointer]
++    library.shaderc_compile_options_release.restype = None
++    library.shaderc_compile_options_set_source_language.argtypes = [pointer, ctypes.c_int]
++    library.shaderc_compile_options_set_source_language.restype = None
++    library.shaderc_compile_options_set_target_env.argtypes = [pointer, ctypes.c_int, ctypes.c_uint]
++    library.shaderc_compile_options_set_target_env.restype = None
++    library.shaderc_compile_options_add_macro_definition.argtypes = [
++        pointer, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t,
++    ]
++    library.shaderc_compile_options_add_macro_definition.restype = None
++    library.shaderc_compile_options_set_include_callbacks.argtypes = [
++        pointer, ctypes.c_void_p, ctypes.c_void_p, pointer,
++    ]
++    library.shaderc_compile_options_set_include_callbacks.restype = None
++    library.shaderc_compile_options_set_generate_debug_info.argtypes = [pointer]
++    library.shaderc_compile_options_set_generate_debug_info.restype = None
++    library.shaderc_compile_options_set_optimization_level.argtypes = [pointer, ctypes.c_int]
++    library.shaderc_compile_options_set_optimization_level.restype = None
++    library.shaderc_compile_options_set_warnings_as_errors.argtypes = [pointer]
++    library.shaderc_compile_options_set_warnings_as_errors.restype = None
++    library.shaderc_compile_into_spv.argtypes = [
++        pointer,
++        ctypes.c_char_p,
++        ctypes.c_size_t,
++        ctypes.c_int,
++        ctypes.c_char_p,
++        ctypes.c_char_p,
++        pointer,
++    ]
++    library.shaderc_compile_into_spv.restype = pointer
++    library.shaderc_result_get_compilation_status.argtypes = [pointer]
++    library.shaderc_result_get_compilation_status.restype = ctypes.c_int
++    library.shaderc_result_get_error_message.argtypes = [pointer]
++    library.shaderc_result_get_error_message.restype = ctypes.c_char_p
++    library.shaderc_result_get_length.argtypes = [pointer]
++    library.shaderc_result_get_length.restype = ctypes.c_size_t
++    library.shaderc_result_get_bytes.argtypes = [pointer]
++    library.shaderc_result_get_bytes.restype = pointer
++    library.shaderc_result_release.argtypes = [pointer]
++    library.shaderc_result_release.restype = None
++    return library, path
++
++
++def compile_hlsl(library, source_path, stage, entrypoint):
++    source = source_path.read_bytes()
++    result = compile_hlsl_from_source(
++        library, source, str(source_path), stage, entrypoint
++    )
++    if not result.succeeded:
++        raise ValueError(result.diagnostics or "Shaderc compilation failed")
++    return result.spirv
++
++
++def compile_hlsl_from_source(
++    library,
++    source,
++    source_name,
++    stage,
++    entrypoint,
++    defines=None,
++    include_resolver=None,
++    *,
++    debug_info=False,
++    optimize=False,
++    warnings_as_errors=False,
++):
++    """Compile HLSL bytes with shaderc preprocessing and caller-owned includes.
++
++    The resolver is called as ``resolver(requesting_source, include_name)`` and
++    returns ``(resolved_source_name, source_bytes)``. No files are read here.
++    """
++    if not isinstance(source, bytes):
++        raise TypeError("source must be bytes")
++    if not isinstance(source_name, str) or not isinstance(entrypoint, str):
++        raise TypeError("source_name and entrypoint must be str")
++    if b"\0" in source or "\0" in source_name or "\0" in entrypoint:
++        raise ValueError("NUL byte in source, source name, or entrypoint")
++    if stage not in STAGES:
++        raise ValueError(f"unsupported stage {stage!r}; supported stages: vertex, pixel")
++    source_name_bytes = source_name.encode("utf-8")
++    entrypoint_bytes = entrypoint.encode("utf-8")
++    if defines is None:
++        defines = {}
++    if not isinstance(defines, Mapping):
++        raise TypeError("defines must be a mapping of macro names to string values")
++    macro_definitions = []
++    for name, value in defines.items():
++        if isinstance(name, str) and "\0" in name:
++            raise ValueError(f"NUL byte in shader define name {name!r}")
++        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
++            raise ValueError(f"invalid shader define name: {name!r}")
++        if not isinstance(value, str):
++            raise TypeError(f"shader define {name!r} value must be str")
++        if "\0" in name or "\0" in value:
++            raise ValueError(f"NUL byte in shader define {name!r}")
++        macro_definitions.append((name.encode("utf-8"), value.encode("utf-8")))
++
++    include_state = _IncludeCallbackState(include_resolver)
++    resolver_callback_type = ctypes.CFUNCTYPE(
++        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int,
++        ctypes.c_char_p, ctypes.c_size_t,
++    )
++    releaser_callback_type = ctypes.CFUNCTYPE(
++        None, ctypes.c_void_p, ctypes.c_void_p,
++    )
++
++    def resolve_callback(user_data, requested, include_type, requesting, depth):
++        try:
++            result_pointer = include_state.resolve(requested or b"", requesting or b"", depth)
++            return ctypes.cast(result_pointer, ctypes.c_void_p).value
++        except BaseException as error:
++            include_state.errors.append(f"Include callback failed: {type(error).__name__}: {error}")
++            result_pointer = include_state.allocate(
++                b"shader-probe-include-error", str(error).encode("utf-8", errors="replace")
++            )
++            return ctypes.cast(result_pointer, ctypes.c_void_p).value
++
++    def release_callback(user_data, result_pointer):
++        try:
++            include_state.release(result_pointer)
++        except BaseException:
++            pass
++
++    resolver_callback = resolver_callback_type(resolve_callback)
++    releaser_callback = releaser_callback_type(release_callback)
++    compiler = library.shaderc_compiler_initialize()
++    if not compiler:
++        raise RuntimeError("Shaderc could not initialize a compiler")
++
++    options = None
++    result = None
++    try:
++        options = library.shaderc_compile_options_initialize()
++        if not options:
++            raise RuntimeError("Shaderc could not initialize compile options")
++        # shaderc_source_language_hlsl = 1; shaderc_target_env_vulkan = 0.
++        library.shaderc_compile_options_set_source_language(options, 1)
++        library.shaderc_compile_options_set_target_env(
++            options, 0, SHADERC_ENV_VERSION_VULKAN_1_0
++        )
++        for macro_name, macro_value in macro_definitions:
++            library.shaderc_compile_options_add_macro_definition(
++                options, macro_name, len(macro_name), macro_value, len(macro_value)
++            )
++        library.shaderc_compile_options_set_include_callbacks(
++            options, resolver_callback, releaser_callback, None
++        )
++        if debug_info:
++            library.shaderc_compile_options_set_generate_debug_info(options)
++        if optimize:
++            # shaderc_optimization_level_performance = 2.
++            library.shaderc_compile_options_set_optimization_level(options, 2)
++        if warnings_as_errors:
++            library.shaderc_compile_options_set_warnings_as_errors(options)
++        result = library.shaderc_compile_into_spv(
++            compiler,
++            source,
++            len(source),
++            STAGES[stage],
++            source_name_bytes,
++            entrypoint_bytes,
++            options,
++        )
++        if not result:
++            raise RuntimeError("Shaderc returned no compilation result")
++        message = library.shaderc_result_get_error_message(result)
++        diagnostics = message.decode("utf-8", errors="replace") if message else ""
++        if library.shaderc_result_get_compilation_status(result) != 0:
++            if not diagnostics:
++                diagnostics = "Shaderc compilation failed"
++            if include_state.errors:
++                diagnostics += "\n" + "\n".join(include_state.errors)
++            return ShaderCompileResult(None, diagnostics, tuple(dict.fromkeys(include_state.sources)))
++        size = library.shaderc_result_get_length(result)
++        data = ctypes.string_at(library.shaderc_result_get_bytes(result), size)
++        if include_state.errors:
++            diagnostics = "\n".join(filter(None, (diagnostics, *include_state.errors)))
++        return ShaderCompileResult(data, diagnostics, tuple(dict.fromkeys(include_state.sources)))
++    finally:
++        if result:
++            library.shaderc_result_release(result)
++        if options:
++            library.shaderc_compile_options_release(options)
++        library.shaderc_compiler_release(compiler)
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("source", nargs="?", help="authored HLSL source file")
++    parser.add_argument("--stage", help="shader stage: vertex or pixel")
++    parser.add_argument("--entry", help="HLSL entrypoint name")
++    parser.add_argument("--output", help="destination SPIR-V file")
++    parser.add_argument(
++        "--shaderc",
++        default=os.environ.get("SHADERC_SHARED_LIBRARY"),
++        help="path to shaderc_shared.dll (or set SHADERC_SHARED_LIBRARY)",
++    )
++    parser.add_argument("--version", action="store_true", help="show binding version and native DLL hash")
++    args = parser.parse_args(argv)
++
++    if not args.shaderc:
++        parser.error("--shaderc or SHADERC_SHARED_LIBRARY is required")
++
++    if args.version:
++        try:
++            library, library_path = load_shaderc(args.shaderc)
++            digest = hashlib.sha256(library_path.read_bytes()).hexdigest()
++        except OSError as error:
++            print(f"shader-probe: {error}", file=sys.stderr)
++            return 1
++        print(f"shader-probe {PROBE_VERSION}; shaderc native SHA-256 {digest}")
++        return 0
++
++    if not args.source or not args.stage or not args.entry or not args.output:
++        parser.error("source, --stage, --entry, and --output are required for compilation")
++
++    source_path = Path(args.source)
++    output_path = Path(args.output)
++    try:
++        shaderc_path = Path(args.shaderc)
++        resolved_output = output_path.resolve()
++        if resolved_output in {source_path.resolve(), shaderc_path.resolve()}:
++            print(
++                "shader-probe: output path must differ from the source and Shaderc library",
++                file=sys.stderr,
++            )
++            return 1
++
++        # An explicit output denotes the result of this invocation. Remove any
++        # previous artifact before attempting work so failures cannot leave it
++        # looking like the current source compiled successfully. This happens
++        # before loading or hashing the dependency so setup failures invalidate
++        # stale output too.
++        output_path.unlink(missing_ok=True)
++        if args.stage not in STAGES:
++            parser.error(f"unsupported stage {args.stage!r}; supported stages: vertex, pixel")
++
++        library, library_path = load_shaderc(shaderc_path)
++        digest = hashlib.sha256(library_path.read_bytes()).hexdigest()
++        try:
++            binary = compile_hlsl(library, source_path, args.stage, args.entry)
++        except ValueError as error:
++            print(str(error), file=sys.stderr, end="" if str(error).endswith("\n") else "\n")
++            return 1
++
++        output_path.parent.mkdir(parents=True, exist_ok=True)
++        try:
++            output_path.write_bytes(binary)
++        except OSError:
++            output_path.unlink(missing_ok=True)
++            raise
++        spirv_version = int.from_bytes(binary[4:8], "little")
++        spirv_major = (spirv_version >> 16) & 0xFF
++        spirv_minor = (spirv_version >> 8) & 0xFF
++        print(
++            f"shader-probe {PROBE_VERSION}; shaderc native SHA-256 {digest}; "
++            f"target Vulkan 1.0 (env 0x{SHADERC_ENV_VERSION_VULKAN_1_0:08X}); "
++            f"SPIR-V {spirv_major}.{spirv_minor}"
++        )
++        print(f"Wrote {output_path} ({len(binary)} bytes)")
++        return 0
++    except (OSError, RuntimeError) as error:
++        print(f"shader-probe: {error}", file=sys.stderr)
++        return 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/shader_request_frontend_test.py b/tests/shader_request_frontend_test.py
+new file mode 100644
+index 0000000..d6f4365
+--- /dev/null
++++ b/tests/shader_request_frontend_test.py
+@@ -0,0 +1,216 @@
++import os
++import hashlib
++from pathlib import Path
++import sys
++import unittest
++
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "tools" / "shader-probe"))
++
++import shader_probe
++
++
++DEFAULT_SHADERC = Path(
++    r"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows"
++    r"\runtimes\win-x64\native\shaderc_shared.dll"
++)
++
++
++class ShaderRequestFrontendTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        path = Path(os.environ.get("SHADERC_SHARED_LIBRARY", DEFAULT_SHADERC))
++        cls.library, _ = shader_probe.load_shaderc(path)
++
++    def compile_source(self, source, **kwargs):
++        return shader_probe.compile_hlsl_from_source(
++            self.library, source, "virtual/main.hlsl", "vertex", "chosen", **kwargs
++        )
++
++    def test_entrypoint_and_define_value_change_real_spirv(self):
++        source = b"""float4 chosen() : SV_Position {
++    return float4(FACTOR, 0.0, 0.0, 1.0);
++}
++float4 unused() : SV_Position { return 0; }
++"""
++
++        low = self.compile_source(source, defines={"FACTOR": "0.25"})
++        high = self.compile_source(source, defines={"FACTOR": "0.75"})
++
++        self.assertTrue(low.succeeded, low.diagnostics)
++        self.assertTrue(high.succeeded, high.diagnostics)
++        self.assertNotEqual(low.spirv, high.spirv)
++        self.assertEqual(low.included_sources, ())
++
++    def test_default_in_memory_output_matches_existing_transform_fixture(self):
++        fixtures = (
++            ("transform_vs.hlsl", "vertex"),
++            ("texture_ps.hlsl", "pixel"),
++        )
++        for filename, stage in fixtures:
++            with self.subTest(filename=filename):
++                fixture = ROOT / "tests" / "shaders" / "fixtures" / filename
++                original_api = shader_probe.compile_hlsl(
++                    self.library, fixture, stage, "main"
++                )
++                in_memory = shader_probe.compile_hlsl_from_source(
++                    self.library, fixture.read_bytes(), str(fixture), stage, "main"
++                )
++
++                self.assertTrue(in_memory.succeeded, in_memory.diagnostics)
++                self.assertEqual(in_memory.spirv, original_api)
++
++    def test_nested_include_uses_resolved_requester_and_reports_identities(self):
++        source = b'#include "dir/one.hlsl"\nfloat4 chosen() : SV_Position { return included(); }\n'
++        included = {
++            ("virtual/main.hlsl", "dir/one.hlsl"): (
++                "virtual/dir/one.hlsl",
++                b'#include "../two.hlsl"\nfloat4 included() { return nested_value(); }\n',
++            ),
++            ("virtual/dir/one.hlsl", "../two.hlsl"): (
++                "virtual/two.hlsl",
++                b"float4 nested_value() { return float4(0.2, 0.3, 0.4, 1); }\n",
++            ),
++        }
++        requests = []
++
++        def resolve(requesting_source, include_name):
++            requests.append((requesting_source, include_name))
++            return included[(requesting_source, include_name)]
++
++        first = self.compile_source(source, include_resolver=resolve)
++        included[("virtual/dir/one.hlsl", "../two.hlsl")] = (
++            "virtual/two.hlsl",
++            b"float4 nested_value() { return float4(0.8, 0.3, 0.4, 1); }\n",
++        )
++        second = self.compile_source(source, include_resolver=resolve)
++
++        self.assertTrue(first.succeeded, first.diagnostics)
++        self.assertTrue(second.succeeded, second.diagnostics)
++        self.assertEqual(
++            first.included_sources,
++            (
++                shader_probe.IncludedSource(
++                    "virtual/dir/one.hlsl",
++                    hashlib.sha256(included[("virtual/main.hlsl", "dir/one.hlsl")][1]).hexdigest(),
++                ),
++                shader_probe.IncludedSource(
++                    "virtual/two.hlsl",
++                    hashlib.sha256(b"float4 nested_value() { return float4(0.2, 0.3, 0.4, 1); }\n").hexdigest(),
++                ),
++            ),
++        )
++        self.assertIn(("virtual/dir/one.hlsl", "../two.hlsl"), requests)
++        self.assertNotEqual(first.spirv, second.spirv)
++
++    def test_inactive_include_does_not_call_resolver(self):
++        source = b"""#if 0
++#include "inactive.hlsl"
++#endif
++float4 chosen() : SV_Position { return float4(0, 0, 0, 1); }
++"""
++        requests = []
++
++        result = self.compile_source(
++            source,
++            include_resolver=lambda requesting, name: requests.append((requesting, name)),
++        )
++
++        self.assertTrue(result.succeeded, result.diagnostics)
++        self.assertEqual(requests, [])
++
++    def test_missing_include_and_resolver_exception_are_compile_diagnostics(self):
++        source = b'#include "missing.hlsl"\nfloat4 chosen() : SV_Position { return 0; }\n'
++        missing = self.compile_source(source, include_resolver=lambda requester, name: None)
++        failed = self.compile_source(
++            source,
++            include_resolver=lambda requester, name: (_ for _ in ()).throw(
++                RuntimeError("resolver backend offline")
++            ),
++        )
++
++        self.assertFalse(missing.succeeded)
++        self.assertIn("missing.hlsl", missing.diagnostics)
++        self.assertFalse(failed.succeeded)
++        self.assertIn("resolver backend offline", failed.diagnostics)
++        self.assertNotIn("Traceback", failed.diagnostics)
++
++    def test_recursive_includes_fail_at_a_bounded_depth(self):
++        source = b'#include "loop.hlsl"\nfloat4 chosen() : SV_Position { return loop_value(); }\n'
++
++        def resolve(requester, name):
++            return "virtual/loop.hlsl", b'#include "loop.hlsl"\nfloat4 loop_value() { return 0; }\n'
++
++        result = self.compile_source(source, include_resolver=resolve)
++
++        self.assertFalse(result.succeeded)
++        self.assertIn("depth", result.diagnostics.lower())
++
++    def test_embedded_nul_is_rejected_in_all_native_string_payloads(self):
++        cases = (
++            (b"float4 chosen() : SV_Position { return 0; }\0", "virtual/main.hlsl", "chosen", {}, None),
++            (b"float4 chosen() : SV_Position { return 0; }", "virtual\0main.hlsl", "chosen", {}, None),
++            (b"float4 chosen() : SV_Position { return 0; }", "virtual/main.hlsl", "chosen\0x", {}, None),
++            (b"float4 chosen() : SV_Position { return FACTOR; }", "virtual/main.hlsl", "chosen", {"BAD\0NAME": "1"}, None),
++            (b"float4 chosen() : SV_Position { return FACTOR; }", "virtual/main.hlsl", "chosen", {"FACTOR": "1\0x"}, None),
++        )
++        for source, name, entry, defines, resolver in cases:
++            with self.subTest(source=source, name=name, entry=entry, defines=defines):
++                with self.assertRaisesRegex(ValueError, "NUL"):
++                    shader_probe.compile_hlsl_from_source(
++                        self.library, source, name, "vertex", entry,
++                        defines=defines, include_resolver=resolver,
++                    )
++
++        for response in (
++            ("virtual/include.hlsl\0bad", b"float4 helper() { return 0; }"),
++            ("virtual/include.hlsl", b"float4 helper() { return 0; }\0"),
++        ):
++            with self.subTest(response=response):
++                result = self.compile_source(
++                    b'#include "include.hlsl"\nfloat4 chosen() : SV_Position { return helper(); }\n',
++                    include_resolver=lambda requester, name, response=response: response,
++                )
++                self.assertFalse(result.succeeded)
++                self.assertIn("NUL", result.diagnostics)
++
++    def test_callback_state_is_not_reused_after_success_or_failure(self):
++        with_include = b'#include "value.hlsl"\nfloat4 chosen() : SV_Position { return helper(); }\n'
++        success = self.compile_source(
++            with_include,
++            include_resolver=lambda requester, name: ("virtual/value.hlsl", b"float4 helper() { return 1; }"),
++        )
++        failure = self.compile_source(with_include, include_resolver=lambda requester, name: None)
++        plain = self.compile_source(b"float4 chosen() : SV_Position { return 1; }\n")
++
++        self.assertTrue(success.succeeded, success.diagnostics)
++        self.assertFalse(failure.succeeded)
++        self.assertTrue(plain.succeeded, plain.diagnostics)
++        self.assertEqual(plain.included_sources, ())
++
++    def test_debug_optimization_and_warnings_options_have_observable_effects(self):
++        source = b"float4 chosen() : SV_Position { float x = 0.25; return float4(x, 0, 0, 1); }\n"
++        default = self.compile_source(source)
++        debug = self.compile_source(source, debug_info=True)
++        optimized = self.compile_source(source, optimize=True)
++        warning_error = self.compile_source(
++            b"#warning request warning\nfloat4 chosen() : SV_Position { return 0; }\n",
++            warnings_as_errors=True,
++        )
++
++        for result in (default, debug, optimized):
++            self.assertTrue(result.succeeded, result.diagnostics)
++        self.assertNotEqual(default.spirv, debug.spirv)
++        self.assertNotEqual(default.spirv, optimized.spirv)
++        self.assertFalse(warning_error.succeeded)
++        self.assertIn("warning", warning_error.diagnostics.lower())
++
++    def test_warnings_as_errors_binding_matches_native_one_argument_signature(self):
++        setter = self.library.shaderc_compile_options_set_warnings_as_errors
++
++        self.assertEqual(setter.argtypes, [shader_probe.ctypes.c_void_p])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tools/shader-probe/README.md b/tools/shader-probe/README.md
+new file mode 100644
+index 0000000..1afe754
+--- /dev/null
++++ b/tools/shader-probe/README.md
+@@ -0,0 +1,127 @@
++# Bounded Xenos shader probe
++
++`xenos_probe.py` is a CPU-only experiment that compiles a deliberately small
++SPIR-V subset into provisional Xenos assembly and big-endian dword bytes. It is
++not connected to the runtime shader loader and its artifacts are not a final
++runtime format.
++
++The supported slice is straight-line float32 vertex transform/color/UV export
++and pixel uniform, interpolated-color, and bounded texture arithmetic. Pixel
++sampling supports `Texture2D<float4>` with a separate `SamplerState`, normalized
++float2 coordinates, and plain implicit-LOD sampling, followed by the supported
++float arithmetic. Texture and sampler handles are paired through the explicit
++`texture_bindings` layout; descriptor set/binding numbers are logical IDs and
++are never treated as physical Xenos slots. Sampling filter and address state
++remains in the runtime fetch constant. Vertex transforms are limited to the
++explicitly decorated matrix/storage-operation combinations in the lowerer.
++Control flow, division, unsupported resources or sampling operands, additional
++descriptor forms, unsupported decorations/capabilities, and other SPIR-V
++operations fail explicitly. Register allocation is conservative and does not
++reuse temporary registers by liveness.
++
++## Run
++
++For HLSL, provide the installed `shaderc_shared.dll` either with `--shaderc` or
++`SHADERC_SHARED_LIBRARY`:
++
++```powershell
++python tools/shader-probe/xenos_probe.py `
++  --input tests/shaders/fixtures/transform_vs.hlsl `
++  --stage vertex --entry main `
++  --layout tests/shaders/fixtures/xenos_runtime_layout.json `
++  --output-prefix out/transform `
++  --shaderc C:/path/to/shaderc_shared.dll
++```
++
++The input may instead be precompiled `.spv`; that route does not need shaderc:
++
++```powershell
++python tools/shader-probe/xenos_probe.py `
++  --input out/transform.spv --stage vertex --entry main `
++  --layout tests/shaders/fixtures/xenos_runtime_layout.json `
++  --output-prefix out/transform-spv
++```
++
++Both routes require an explicit JSON layout and write `.xasm`, `.bin`, and
++`.json` alongside the supplied output prefix. Existing explicit output files
++are invalidated before work starts and removed if compilation/lowering fails;
++source, layout, shaderc library, and tool paths are protected from output-path
++aliasing. The metadata includes input/source/SPIR-V/layout hashes and the
++shaderc DLL hash for HLSL input.
++
++## Layout contract
++
++`tests/shaders/fixtures/xenos_runtime_layout.json` is the concrete vertex
++layout used by the numeric test: all attributes refer to `vf0`, the physical
++vertex has a 12-dword stride, position starts at dword 0 (`float3`), UV at
++dword 6 (`float2`), and color at dword 8 (`float4`). The `offset` and `stride`
++fields use dwords, matching the assembler's `vfetch_full` convention, not
++bytes. Uniform entries are explicit uploaded float4 register values in
++register order; matrix values are raw consecutive memory chunks as described
++by the member's SPIR-V `RowMajor`/`ColMajor` and `MatrixStride` decorations.
++Varying locations map explicitly to bounded Xenos interpolator slots.
++
++For the concrete texture pairing, see
++`tests/shaders/fixtures/texture_runtime_layout.json`. It maps logical texture
++set 0/binding 0 plus sampler set 0/binding 0 to physical `tf1`, matching the
++current runtime texture upload path. The compiler accepts physical slots
++0..31, but a future linked program must validate collisions between vertex and
++texture fetch allocations before runtime use; a valid texture-pair layout by
++itself does not prove linked allocation safety.
++
++The transform fixture's nonsymmetric matrix is checked by executing decoded
++emitted microcode against one physical vertex array; the expected position is
++`[30, 107, 211, 321]`. Pixel tests execute decoded arithmetic and texture-fetch
++instructions, including a changed UV expression and sample-dependent color
++arithmetic. The texture CPU executor uses a deliberately small point/clamp/no-
++mip model at safe interior UV points chosen to route to distinct texels. It
++checks algebraic and channel routing; it does not model the current runtime's
++linear min/mag filtering, derivatives, interpolation, or device behavior. The
++test executor is intentionally narrower than the assembler and rejects
++instructions it does not understand. It rounds normal finite values and each ALU result to float32;
++MAD rounds the product before the sum, following the current Xenia translator
++reference. Denormals, NaNs, and hardware rounding details are not modeled.
++
++Run focused lowering/CLI tests with:
++
++```powershell
++python tests/shader_lowering_test.py -v
++```
++
++Then run the repository Python suite with:
++
++```powershell
++python -m unittest discover -s tests -p '*_test.py' -v
++```
++
++Passing CPU tests do not establish runtime integration, shader loading,
++interpolation/filtering behavior on hardware, or Xenia/GPU correctness. Gate A
++remains open pending isolated GPU execution; CPU evidence alone must not enable
++the shared shader backend.
++
++## In-memory compiler request API
++
++`shader_probe.compile_hlsl_from_source(library, source_bytes, source_name,
++stage, entrypoint, defines=None, include_resolver=None, *, debug_info=False,
++optimize=False, warnings_as_errors=False)` compiles caller-owned HLSL bytes
++with shaderc's HLSL preprocessor. It reads no source or include files. The
++resolver receives `(requesting_source_name, requested_include_name)` and must
++return `(resolved_source_name, source_bytes)`; returning `None` reports a
++missing include. Shaderc only calls it for active includes, and nested requests
++use the resolved filename as their requesting source.
++
++The result is `ShaderCompileResult(spirv, diagnostics, included_sources)`.
++`spirv` is `None` on shaderc compile failure, while `diagnostics` is retained
++for both success and failure. Each `included_sources` item is an
++`IncludedSource(source_name, sha256)` for the exact bytes supplied by the
++resolver. Resolver exceptions and malformed results become compiler
++diagnostics. Include nesting is limited to 64 levels. Source, filename,
++entrypoint, define names/values, and returned include payloads reject embedded
++NULs; define names must be C-style identifiers.
++
++`debug_info`, `optimize`, and `warnings_as_errors` map to shaderc compile
++options. The default values preserve the existing `compile_hlsl` output.
++These options affect the frontend SPIR-V only; downstream Xenos lowering may
++reject modules outside its supported subset. The path-based
++`compile_hlsl(library, source_path, stage, entrypoint)` remains a SPIR-V-bytes
++API and reports shaderc failures as `ValueError`.

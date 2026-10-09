@@ -1,0 +1,389 @@
+warning: in the working copy of 'tools/shader-probe/shader_probe.py', LF will be replaced by CRLF the next time Git touches it
+diff --git a/tools/shader-probe/shader_probe.py b/tools/shader-probe/shader_probe.py
+new file mode 100644
+index 0000000..1e2de4a
+--- /dev/null
++++ b/tools/shader-probe/shader_probe.py
+@@ -0,0 +1,172 @@
++#!/usr/bin/env python3
++"""Compile one authored HLSL entrypoint to SPIR-V using an installed Shaderc DLL."""
++
++import argparse
++import ctypes
++import hashlib
++import os
++from pathlib import Path
++import sys
++
++
++PROBE_VERSION = "0.1.0"
++STAGES = {"vertex": 0, "pixel": 1}
++SHADERC_ENV_VERSION_VULKAN_1_0 = 1 << 22
++
++
++def load_shaderc(library_path):
++    path = Path(library_path)
++    if not path.is_file():
++        raise OSError(f"Shaderc library does not exist: {path}")
++    library = ctypes.WinDLL(str(path)) if os.name == "nt" else ctypes.CDLL(str(path))
++
++    pointer = ctypes.c_void_p
++    library.shaderc_compiler_initialize.argtypes = []
++    library.shaderc_compiler_initialize.restype = pointer
++    library.shaderc_compiler_release.argtypes = [pointer]
++    library.shaderc_compiler_release.restype = None
++    library.shaderc_compile_options_initialize.argtypes = []
++    library.shaderc_compile_options_initialize.restype = pointer
++    library.shaderc_compile_options_release.argtypes = [pointer]
++    library.shaderc_compile_options_release.restype = None
++    library.shaderc_compile_options_set_source_language.argtypes = [pointer, ctypes.c_int]
++    library.shaderc_compile_options_set_source_language.restype = None
++    library.shaderc_compile_options_set_target_env.argtypes = [pointer, ctypes.c_int, ctypes.c_uint]
++    library.shaderc_compile_options_set_target_env.restype = None
++    library.shaderc_compile_into_spv.argtypes = [
++        pointer,
++        ctypes.c_char_p,
++        ctypes.c_size_t,
++        ctypes.c_int,
++        ctypes.c_char_p,
++        ctypes.c_char_p,
++        pointer,
++    ]
++    library.shaderc_compile_into_spv.restype = pointer
++    library.shaderc_result_get_compilation_status.argtypes = [pointer]
++    library.shaderc_result_get_compilation_status.restype = ctypes.c_int
++    library.shaderc_result_get_error_message.argtypes = [pointer]
++    library.shaderc_result_get_error_message.restype = ctypes.c_char_p
++    library.shaderc_result_get_length.argtypes = [pointer]
++    library.shaderc_result_get_length.restype = ctypes.c_size_t
++    library.shaderc_result_get_bytes.argtypes = [pointer]
++    library.shaderc_result_get_bytes.restype = pointer
++    library.shaderc_result_release.argtypes = [pointer]
++    library.shaderc_result_release.restype = None
++    return library, path
++
++
++def compile_hlsl(library, source_path, stage, entrypoint):
++    source = source_path.read_bytes()
++    source_name = str(source_path).encode("utf-8")
++    entrypoint_bytes = entrypoint.encode("utf-8")
++    compiler = library.shaderc_compiler_initialize()
++    if not compiler:
++        raise RuntimeError("Shaderc could not initialize a compiler")
++
++    options = None
++    result = None
++    try:
++        options = library.shaderc_compile_options_initialize()
++        if not options:
++            raise RuntimeError("Shaderc could not initialize compile options")
++        # shaderc_source_language_hlsl = 1; shaderc_target_env_vulkan = 0.
++        library.shaderc_compile_options_set_source_language(options, 1)
++        library.shaderc_compile_options_set_target_env(
++            options, 0, SHADERC_ENV_VERSION_VULKAN_1_0
++        )
++        result = library.shaderc_compile_into_spv(
++            compiler,
++            source,
++            len(source),
++            STAGES[stage],
++            source_name,
++            entrypoint_bytes,
++            options,
++        )
++        if not result:
++            raise RuntimeError("Shaderc returned no compilation result")
++        if library.shaderc_result_get_compilation_status(result) != 0:
++            message = library.shaderc_result_get_error_message(result)
++            raise ValueError(message.decode("utf-8", errors="replace") if message else "Shaderc compilation failed")
++        size = library.shaderc_result_get_length(result)
++        data = ctypes.string_at(library.shaderc_result_get_bytes(result), size)
++        return data
++    finally:
++        if result:
++            library.shaderc_result_release(result)
++        if options:
++            library.shaderc_compile_options_release(options)
++        library.shaderc_compiler_release(compiler)
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("source", nargs="?", help="authored HLSL source file")
++    parser.add_argument("--stage", help="shader stage: vertex or pixel")
++    parser.add_argument("--entry", help="HLSL entrypoint name")
++    parser.add_argument("--output", help="destination SPIR-V file")
++    parser.add_argument(
++        "--shaderc",
++        default=os.environ.get("SHADERC_SHARED_LIBRARY"),
++        help="path to shaderc_shared.dll (or set SHADERC_SHARED_LIBRARY)",
++    )
++    parser.add_argument("--version", action="store_true", help="show binding version and native DLL hash")
++    args = parser.parse_args(argv)
++
++    if not args.shaderc:
++        parser.error("--shaderc or SHADERC_SHARED_LIBRARY is required")
++    try:
++        library, library_path = load_shaderc(args.shaderc)
++        digest = hashlib.sha256(library_path.read_bytes()).hexdigest()
++        if args.version:
++            print(f"shader-probe {PROBE_VERSION}; shaderc native SHA-256 {digest}")
++            return 0
++        if not args.source or not args.stage or not args.entry or not args.output:
++            parser.error("source, --stage, --entry, and --output are required for compilation")
++
++        source_path = Path(args.source)
++        output_path = Path(args.output)
++        if output_path.resolve() in {source_path.resolve(), library_path.resolve()}:
++            print(
++                "shader-probe: output path must differ from the source and Shaderc library",
++                file=sys.stderr,
++            )
++            return 1
++
++        # An explicit output denotes the result of this invocation. Remove any
++        # previous artifact before attempting work so failures cannot leave it
++        # looking like the current source compiled successfully.
++        output_path.unlink(missing_ok=True)
++        if args.stage not in STAGES:
++            parser.error(f"unsupported stage {args.stage!r}; supported stages: vertex, pixel")
++
++        try:
++            binary = compile_hlsl(library, source_path, args.stage, args.entry)
++        except ValueError as error:
++            print(str(error), file=sys.stderr, end="" if str(error).endswith("\n") else "\n")
++            return 1
++
++        output_path.parent.mkdir(parents=True, exist_ok=True)
++        try:
++            output_path.write_bytes(binary)
++        except OSError:
++            output_path.unlink(missing_ok=True)
++            raise
++        spirv_version = int.from_bytes(binary[4:8], "little")
++        spirv_major = (spirv_version >> 16) & 0xFF
++        spirv_minor = (spirv_version >> 8) & 0xFF
++        print(
++            f"shader-probe {PROBE_VERSION}; shaderc native SHA-256 {digest}; "
++            f"target Vulkan 1.0 (env 0x{SHADERC_ENV_VERSION_VULKAN_1_0:08X}); "
++            f"SPIR-V {spirv_major}.{spirv_minor}"
++        )
++        print(f"Wrote {output_path} ({len(binary)} bytes)")
++        return 0
++    except (OSError, RuntimeError) as error:
++        print(f"shader-probe: {error}", file=sys.stderr)
++        return 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+warning: in the working copy of 'tests/shader_frontend_test.py', LF will be replaced by CRLF the next time Git touches it
+diff --git a/tests/shader_frontend_test.py b/tests/shader_frontend_test.py
+new file mode 100644
+index 0000000..3eb7feb
+--- /dev/null
++++ b/tests/shader_frontend_test.py
+@@ -0,0 +1,202 @@
++import hashlib
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import sys
++import tempfile
++import unittest
++
++
++ROOT = Path(__file__).resolve().parents[1]
++CLI = ROOT / "tools" / "shader-probe" / "shader_probe.py"
++DEFAULT_SHADERC = Path(
++    r"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows"
++    r"\runtimes\win-x64\native\shaderc_shared.dll"
++)
++
++
++class ShaderFrontendTest(unittest.TestCase):
++    def setUp(self):
++        self.temp = tempfile.TemporaryDirectory()
++        self.directory = Path(self.temp.name)
++        self.shaderc = Path(os.environ.get("SHADERC_SHARED_LIBRARY", DEFAULT_SHADERC))
++
++    def tearDown(self):
++        self.temp.cleanup()
++
++    def source(self, name, text):
++        path = self.directory / name
++        path.write_text(text, encoding="utf-8", newline="\n")
++        return path
++
++    def compile(
++        self,
++        source,
++        stage,
++        entry="main",
++        output_name="out.spv",
++        output_path=None,
++        shaderc_path=None,
++    ):
++        output = Path(output_path) if output_path is not None else self.directory / output_name
++        result = subprocess.run(
++            [
++                sys.executable,
++                str(CLI),
++                str(source),
++                "--stage",
++                stage,
++                "--entry",
++                entry,
++                "--output",
++                str(output),
++                "--shaderc",
++                str(shaderc_path or self.shaderc),
++            ],
++            capture_output=True,
++            text=True,
++            encoding="utf-8",
++        )
++        return result, output
++
++    def assert_spirv(self, output):
++        data = output.read_bytes()
++        self.assertGreater(len(data), 20)
++        self.assertEqual(data[:4], b"\x03\x02\x23\x07")
++        self.assertEqual(data[4:8], b"\x00\x00\x01\x00")
++        self.assertEqual(len(data) % 4, 0)
++        return data
++
++    def test_compiles_vertex_transform_from_authored_hlsl(self):
++        source = self.source(
++            "transform.hlsl",
++            """struct VSIn { float3 position : POSITION; };
++struct VSOut { float4 position : SV_Position; };
++VSOut main(VSIn input) {
++    VSOut output;
++    output.position = float4(input.position.x + 0.25, input.position.yz, 1.0);
++    return output;
++}
++""",
++        )
++
++        result, output = self.compile(source, "vertex")
++
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assert_spirv(output)
++
++    def test_compiles_pixel_shader_with_color_output(self):
++        source = self.source(
++            "color.hlsl",
++            "float4 main() : SV_Target0 { return float4(0.2, 0.4, 0.8, 1.0); }\n",
++        )
++
++        result, output = self.compile(source, "pixel")
++
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assert_spirv(output)
++        self.assertIn("shader-probe 0.1.0", result.stdout)
++        self.assertIn("target Vulkan 1.0 (env 0x00400000)", result.stdout)
++        self.assertIn(hashlib.sha256(self.shaderc.read_bytes()).hexdigest(), result.stdout)
++
++    def test_source_edit_changes_spirv(self):
++        source = self.source(
++            "editable.hlsl",
++            "float4 main() : SV_Target0 { return float4(1, 0, 0, 1); }\n",
++        )
++        first, first_output = self.compile(source, "pixel", output_name="first.spv")
++        self.assertEqual(first.returncode, 0, first.stderr)
++        first_words = self.assert_spirv(first_output)
++
++        source.write_text(
++            "float4 main() : SV_Target0 { return float4(0, 1, 0, 1); }\n",
++            encoding="utf-8",
++            newline="\n",
++        )
++        second, second_output = self.compile(source, "pixel", output_name="second.spv")
++
++        self.assertEqual(second.returncode, 0, second.stderr)
++        self.assertNotEqual(first_words, self.assert_spirv(second_output))
++
++    def test_invalid_hlsl_returns_compiler_diagnostics(self):
++        source = self.source("invalid.hlsl", "float4 main( { definitely not HLSL\n")
++
++        result, _ = self.compile(source, "pixel")
++
++        self.assertNotEqual(result.returncode, 0)
++        self.assertIn("error", result.stderr.lower())
++        self.assertIn("invalid.hlsl", result.stderr)
++
++    def test_unsupported_stage_is_rejected(self):
++        source = self.source(
++            "stage.hlsl", "float4 main() : SV_Target0 { return 1; }\n"
++        )
++
++        result, output = self.compile(source, "compute")
++
++        self.assertNotEqual(result.returncode, 0)
++        self.assertIn("unsupported stage", result.stderr.lower())
++        self.assertFalse(output.exists())
++
++    def test_utf8_source_is_compiled_using_its_byte_length(self):
++        source = self.source(
++            "utf8.hlsl",
++            "// comentário UTF-8: ação, coração, π, 雪 ☃\n"
++            "float4 main() : SV_Target0 { return float4(0.3, 0.6, 0.9, 1); }\n",
++        )
++
++        result, output = self.compile(source, "pixel")
++
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assert_spirv(output)
++
++    def test_version_reports_probe_version_and_native_hash(self):
++        result = subprocess.run(
++            [sys.executable, str(CLI), "--version", "--shaderc", str(self.shaderc)],
++            capture_output=True,
++            text=True,
++            encoding="utf-8",
++        )
++
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertIn("shader-probe 0.1.0", result.stdout)
++        self.assertNotIn("Silk.NET.Shaderc", result.stdout)
++        self.assertIn(hashlib.sha256(self.shaderc.read_bytes()).hexdigest(), result.stdout)
++
++    def test_failed_compile_removes_existing_output(self):
++        source = self.source("invalid-existing-output.hlsl", "float4 main( { broken\n")
++        output = self.directory / "stale.spv"
++        output.write_bytes(b"previous successful SPIR-V")
++
++        result, _ = self.compile(source, "pixel", output_path=output)
++
++        self.assertNotEqual(result.returncode, 0)
++        self.assertIn("error", result.stderr.lower())
++        self.assertFalse(output.exists())
++
++    def test_output_cannot_overwrite_source_or_shaderc_library(self):
++        source = self.source(
++            "protected.hlsl", "float4 main() : SV_Target0 { return 1; }\n"
++        )
++        source_before = source.read_bytes()
++        source_result, _ = self.compile(source, "pixel", output_path=source)
++        self.assertNotEqual(source_result.returncode, 0)
++        self.assertEqual(source.read_bytes(), source_before)
++
++        protected_library = self.directory / "shaderc_shared.dll"
++        shutil.copyfile(self.shaderc, protected_library)
++        library_before = protected_library.read_bytes()
++        library_result, _ = self.compile(
++            source,
++            "pixel",
++            output_path=protected_library,
++            shaderc_path=protected_library,
++        )
++        self.assertNotEqual(library_result.returncode, 0)
++        self.assertIn("output path must differ", library_result.stderr.lower())
++        self.assertEqual(protected_library.read_bytes(), library_before)
++
++
++if __name__ == "__main__":
++    unittest.main()
+

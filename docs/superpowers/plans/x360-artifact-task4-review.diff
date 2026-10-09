@@ -1,0 +1,1242 @@
+﻿diff --git "a/.artifacts\\x360-artifact-task4-before\\tests\\shader_artifact_test.c" b/tests/shader_artifact_test.c
+index d175884..3b86ca5 100644
+--- "a/.artifacts\\x360-artifact-task4-before\\tests\\shader_artifact_test.c"
++++ b/tests/shader_artifact_test.c
+@@ -1,19 +1,22 @@
+ #include <assert.h>
+ #include <stddef.h>
+ #include <stdint.h>
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include "../src/platform/xenia_guest/x360_shader_artifact.h"
+ #include "../src/platform/xenia_guest/x360_shader_artifact_sha256.h"
+ 
+ static uint8_t golden[668];
+ static void repair_artifact_integrity(uint8_t *data, size_t size);
++static size_t active_mutation_offset = SIZE_MAX;
++static uint32_t active_mutation_value;
+ 
+ enum {
+     TEST_PAIR = 192,
+     TEST_STAGES = 240,
+     TEST_STAGE_SIZE = 160,
+     TEST_CODE = 560,
+     TEST_INTERFACES = 584,
+     TEST_RESOURCES = 872,
+@@ -24,16 +27,18 @@ enum {
+     TEST_RICH_CAPACITY = 2048
+ };
+ 
+ typedef struct TestStringEntry {
+     uint32_t offset;
+     uint32_t length;
+ } TestStringEntry;
+ 
++static uint32_t span_u32_at(HelX3spSpan record, size_t offset);
++
+ static void read_fixture(void)
+ {
+     FILE *file = fopen("tests/shaders/artifacts/minimal-v1.x3sp", "rb");
+     assert(file != NULL);
+     assert(fread(golden, 1, sizeof golden, file) == sizeof golden);
+     assert(fgetc(file) == EOF);
+     assert(fclose(file) == 0);
+ }
+@@ -147,16 +152,17 @@ static void set_directory(uint8_t *data, uint32_t index, uint32_t kind,
+     write_le32(record + 4u, offset);
+     write_le32(record + 8u, length);
+     write_le32(record + 12u, count);
+ }
+ 
+ static size_t build_rich_fixture(uint8_t data[TEST_RICH_CAPACITY])
+ {
+     static const uint8_t asset_id[] = {'a', 's', 's', 'e', 't', '-', 0xc2, 0xb5};
++    static const uint8_t texture_name_bytes[] = {'a', 'l', 'b', 0xc3, 0xa9};
+     static const uint32_t vertex_widths[4] = {3u, 3u, 2u, 4u};
+     static const uint32_t vertex_offsets[4] = {0u, 3u, 6u, 8u};
+     TestStringEntry entries[16];
+     uint32_t entry_count = 0u, pool_length = 0u;
+     uint32_t asset, variant, vs_name, main_name, vs_cb, matrix_name, color_name;
+     uint32_t ps_name, ps_cb, texture_name, sampler_name, tint_name;
+     uint32_t i;
+     size_t file_size;
+@@ -168,17 +174,18 @@ static size_t build_rich_fixture(uint8_t data[TEST_RICH_CAPACITY])
+     variant = intern_ascii(data, &pool_length, entries, &entry_count, "v1");
+     vs_name = intern_ascii(data, &pool_length, entries, &entry_count, "vs");
+     main_name = intern_ascii(data, &pool_length, entries, &entry_count, "main");
+     vs_cb = intern_ascii(data, &pool_length, entries, &entry_count, "vscb");
+     matrix_name = intern_ascii(data, &pool_length, entries, &entry_count, "matrix");
+     color_name = intern_ascii(data, &pool_length, entries, &entry_count, "color");
+     ps_name = intern_ascii(data, &pool_length, entries, &entry_count, "ps");
+     ps_cb = intern_ascii(data, &pool_length, entries, &entry_count, "pscb");
+-    texture_name = intern_ascii(data, &pool_length, entries, &entry_count, "tex");
++    texture_name = intern_test_string(data, &pool_length, entries, &entry_count,
++                                      texture_name_bytes, sizeof texture_name_bytes);
+     sampler_name = intern_ascii(data, &pool_length, entries, &entry_count, "samp");
+     tint_name = intern_ascii(data, &pool_length, entries, &entry_count, "tint");
+ 
+     memcpy(data, "X3SP", 4u);
+     write_le32(data + 4u, 1u);
+     write_le32(data + 8u, 64u);
+     write_le32(data + 16u, 8u);
+     write_le32(data + 20u, 8u);
+@@ -246,20 +253,21 @@ static size_t build_rich_fixture(uint8_t data[TEST_RICH_CAPACITY])
+     }
+     write_interface(data, 4u, 1u, 0u, 4u, 0u, UINT32_MAX, 0u, 0u, 0u);
+     write_interface(data, 5u, 2u, 0u, 4u, UINT32_MAX, UINT32_MAX,
+                     0u, 0u, 0u);
+     write_interface(data, 6u, 1u, 0u, 4u, 0u, UINT32_MAX, 0u, 0u, 0u);
+     write_interface(data, 7u, 1u, 0u, 4u, UINT32_MAX, UINT32_MAX,
+                     0u, 0u, 0u);
+ 
+-    write_resource(data, 0u, 1u, vs_cb, 4u, 0u, 0u, 0u, 0u, UINT32_MAX, 0u);
+-    write_resource(data, 1u, 1u, ps_cb, 4u, 0u, 0u, 0u, 0u, UINT32_MAX, 256u);
+-    write_resource(data, 2u, 2u, texture_name, 3u, 0u, 1u, 0u, 2u, 1u, UINT32_MAX);
+-    write_resource(data, 3u, 3u, sampler_name, 4u, 0u, 1u, 0u, 2u, 1u, UINT32_MAX);
++    write_resource(data, 0u, 1u, vs_cb, 4u, 0u, 17u, 0u, 0u, UINT32_MAX, 0u);
++    write_resource(data, 1u, 1u, ps_cb, 4u, 0u, 300u, 0u, 0u, UINT32_MAX, 256u);
++    write_resource(data, 2u, 2u, texture_name, (uint32_t)sizeof texture_name_bytes,
++                   2u, 301u, 2u, 17u, 1u, UINT32_MAX);
++    write_resource(data, 3u, 3u, sampler_name, 4u, 2u, 302u, 2u, 23u, 1u, UINT32_MAX);
+ 
+     write_string_ref(data + TEST_DECLARATIONS, 0u, matrix_name, 6u);
+     write_le32(data + TEST_DECLARATIONS + 8u, 5u);
+     write_le32(data + TEST_DECLARATIONS + 12u, 0u);
+     write_le32(data + TEST_DECLARATIONS + 16u, 64u);
+     write_string_ref(data + TEST_DECLARATIONS + 24u, 0u, color_name, 5u);
+     write_le32(data + TEST_DECLARATIONS + 32u, 4u);
+     write_le32(data + TEST_DECLARATIONS + 36u, 64u);
+@@ -321,32 +329,36 @@ static void expect_parse_failure(const uint8_t *data, size_t size,
+     int result;
+ 
+     assert(size <= sizeof before);
+     memcpy(before, data, size);
+     memset(&view, 0xA5, sizeof view);
+     memset(&cleared, 0, sizeof cleared);
+     result = hel_x3sp_parse(data, size, &view, &error);
+     if (result != (int)expected_error)
+-        fprintf(stderr, "parse failure mismatch: expected=%u got=%d code=%u offset=%u\n",
+-                expected_error, result, error.code, error.offset);
++        fprintf(stderr, "parse failure mismatch: expected=%u got=%d code=%u offset=%u fixture_field=%zu value=%u\n",
++                expected_error, result, error.code, error.offset,
++                active_mutation_offset, active_mutation_value);
+     assert(result == (int)expected_error);
+     assert(error.code == expected_error);
+     assert(memcmp(&view, &cleared, sizeof view) == 0);
+     assert(memcmp(before, data, size) == 0);
+ }
+ 
+ static void expect_rich_field_failure(size_t field_offset, uint32_t value,
+                                       uint32_t expected_error)
+ {
+     uint8_t data[TEST_RICH_CAPACITY];
+     size_t size = build_rich_fixture(data);
++    active_mutation_offset = field_offset;
++    active_mutation_value = value;
+     write_le32(data + field_offset, value);
+     repair_artifact_integrity(data, size);
+     expect_parse_failure(data, size, expected_error);
++    active_mutation_offset = SIZE_MAX;
+ }
+ 
+ static void move_pool_after_shortened_access_table(uint8_t *data, size_t *size)
+ {
+     const uint32_t old_pool_length = read_le32(data + 64u + 7u * 16u + 8u);
+     const uint32_t shift = 24u;
+     uint32_t i;
+ 
+@@ -385,16 +397,18 @@ static void move_pool_after_shortened_access_table(uint8_t *data, size_t *size)
+         write_le32(data + record + 4u, offset - shift);
+     }
+     for (i = 0; i < 3u; ++i) {
+         size_t record = TEST_DECLARATIONS + (size_t)i * 24u;
+         uint32_t offset = read_le32(data + record);
+         write_le32(data + record, offset - shift);
+     }
+     *size -= shift;
++    memset(data + TEST_STRINGS - shift + old_pool_length, 0,
++           *size - (TEST_STRINGS - shift + old_pool_length));
+     write_le32(data + 12u, (uint32_t)*size);
+     repair_artifact_integrity(data, *size);
+ }
+ 
+ static void make_sparse_unused_matrix_fixture(uint8_t *data, size_t *size)
+ {
+     uint8_t old_interfaces[5u * 36u];
+     uint32_t i;
+@@ -494,33 +508,43 @@ static void test_golden_parse_and_borrowed_accessors(void)
+ 
+ static void test_rich_fixture_baseline(void)
+ {
+     uint8_t data[TEST_RICH_CAPACITY];
+     HelX3spView view;
+     HelX3spError error;
+     HelX3spSpan stage;
+     HelX3spSpan asset;
++    HelX3spSpan resource;
++    HelX3spSpan name;
+     uint32_t profile;
+     size_t size = build_rich_fixture(data);
+     int status = hel_x3sp_parse(data, size, &view, &error);
+ 
++    assert(read_le32(data + TEST_RESOURCES + 16u) == 17u);
++    assert(read_le32(data + TEST_RESOURCES + 40u + 16u) == 300u);
++
+     if (status != HEL_X3SP_ERROR_OK)
+         fprintf(stderr, "rich fixture rejected: code=%u offset=%u\n",
+                 error.code, error.offset);
+     assert(status == HEL_X3SP_ERROR_OK);
+     assert(view.program_control == 1u);
+     assert(view.interpolator_count == 1u);
+     assert(view.program_upload_dwords == 12u);
+     assert(view.constant_upload_dwords == 28u);
+     assert(view.state_upload_dwords == 10u);
+     assert(view.pair_upload_dwords == 50u);
+     assert(hel_x3sp_record(&view, 2u, 1u, &stage) == HEL_X3SP_ERROR_OK);
+     assert(hel_x3sp_span_u32(stage, 4u, &profile) == HEL_X3SP_ERROR_OK);
+     assert(profile == 2u);
++    assert(hel_x3sp_record(&view, 5u, 2u, &resource) == HEL_X3SP_ERROR_OK);
++    assert(span_u32_at(resource, 16u) == 301u);
++    assert(span_u32_at(resource, 24u) == 17u);
++    assert(hel_x3sp_string(&view, span_u32_at(resource, 4u), span_u32_at(resource, 8u), &name) == HEL_X3SP_ERROR_OK);
++    assert(name.size == 5u && memcmp(name.data, "alb\xc3\xa9", 5u) == 0);
+     assert(read_le32(data + TEST_STAGES + 80u) ==
+            read_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 80u));
+     assert(hel_x3sp_string(&view, read_le32(data + TEST_PAIR), 8u,
+                            &asset) == HEL_X3SP_ERROR_OK);
+     assert(asset.size == 8u && asset.data[6] == 0xc2u && asset.data[7] == 0xb5u);
+     assert(hel_x3sp_string(&view, read_le32(data + TEST_PAIR) + 6u, 1u,
+                            &asset) == HEL_X3SP_ERROR_SEMANTIC);
+     assert(asset.data == NULL && asset.size == 0u);
+@@ -634,19 +658,19 @@ static void test_repaired_integrity_semantic_mutations(void)
+     write_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 32u, 0u);
+     repair_artifact_integrity(data, size);
+     expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
+ 
+     size = build_rich_fixture(data);
+     data[size] = 0x7fu;
+     write_le32(data + 12u, (uint32_t)(size + 4u));
+     write_le32(data + 64u + 7u * 16u + 8u,
+-               read_le32(data + 64u + 7u * 16u + 8u) + 1u);
++               read_le32(data + 64u + 7u * 16u + 8u) + 4u);
+     write_le32(data + 64u + 7u * 16u + 12u,
+-               read_le32(data + 64u + 7u * 16u + 12u) + 1u);
++               read_le32(data + 64u + 7u * 16u + 12u) + 4u);
+     repair_artifact_integrity(data, size + 4u);
+     expect_parse_failure(data, size + 4u, HEL_X3SP_ERROR_SEMANTIC);
+ 
+     size = build_rich_fixture(data);
+     data[read_le32(data + TEST_PAIR + 8u)] = 0xc2u;
+     data[read_le32(data + TEST_PAIR + 8u) + 1u] = 0x85u;
+     repair_artifact_integrity(data, size);
+     {
+@@ -677,16 +701,51 @@ static void test_failure_clears_view_for_every_truncation(void)
+         HelX3spError error;
+         memset(&view, 0xA5, sizeof view);
+         memset(&cleared, 0, sizeof cleared);
+         assert(hel_x3sp_parse(golden, size, &view, &error) != HEL_X3SP_ERROR_OK);
+         assert(memcmp(&view, &cleared, sizeof view) == 0);
+     }
+ }
+ 
++static uint32_t next_corpus_value(uint32_t *state)
++{
++    uint32_t value = *state;
++    value ^= value << 13;
++    value ^= value >> 17;
++    value ^= value << 5;
++    *state = value;
++    return value;
++}
++
++static void test_fixed_seed_bounded_mutation_corpus(void)
++{
++    uint32_t seed = UINT32_C(0x6d2b79f5);
++    uint32_t iteration;
++    for (iteration = 0u; iteration < 512u; ++iteration) {
++        uint8_t candidate[sizeof golden];
++        uint8_t original[sizeof golden];
++        HelX3spView view;
++        HelX3spView cleared;
++        HelX3spError error;
++        uint32_t value;
++        size_t offset;
++        memcpy(candidate, golden, sizeof candidate);
++        value = next_corpus_value(&seed);
++        offset = (size_t)(value % (uint32_t)sizeof candidate);
++        candidate[offset] ^= (uint8_t)(1u << (next_corpus_value(&seed) & 7u));
++        memcpy(original, candidate, sizeof original);
++        memset(&view, 0xA5, sizeof view);
++        memset(&cleared, 0, sizeof cleared);
++        assert(hel_x3sp_parse(candidate, sizeof candidate, &view, &error) != HEL_X3SP_ERROR_OK);
++        assert(memcmp(&view, &cleared, sizeof view) == 0);
++        assert(memcmp(candidate, original, sizeof candidate) == 0);
++    }
++}
++
+ static void test_null_arguments_clear_outputs(void)
+ {
+     HelX3spView view;
+     HelX3spView cleared;
+     HelX3spSpan span;
+     uint32_t value = UINT32_C(0xffffffff);
+ 
+     memset(&view, 0xA5, sizeof view);
+@@ -696,21 +755,333 @@ static void test_null_arguments_clear_outputs(void)
+     assert(hel_x3sp_parse(golden, sizeof golden, NULL, NULL) == HEL_X3SP_ERROR_ARGUMENT);
+     memset(&span, 0xA5, sizeof span);
+     assert(hel_x3sp_record(NULL, 1, 0, &span) != 0);
+     assert(span.data == NULL && span.size == 0);
+     assert(hel_x3sp_span_u32((HelX3spSpan){NULL, 4}, 0, &value) != 0);
+     assert(value == 0);
+ }
+ 
++static unsigned split_manifest_fields(char *line, char *fields[], unsigned capacity)
++{
++    unsigned count = 0u;
++    char *token = strtok(line, "\t\r\n");
++    while (token != NULL) {
++        assert(count < capacity);
++        fields[count++] = token;
++        token = strtok(NULL, "\t\r\n");
++    }
++    return count;
++}
++
++static uint32_t manifest_u32(const char *text)
++{
++    char *end = NULL;
++    unsigned long value = strtoul(text, &end, 10);
++    if (end == text || *end != '\0' || value > UINT32_MAX)
++        fprintf(stderr, "invalid unsigned manifest field: '%s'\n", text);
++    assert(end != text && *end == '\0' && value <= UINT32_MAX);
++    return (uint32_t)value;
++}
++
++static int32_t manifest_i32(const char *text)
++{
++    char *end = NULL;
++    long value = strtol(text, &end, 10);
++    assert(end != text && *end == '\0' && value >= INT32_MIN && value <= INT32_MAX);
++    return (int32_t)value;
++}
++
++static void assert_manifest_string(const HelX3spView *view, uint32_t offset,
++                                   uint32_t length, const char *expected)
++{
++    HelX3spSpan value;
++    size_t expected_length = strlen(expected);
++    assert(expected_length == length);
++    assert(hel_x3sp_string(view, offset, length, &value) == HEL_X3SP_ERROR_OK);
++    assert(value.size == expected_length);
++    assert(memcmp(value.data, expected, expected_length) == 0);
++}
++
++static uint32_t span_u32_at(HelX3spSpan record, size_t offset)
++{
++    uint32_t value = 0u;
++    assert(hel_x3sp_span_u32(record, offset, &value) == HEL_X3SP_ERROR_OK);
++    return value;
++}
++
++static void assert_digest_hex(const uint8_t *digest, const char *expected)
++{
++    static const char digits[] = "0123456789abcdef";
++    size_t index;
++    assert(strlen(expected) == 64u);
++    for (index = 0u; index < 32u; ++index) {
++        assert(digits[digest[index] >> 4] == expected[index * 2u]);
++        assert(digits[digest[index] & 15u] == expected[index * 2u + 1u]);
++    }
++}
++
++static void assert_manifest_row(const HelX3spView *view, const char *line,
++                                uint32_t interface_indices[2][2],
++                                uint32_t resource_indices[2],
++                                uint32_t declaration_indices[2],
++                                uint32_t access_indices[2],
++                                uint32_t word_indices[2],
++                                uint32_t *row_counts)
++{
++    char copy[4096];
++    char *field[16];
++    unsigned count;
++    uint32_t stage_index, local_index;
++    HelX3spSpan record;
++    assert(strlen(line) < sizeof copy);
++    strcpy(copy, line);
++    count = split_manifest_fields(copy, field, 16u);
++    assert(count > 0u);
++
++    if (strcmp(field[0], "PAIR") == 0) {
++        HelX3spSpan pair;
++        assert(count == 4u);
++        assert(hel_x3sp_record(view, 1u, 0u, &pair) == HEL_X3SP_ERROR_OK);
++        assert_manifest_string(view, span_u32_at(pair, 0u), span_u32_at(pair, 4u), field[1]);
++        assert_manifest_string(view, span_u32_at(pair, 8u), span_u32_at(pair, 12u), field[2]);
++        assert_digest_hex(pair.data + 16u, field[3]);
++        row_counts[0]++;
++    } else if (strcmp(field[0], "COST") == 0) {
++        assert(count == 7u);
++        assert(manifest_u32(field[1]) == view->program_control);
++        assert(manifest_u32(field[2]) == view->interpolator_count);
++        assert(manifest_u32(field[3]) == view->program_upload_dwords);
++        assert(manifest_u32(field[4]) == view->constant_upload_dwords);
++        assert(manifest_u32(field[5]) == view->state_upload_dwords);
++        assert(manifest_u32(field[6]) == view->pair_upload_dwords);
++        row_counts[1]++;
++    } else if (strcmp(field[0], "STAGE") == 0) {
++        assert(count == 13u);
++        stage_index = manifest_u32(field[1]);
++        assert(stage_index < 2u);
++        assert(hel_x3sp_record(view, 2u, stage_index, &record) == HEL_X3SP_ERROR_OK);
++        assert(manifest_u32(field[2]) == span_u32_at(record, 0u));
++        assert(manifest_u32(field[3]) == span_u32_at(record, 4u));
++        assert(manifest_u32(field[4]) == span_u32_at(record, 8u));
++        assert(manifest_u32(field[5]) == span_u32_at(record, 16u));
++        assert(manifest_u32(field[6]) == span_u32_at(record, 44u));
++        assert(manifest_u32(field[7]) == span_u32_at(record, 48u));
++        assert(manifest_i32(field[8]) == (span_u32_at(record, 52u) == UINT32_MAX
++            ? -1 : (int32_t)span_u32_at(record, 52u)));
++        assert_manifest_string(view, span_u32_at(record, 72u), span_u32_at(record, 76u), field[9]);
++        assert_manifest_string(view, span_u32_at(record, 80u), span_u32_at(record, 84u), field[10]);
++        assert_digest_hex(record.data + 88u, field[11]);
++        assert_digest_hex(record.data + 120u, field[12]);
++        row_counts[2]++;
++    } else if (strcmp(field[0], "WORD") == 0) {
++        uint32_t word = 0u;
++        char *end = NULL;
++        unsigned long expected;
++        assert(count == 4u);
++        stage_index = manifest_u32(field[1]);
++        assert(stage_index < 2u);
++        local_index = manifest_u32(field[2]);
++        assert(local_index == word_indices[stage_index]++);
++        expected = strtoul(field[3], &end, 16);
++        assert(end != field[3] && *end == '\0' && expected <= UINT32_MAX);
++        assert(hel_x3sp_word(view, stage_index, local_index, &word) == HEL_X3SP_ERROR_OK);
++        assert(word == (uint32_t)expected);
++        row_counts[3]++;
++    } else if (strcmp(field[0], "INTERFACE") == 0) {
++        uint32_t direction;
++        uint32_t range_offset, range_count, local_index;
++        HelX3spSpan stage;
++        assert(count == 11u);
++        stage_index = manifest_u32(field[1]);
++        assert(stage_index < 2u);
++        direction = strcmp(field[2], "I") == 0 ? 0u : 1u;
++        assert(direction < 2u);
++        assert(hel_x3sp_record(view, 2u, stage_index, &stage) == HEL_X3SP_ERROR_OK);
++        range_offset = span_u32_at(stage, direction == 0u ? 20u : 28u);
++        range_count = span_u32_at(stage, direction == 0u ? 24u : 32u);
++        local_index = interface_indices[stage_index][direction]++;
++        assert(local_index < range_count);
++        assert(hel_x3sp_record(view, 4u,
++            (range_offset - view->sections[3].offset) / 36u + local_index,
++            &record) == HEL_X3SP_ERROR_OK);
++        assert(manifest_u32(field[3]) == span_u32_at(record, 0u));
++        assert(manifest_u32(field[4]) == span_u32_at(record, 4u));
++        assert(manifest_u32(field[5]) == span_u32_at(record, 8u));
++        assert(manifest_i32(field[6]) == (span_u32_at(record, 12u) == UINT32_MAX ? -1 : (int32_t)span_u32_at(record, 12u)));
++        assert(manifest_i32(field[7]) == (span_u32_at(record, 16u) == UINT32_MAX ? -1 : (int32_t)span_u32_at(record, 16u)));
++        assert(manifest_u32(field[8]) == span_u32_at(record, 20u));
++        assert(manifest_u32(field[9]) == span_u32_at(record, 24u));
++        assert(manifest_u32(field[10]) == span_u32_at(record, 28u));
++        row_counts[4]++;
++    } else if (strcmp(field[0], "RESOURCE") == 0) {
++        assert(count == 11u);
++        stage_index = manifest_u32(field[1]);
++        assert(stage_index < 2u);
++        local_index = manifest_u32(field[2]);
++        assert(local_index == resource_indices[stage_index]++);
++        assert(hel_x3sp_record(view, 5u, row_counts[5]++, &record) == HEL_X3SP_ERROR_OK);
++        assert(manifest_u32(field[3]) == span_u32_at(record, 0u));
++        assert_manifest_string(view, span_u32_at(record, 4u), span_u32_at(record, 8u), field[4]);
++        assert(manifest_u32(field[5]) == span_u32_at(record, 12u));
++        assert(manifest_u32(field[6]) == span_u32_at(record, 16u));
++        assert(manifest_u32(field[7]) == span_u32_at(record, 20u));
++        assert(manifest_u32(field[8]) == span_u32_at(record, 24u));
++        assert(manifest_i32(field[9]) == (span_u32_at(record, 28u) == UINT32_MAX ? -1 : (int32_t)span_u32_at(record, 28u)));
++        assert(manifest_i32(field[10]) == (span_u32_at(record, 32u) == UINT32_MAX ? -1 : (int32_t)span_u32_at(record, 32u)));
++    } else if (strcmp(field[0], "DECL") == 0) {
++        assert(count == 6u);
++        stage_index = manifest_u32(field[1]);
++        assert(stage_index < 2u);
++        local_index = declaration_indices[stage_index]++;
++        assert(hel_x3sp_record(view, 6u, row_counts[6]++, &record) == HEL_X3SP_ERROR_OK);
++        assert(manifest_u32(field[2]) == span_u32_at(record, 8u));
++        assert_manifest_string(view, span_u32_at(record, 0u), span_u32_at(record, 4u), field[3]);
++        assert(manifest_u32(field[4]) == span_u32_at(record, 12u));
++        assert(manifest_u32(field[5]) == span_u32_at(record, 16u));
++        (void)local_index;
++    } else if (strcmp(field[0], "USED") == 0) {
++        uint32_t absolute_declaration, declaration_count, declaration_offset, i;
++        int found = 0;
++        HelX3spSpan stage;
++        assert(count == 8u);
++        stage_index = manifest_u32(field[1]);
++        assert(stage_index < 2u);
++        local_index = access_indices[stage_index]++;
++        assert(hel_x3sp_record(view, 7u, row_counts[7]++, &record) == HEL_X3SP_ERROR_OK);
++        assert(hel_x3sp_record(view, 2u, stage_index, &stage) == HEL_X3SP_ERROR_OK);
++        declaration_offset = span_u32_at(stage, 56u);
++        declaration_count = span_u32_at(stage, 60u);
++        for (i = 0u; i < declaration_count; ++i) {
++            HelX3spSpan declaration;
++            assert(hel_x3sp_record(view, 6u,
++                (declaration_offset - view->sections[5].offset) / 24u + i,
++                &declaration) == HEL_X3SP_ERROR_OK);
++            if (span_u32_at(declaration, 12u) == manifest_u32(field[3])) {
++                HelX3spSpan name;
++                assert(hel_x3sp_string(view, span_u32_at(declaration, 0u), span_u32_at(declaration, 4u), &name) == HEL_X3SP_ERROR_OK);
++                if (name.size == strlen(field[2]) && memcmp(name.data, field[2], name.size) == 0) {
++                    absolute_declaration = declaration_offset + i * 24u;
++                    found = 1;
++                    break;
++                }
++            }
++        }
++        assert(found);
++        assert(span_u32_at(record, 0u) == absolute_declaration);
++        assert(manifest_u32(field[3]) < span_u32_at(stage, 44u));
++        assert(manifest_u32(field[4]) == span_u32_at(record, 4u));
++        assert(manifest_u32(field[5]) == span_u32_at(record, 8u));
++        assert(manifest_u32(field[6]) == span_u32_at(record, 12u));
++        assert(manifest_i32(field[7]) == (span_u32_at(record, 16u) == 0u
++            ? -1 : (int32_t)span_u32_at(record, 16u)));
++        (void)local_index;
++    } else {
++        fprintf(stderr, "unknown exporter manifest row: %s\n", field[0]);
++        assert(0);
++    }
++}
++
++static void test_real_export_artifacts(void)
++{
++    static const char *const allowed_files[] = {
++        "mesh.x3sp", "batch-unoptimized.x3sp", "batch-optimized.x3sp"
++    };
++    FILE *manifest = fopen("/out/integration/expected.txt", "rb");
++    char line[4096];
++    int pending_file = 0;
++    uint32_t files_seen = 0u;
++    assert(manifest != NULL);
++    for (;;) {
++        char *fields[4];
++        unsigned count;
++        uint32_t file_index;
++        FILE *artifact_file;
++        uint8_t bytes[1048576];
++        size_t size;
++        HelX3spView view;
++        HelX3spError error;
++        int parse_status;
++        uint32_t interface_indices[2][2] = {{0u, 0u}, {0u, 0u}};
++        uint32_t resource_indices[2] = {0u, 0u};
++        uint32_t declaration_indices[2] = {0u, 0u};
++        uint32_t access_indices[2] = {0u, 0u};
++        uint32_t word_indices[2] = {0u, 0u};
++        uint32_t row_counts[8] = {0u};
++        uint32_t i;
++
++        if (!pending_file && fgets(line, sizeof line, manifest) == NULL) break;
++        pending_file = 0;
++        assert(strlen(line) < sizeof bytes);
++        count = split_manifest_fields(line, fields, 4u);
++        assert(count == 2u && strcmp(fields[0], "FILE") == 0);
++        for (file_index = 0u; file_index < 3u; ++file_index)
++            if (strcmp(fields[1], allowed_files[file_index]) == 0) break;
++        assert(file_index < 3u);
++        assert((files_seen & (1u << file_index)) == 0u);
++        files_seen |= 1u << file_index;
++        {
++            char path[128];
++            int path_size = snprintf(path, sizeof path, "/out/integration/%s", fields[1]);
++            assert(path_size > 0 && (size_t)path_size < sizeof path);
++            artifact_file = fopen(path, "rb");
++        }
++        assert(artifact_file != NULL);
++        size = fread(bytes, 1u, sizeof bytes, artifact_file);
++        assert(!ferror(artifact_file));
++        assert(feof(artifact_file));
++        assert(fclose(artifact_file) == 0);
++        parse_status = hel_x3sp_parse(bytes, size, &view, &error);
++        if (parse_status != HEL_X3SP_ERROR_OK)
++            fprintf(stderr, "real artifact %s parse failed: code=%u offset=%u size=%zu\n",
++                    allowed_files[file_index], error.code, error.offset, size);
++        assert(parse_status == HEL_X3SP_ERROR_OK);
++
++        while (fgets(line, sizeof line, manifest) != NULL) {
++            if (strncmp(line, "FILE\t", 5u) == 0) {
++                pending_file = 1;
++                break;
++            }
++            assert_manifest_row(&view, line, interface_indices, resource_indices,
++                declaration_indices, access_indices, word_indices, row_counts);
++        }
++        assert(row_counts[0] == 1u && row_counts[1] == 1u && row_counts[2] == 2u);
++        assert(row_counts[3] == view.sections[2].count);
++        assert(row_counts[4] == view.sections[3].count);
++        assert(row_counts[5] == view.sections[4].count);
++        assert(row_counts[6] == view.sections[5].count);
++        assert(row_counts[7] == view.sections[6].count);
++        for (i = 0u; i < 2u; ++i) {
++            HelX3spSpan stage;
++            assert(hel_x3sp_record(&view, 2u, i, &stage) == HEL_X3SP_ERROR_OK);
++            assert(word_indices[i] == span_u32_at(stage, 16u));
++            assert(resource_indices[i] == span_u32_at(stage, 40u));
++            assert(declaration_indices[i] == span_u32_at(stage, 60u));
++            assert(access_indices[i] == span_u32_at(stage, 68u));
++        }
++        for (i = 0u; i < 2u; ++i) {
++            HelX3spSpan stage;
++            assert(hel_x3sp_record(&view, 2u, i, &stage) == HEL_X3SP_ERROR_OK);
++            assert(interface_indices[i][0] == span_u32_at(stage, 24u));
++            assert(interface_indices[i][1] == span_u32_at(stage, 32u));
++        }
++    }
++    assert(files_seen == 7u);
++    assert(fclose(manifest) == 0);
++    puts("real exporter artifacts match compiler-snapshot manifests");
++}
++
+ int main(void)
+ {
+     read_fixture();
+     test_golden_parse_and_borrowed_accessors();
+     test_rich_fixture_baseline();
+     test_sparse_inputs_and_unused_matrix();
+     test_repaired_integrity_semantic_mutations();
+     test_semantic_reference_with_repaired_integrity();
+     test_failure_clears_view_for_every_truncation();
++    test_fixed_seed_bounded_mutation_corpus();
+     test_null_arguments_clear_outputs();
++    if (getenv("X3SP_INTEGRATION") != NULL)
++        test_real_export_artifacts();
+     puts("shader artifact semantic/accessor tests passed");
+     return 0;
+ }
+diff --git "a/.artifacts\\x360-artifact-task4-before\\tools\\test-shader-artifact.ps1" b/tools/test-shader-artifact.ps1
+index 1499aab..4affaec 100644
+--- "a/.artifacts\\x360-artifact-task4-before\\tools\\test-shader-artifact.ps1"
++++ b/tools/test-shader-artifact.ps1
+@@ -1,11 +1,11 @@
+ [CmdletBinding()]
+ param(
+-    [ValidateSet('All', 'Envelope', 'Semantic')]
++    [ValidateSet('All', 'Envelope', 'Semantic', 'Integration')]
+     [string]$Suite = 'All'
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+ $artifactRoot = Join-Path $repoRoot '.artifacts\shader-artifact'
+ $image = 'devkitpro/devkitppc@sha256:db8e39c73546d461d5606dc7dfed462a7d5957498502562e3b46769d02496cc1'
+ 
+@@ -24,16 +24,62 @@ if (Test-Path -LiteralPath $outputPath) {
+     throw "Refusing to reuse existing artifact output directory: $outputPath"
+ }
+ New-Item -ItemType Directory -Path $outputPath | Out-Null
+ $outputPath = (Resolve-Path -LiteralPath $outputPath).Path
+ if (-not $outputPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+     throw "Resolved run output escaped the checkout: $outputPath"
+ }
+ 
++$integrationOutput = Join-Path $outputPath 'integration'
++$engineRoot = if ([string]::IsNullOrWhiteSpace($env:HELENGINE_ROOT)) {
++    'C:\dev\helworks\helengine'
++} else {
++    [IO.Path]::GetFullPath($env:HELENGINE_ROOT)
++}
++$shaderc = 'C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows\runtimes\win-x64\native\shaderc_shared.dll'
++$exporterProject = Join-Path $repoRoot 'tests\shaders\artifact-export\ArtifactExport.csproj'
++$needsIntegration = $Suite -in @('All', 'Integration')
++if ($needsIntegration) {
++    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { throw 'The .NET SDK is required for the real shader artifact integration suite.' }
++    if (-not (Test-Path -LiteralPath $shaderc -PathType Leaf)) { throw "The required shaderc library is missing: $shaderc" }
++    foreach ($source in @(
++        (Join-Path $repoRoot 'tests\shaders\fixtures\transform_vs.hlsl'),
++        (Join-Path $repoRoot 'tests\shaders\fixtures\texture_ps.hlsl'),
++        (Join-Path $engineRoot 'engine\helengine.shader.compilation\helengine.shader.compilation.csproj'),
++        (Join-Path $engineRoot 'engine\helengine.shader\shaders\SpriteBatchShaderVariants.cs'),
++        (Join-Path $engineRoot 'engine\helengine.editor\shaders\builtin\SpriteBatchShader.hlsl'),
++        $exporterProject
++    )) {
++        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Required integration source is missing: $source" }
++    }
++    & docker image inspect $image *> (Join-Path $outputPath 'docker-image-inspect.log')
++    if ($LASTEXITCODE -ne 0) { throw "Required pinned Docker image is unavailable locally: $image" }
++
++    New-Item -ItemType Directory -Path $integrationOutput | Out-Null
++    $restoreLog = Join-Path $outputPath 'exporter-restore.log'
++    & dotnet restore $exporterProject `
++        "-p:ArtifactsPath=$repoRoot/.artifacts" "-p:HelengineRoot=$engineRoot" *> $restoreLog
++    if ($LASTEXITCODE -ne 0) { Get-Content -Tail 80 $restoreLog; throw 'Exporter project restore failed.' }
++
++    $exportLog = Join-Path $outputPath 'exporter-run.log'
++    & dotnet run --project $exporterProject `
++        "-p:ArtifactsPath=$repoRoot/.artifacts" "-p:HelengineRoot=$engineRoot" --no-restore -- `
++        --output $integrationOutput --shaderc $shaderc --engine-root $engineRoot *> $exportLog
++    if ($LASTEXITCODE -ne 0) { Get-Content -Tail 80 $exportLog; throw 'Real shader artifact exporter failed.' }
++    foreach ($name in @('mesh.x3sp', 'batch-unoptimized.x3sp', 'batch-optimized.x3sp', 'expected.txt')) {
++        if (-not (Test-Path -LiteralPath (Join-Path $integrationOutput $name) -PathType Leaf)) {
++            throw "Exporter succeeded without producing required output '$name'. See $exportLog"
++        }
++    }
++    $actualNames = @(Get-ChildItem -LiteralPath $integrationOutput -File | Select-Object -ExpandProperty Name | Sort-Object)
++    $requiredNames = @('batch-optimized.x3sp', 'batch-unoptimized.x3sp', 'expected.txt', 'mesh.x3sp')
++    if (Compare-Object $requiredNames $actualNames) { throw "Exporter produced an unexpected output set in $integrationOutput" }
++}
++
+ $sourceMount = $repoRoot.Replace('\', '/')
+ $outputMount = $outputPath.Replace('\', '/')
+ $containerScript = @'
+ set -euo pipefail
+ export PATH=/opt/devkitpro/devkitPPC/bin:$PATH
+ cd /work
+ 
+ echo "Host compiler: $(gcc --version | head -n 1)"
+@@ -41,16 +87,19 @@ echo "PowerPC compiler: $(powerpc-eabi-gcc --version | head -n 1)"
+ 
+ test_names=()
+ if [ "$X3SP_SUITE" = All ] || [ "$X3SP_SUITE" = Envelope ]; then
+   test_names+=(envelope)
+ fi
+ if [ "$X3SP_SUITE" = All ] || [ "$X3SP_SUITE" = Semantic ]; then
+   test_names+=(semantic)
+ fi
++if [ "$X3SP_SUITE" = All ] || [ "$X3SP_SUITE" = Integration ]; then
++  test_names+=(integration)
++fi
+ 
+ test_sources() {
+   case "$1" in
+     envelope)
+       printf '%s\n' \
+         /work/tests/shader_artifact_envelope_test.c \
+         /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
+         /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
+@@ -58,16 +107,24 @@ test_sources() {
+     semantic)
+       printf '%s\n' \
+         /work/tests/shader_artifact_test.c \
+         /work/src/platform/xenia_guest/x360_shader_artifact.c \
+         /work/src/platform/xenia_guest/x360_shader_artifact_semantics.c \
+         /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
+         /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
+       ;;
++    integration)
++      printf '%s\n' \
++        /work/tests/shader_artifact_test.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_semantics.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
++      ;;
+     *) return 2 ;;
+   esac
+ }
+ 
+ for test_name in "${test_names[@]}"; do
+   mapfile -t sources < <(test_sources "$test_name")
+   gcc -std=c11 -O1 -Wall -Wextra -Werror \
+     -I/work/src/platform/xenia_guest \
+@@ -161,19 +218,22 @@ powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
+ powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
+   -I/work/src/platform/xenia_guest -c \
+   /work/src/platform/xenia_guest/x360_shader_artifact_semantics.c \
+   -o /out/x360_shader_artifact_semantics.ppc.o
+ echo "PowerPC freestanding objects compiled"
+ '@
+ $containerScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($containerScript))
+ $containerCommand = "printf '%s' '$containerScriptBase64' | base64 -d | bash"
++$integrationEnvironment = @()
++if ($needsIntegration) { $integrationEnvironment = @('--env', 'X3SP_INTEGRATION=1') }
+ 
+ Write-Host "Suite: $Suite"
+ Write-Host "Output: $outputPath"
+ & docker run --pull=never --rm --network none `
+     --mount "type=bind,source=$sourceMount,target=/work,readonly" `
+     --mount "type=bind,source=$outputMount,target=/out" `
+     --env "X3SP_SUITE=$Suite" `
++    @integrationEnvironment `
+     $image bash -lc $containerCommand
+ if ($LASTEXITCODE -ne 0) {
+     throw "Shader artifact suite '$Suite' failed with exit code $LASTEXITCODE"
+ }
+diff --git "a/.artifacts\\x360-artifact-task4-before\\src\\platform\\xenia_guest\\x360_shader_artifact_semantics.c" b/src/platform/xenia_guest/x360_shader_artifact_semantics.c
+index 3cd588d..46908ba 100644
+--- "a/.artifacts\\x360-artifact-task4-before\\src\\platform\\xenia_guest\\x360_shader_artifact_semantics.c"
++++ b/src/platform/xenia_guest/x360_shader_artifact_semantics.c
+@@ -729,17 +729,17 @@ static int validate_resources(const HelX3spView *view,
+                 return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
+         }
+         previous_type = type;
+         previous_set = set;
+         previous_slot = slot;
+ 
+         if (type == 1u) {
+             ++cbuffer_count;
+-            if (set != 0u || slot != 0u || physical_set != 0u ||
++            if (set != 0u || physical_set != 0u ||
+                 binding != 0u || fetch != X3SP_ABSENT || resource_bank != bank)
+                 return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 12u);
+         } else {
+             if (stage_index != 1u)
+                 return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
+             if (type == 2u)
+                 ++texture_count;
+             else
+diff --git "a/.artifacts\\x360-artifact-task4-before\\builder\\shaders\\Xbox360ShaderArtifactSerializer.cs" b/builder/shaders/Xbox360ShaderArtifactSerializer.cs
+index bfc6f4a..ea22f3f 100644
+--- "a/.artifacts\\x360-artifact-task4-before\\builder\\shaders\\Xbox360ShaderArtifactSerializer.cs"
++++ b/builder/shaders/Xbox360ShaderArtifactSerializer.cs
+@@ -193,28 +193,41 @@ public static class Xbox360ShaderArtifactSerializer {
+                 index++;
+             }
+         }
+     }
+ 
+     static void WriteInterfaces(byte[] output, int sectionOffset, StageDraft[] stages) {
+         int index = 0;
+         foreach (StageDraft stage in stages) {
+-            foreach (InterfaceDraft item in stage.Inputs.Concat(stage.Outputs)) {
++            foreach (InterfaceDraft item in stage.Inputs) {
+                 int record = checked(sectionOffset + index * 36);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record, item.Kind);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 4, item.Index);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 8, item.Width);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 12, item.VaryingSlot);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 16, item.FetchConstant);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 20, item.Stride);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 24, item.Offset);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 28, item.FetchFormat);
+                 index++;
+             }
++            foreach (InterfaceDraft item in stage.Outputs) {
++                int record = checked(sectionOffset + index * 36);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record, item.Kind);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 4, item.Index);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 8, item.Width);
++                uint varyingSlot = stage.IsVertex ? item.VaryingSlot : Xbox360ShaderArtifactWire.Absent;
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 12, varyingSlot);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 16, item.FetchConstant);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 20, item.Stride);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 24, item.Offset);
++                Xbox360ShaderArtifactWire.WriteUInt32(output, record + 28, item.FetchFormat);
++                index++;
++            }
+         }
+     }
+ 
+     static void WriteResources(byte[] output, int sectionOffset, StageDraft[] stages) {
+         int index = 0;
+         foreach (StageDraft stage in stages) {
+             foreach (ResourceDraft item in stage.Resources) {
+                 int record = checked(sectionOffset + index * 40);
+diff --git a/tests/shaders/artifact-export/ArtifactExport.csproj b/tests/shaders/artifact-export/ArtifactExport.csproj
+new file mode 100644
+index 0000000..b9fb081
+--- /dev/null
++++ b/tests/shaders/artifact-export/ArtifactExport.csproj
+@@ -0,0 +1,18 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <TargetFramework>net9.0</TargetFramework>
++    <OutputType>Exe</OutputType>
++    <ImplicitUsings>enable</ImplicitUsings>
++    <Nullable>disable</Nullable>
++    <UseAppHost>false</UseAppHost>
++    <HelengineRoot Condition="'$(HelengineRoot)' == '' and '$(HELENGINE_ROOT)' != ''">$(HELENGINE_ROOT)</HelengineRoot>
++    <HelengineRoot Condition="'$(HelengineRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\helengine</HelengineRoot>
++  </PropertyGroup>
++  <ItemGroup>
++    <ProjectReference Include="..\..\..\builder\helengine.x360.builder.csproj" />
++    <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
++  </ItemGroup>
++  <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
++    <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj')" Text="Shared helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT." />
++  </Target>
++</Project>
+diff --git a/tests/shaders/artifact-export/Program.cs b/tests/shaders/artifact-export/Program.cs
+new file mode 100644
+index 0000000..4c07e71
+--- /dev/null
++++ b/tests/shaders/artifact-export/Program.cs
+@@ -0,0 +1,274 @@
++using System.Globalization;
++using System.Security.Cryptography;
++using System.Text;
++using helengine;
++using helengine.x360.builder;
++
++internal static class Program {
++    const string MeshAssetId = "task4/legacy-mesh3d";
++    const string BatchUnoptimizedAssetId = "task4/shared-batch2d-textured-unoptimized";
++    const string BatchOptimizedAssetId = "task4/shared-batch2d-textured-optimized";
++    static readonly UTF8Encoding Utf8 = new(false, true);
++
++    static int Main(string[] args) {
++        try {
++            Arguments parsed = Arguments.Parse(args);
++            string repositoryRoot = FindRepositoryRoot(Environment.CurrentDirectory);
++            string engineRoot = Path.GetFullPath(parsed.EngineRoot);
++            string output = Path.GetFullPath(parsed.Output);
++            ValidateInputs(repositoryRoot, engineRoot, output, parsed.Shaderc);
++
++            Xbox360ShaderArtifact mesh = CompileMesh(repositoryRoot, parsed.Shaderc);
++            StandardShaderVariant textured = SpriteBatchShaderVariants.All
++                .SingleOrDefault(variant => string.Equals(variant.Name, "Textured", StringComparison.Ordinal))
++                ?? throw new InvalidOperationException("The shared SpriteBatch catalog has no Textured variant.");
++            string batchPath = Path.Combine(engineRoot, "engine", "helengine.editor", "shaders", "builtin", "SpriteBatchShader.hlsl");
++            string batchSource = File.ReadAllText(batchPath, Utf8);
++            Xbox360ShaderArtifact batchUnoptimized = CompileBatch(batchPath, batchSource, textured, parsed.Shaderc, optimize: false);
++            Xbox360ShaderArtifact batchOptimized = CompileBatch(batchPath, batchSource, textured, parsed.Shaderc, optimize: true);
++
++            RequireCosts(mesh, 110, "legacy Mesh3D");
++            RequireBatchCounts(batchUnoptimized);
++            RequireBatchCounts(batchOptimized);
++            RequireCosts(batchUnoptimized, 94, "unoptimized shared Batch2D Textured");
++            RequireCosts(batchOptimized, 94, "optimized shared Batch2D Textured");
++
++            WriteArtifact(output, "mesh.x3sp", mesh);
++            WriteArtifact(output, "batch-unoptimized.x3sp", batchUnoptimized);
++            WriteArtifact(output, "batch-optimized.x3sp", batchOptimized);
++            WriteManifest(output, [
++                ("mesh.x3sp", mesh),
++                ("batch-unoptimized.x3sp", batchUnoptimized),
++                ("batch-optimized.x3sp", batchOptimized)
++            ]);
++            Console.WriteLine("Exported mesh.x3sp, batch-unoptimized.x3sp, batch-optimized.x3sp, and expected.txt");
++            Console.WriteLine($"Mesh3D upload cost: {mesh.Programs.PairUploadDwords}; Batch2D costs: {batchUnoptimized.Programs.PairUploadDwords}/{batchOptimized.Programs.PairUploadDwords}");
++            return 0;
++        } catch (Exception exception) {
++            Console.Error.WriteLine($"Artifact export failed: {exception.Message}");
++            return 1;
++        }
++    }
++
++    static Xbox360ShaderArtifact CompileMesh(string repositoryRoot, string shaderc) {
++        string fixtureDirectory = Path.Combine(repositoryRoot, "tests", "shaders", "fixtures");
++        Xbox360ShaderProgram vertex = CompileStage(
++            Path.Combine(fixtureDirectory, "transform_vs.hlsl"), "task4-mesh-vs", "main",
++            "Task4LegacyMesh3D", ShaderStage.Vertex, Xbox360ShaderVertexLayout.Mesh3D,
++            optimize: false, shaderc);
++        Xbox360ShaderProgram pixel = CompileStage(
++            Path.Combine(fixtureDirectory, "texture_ps.hlsl"), "task4-mesh-ps", "main",
++            "Task4LegacyMesh3D", ShaderStage.Pixel, Xbox360ShaderVertexLayout.Mesh3D,
++            optimize: false, shaderc);
++        return new Xbox360ShaderArtifact(MeshAssetId, Xbox360ShaderProgramPair.Link(vertex, pixel));
++    }
++
++    static Xbox360ShaderArtifact CompileBatch(
++        string sourcePath,
++        string source,
++        StandardShaderVariant variant,
++        string shaderc,
++        bool optimize) {
++        Xbox360ShaderProgram vertex = CompileStage(
++            sourcePath, "SpriteBatch.Textured.VS", variant.VertexEntryPoint,
++            variant.Name, ShaderStage.Vertex, Xbox360ShaderVertexLayout.Batch2D,
++            optimize, shaderc, source, variant.Defines);
++        Xbox360ShaderProgram pixel = CompileStage(
++            sourcePath, "SpriteBatch.Textured.PS", variant.PixelEntryPoint,
++            variant.Name, ShaderStage.Pixel, Xbox360ShaderVertexLayout.Batch2D,
++            optimize, shaderc, source, variant.Defines);
++        string assetId = optimize ? BatchOptimizedAssetId : BatchUnoptimizedAssetId;
++        return new Xbox360ShaderArtifact(assetId, Xbox360ShaderProgramPair.Link(vertex, pixel));
++    }
++
++    static Xbox360ShaderProgram CompileStage(
++        string sourcePath,
++        string programName,
++        string entryPoint,
++        string variant,
++        ShaderStage stage,
++        Xbox360ShaderVertexLayout layout,
++        bool optimize,
++        string shaderc,
++        string sourceOverride = null,
++        IReadOnlyList<string> catalogDefines = null) {
++        string source = sourceOverride ?? File.ReadAllText(sourcePath, Utf8);
++        ShaderDefine[] defines = (catalogDefines ?? Array.Empty<string>())
++            .Select(ParseDefine)
++            .ToArray();
++        ShaderCompileRequest request = new(
++            new ShaderSourceInfo(sourcePath, source),
++            programName,
++            entryPoint,
++            stage,
++            ShaderCompileTarget.Xbox360,
++            new ShaderModel(4, 0),
++            variant,
++            defines,
++            new ShaderCompileOptions(new ShaderBindingPolicy(0, 17, 101, 202, 300), false, optimize, false));
++        Xbox360ShaderBackend backend = new(new Xbox360ShaderCompilerOptions(
++            shadercLibraryPath: shaderc,
++            timeout: TimeSpan.FromSeconds(60),
++            vertexLayout: layout));
++        ShaderCompileResult result = backend.Compile(request, NoIncludes.Instance);
++        return Xbox360ShaderProgramFactory.FromCompilation(result as Xbox360ShaderCompileResult
++            ?? throw new InvalidDataException("The Xbox 360 compiler returned a non-Xbox360 result."));
++    }
++
++    static ShaderDefine ParseDefine(string define) {
++        int separator = define.IndexOf('=');
++        if (separator <= 0 || separator == define.Length - 1) {
++            throw new InvalidDataException($"Shared variant define '{define}' is not a NAME=VALUE pair.");
++        }
++        return new ShaderDefine(define[..separator], define[(separator + 1)..]);
++    }
++
++    static void RequireCosts(Xbox360ShaderArtifact artifact, int expected, string label) {
++        if (artifact.Programs.PairUploadDwords != expected) {
++            throw new InvalidDataException($"{label} upload cost was {artifact.Programs.PairUploadDwords}, expected {expected} dwords.");
++        }
++    }
++
++    static void RequireBatchCounts(Xbox360ShaderArtifact artifact) {
++        if (artifact.Programs.Vertex.MicrocodeWords.Count != 45 || artifact.Programs.Pixel.MicrocodeWords.Count != 15) {
++            throw new InvalidDataException(
++                $"Batch2D microcode word counts were {artifact.Programs.Vertex.MicrocodeWords.Count}/{artifact.Programs.Pixel.MicrocodeWords.Count}, expected 45/15.");
++        }
++    }
++
++    static void WriteArtifact(string output, string fileName, Xbox360ShaderArtifact artifact) {
++        byte[] bytes = Xbox360ShaderArtifactSerializer.Serialize(artifact);
++        using FileStream stream = new(Path.Combine(output, fileName), FileMode.CreateNew, FileAccess.Write, FileShare.None);
++        stream.Write(bytes);
++    }
++
++    static void WriteManifest(string output, (string Name, Xbox360ShaderArtifact Artifact)[] artifacts) {
++        StringBuilder manifest = new();
++        foreach ((string fileName, Xbox360ShaderArtifact artifact) in artifacts) {
++            Xbox360ShaderProgramPair pair = artifact.Programs;
++            manifest.Append("FILE\t").Append(fileName).Append('\n');
++            manifest.Append("PAIR\t").Append(artifact.AssetId).Append('\t')
++                .Append(pair.Vertex.Variant).Append('\t').Append(pair.Vertex.ToolIdentity.ToLowerInvariant()).Append('\n');
++            manifest.Append("COST\t").Append(pair.ProgramControl.ToString(CultureInfo.InvariantCulture)).Append('\t')
++                .Append(pair.InterpolatorCount.ToString(CultureInfo.InvariantCulture)).Append('\t')
++                .Append(pair.ProgramUploadDwords.ToString(CultureInfo.InvariantCulture)).Append('\t')
++                .Append(pair.ConstantUploadDwords.ToString(CultureInfo.InvariantCulture)).Append('\t')
++                .Append(pair.StateUploadDwords.ToString(CultureInfo.InvariantCulture)).Append('\t')
++                .Append(pair.PairUploadDwords.ToString(CultureInfo.InvariantCulture)).Append('\n');
++            WriteStageManifest(manifest, 0, pair.Vertex);
++            WriteStageManifest(manifest, 1, pair.Pixel);
++        }
++
++        using FileStream stream = new(Path.Combine(output, "expected.txt"), FileMode.CreateNew, FileAccess.Write, FileShare.None);
++        byte[] contents = Utf8.GetBytes(manifest.ToString());
++        stream.Write(contents);
++    }
++
++    static void WriteStageManifest(StringBuilder output, int stageIndex, Xbox360ShaderProgram program) {
++        Xbox360ShaderConstantBufferLayout buffer = program.ConstantBuffer;
++        int bufferSize = buffer?.SizeBytes ?? 0;
++        int capacity = buffer?.RegisterCapacity ?? 0;
++        int bank = buffer?.PhysicalBankBaseRegister ?? -1;
++        output.Append("STAGE\t").Append(stageIndex).Append('\t').Append(StageCode(program.Stage)).Append('\t')
++            .Append(ProfileCode(program.VertexLayout)).Append('\t').Append(program.RegisterCount).Append('\t')
++            .Append(program.MicrocodeWords.Count).Append('\t').Append(bufferSize).Append('\t').Append(capacity).Append('\t')
++            .Append(bank).Append('\t').Append(program.ProgramName).Append('\t').Append(program.EntryPoint).Append('\t')
++            .Append(program.CompileIdentity.ToLowerInvariant()).Append('\t').Append(program.BytecodeSha256.ToLowerInvariant()).Append('\n');
++
++        int wordIndex = 0;
++        foreach (uint word in program.MicrocodeWords) {
++            output.Append("WORD\t").Append(stageIndex).Append('\t')
++                .Append(wordIndex++).Append('\t').Append(word.ToString("x8", CultureInfo.InvariantCulture)).Append('\n');
++        }
++        WriteInterfaces(output, stageIndex, "I", program.Inputs);
++        WriteInterfaces(output, stageIndex, "O", program.Outputs);
++        for (int index = 0; index < program.Resources.Count; index++) {
++            Xbox360ShaderResource resource = program.Resources[index];
++            output.Append("RESOURCE\t").Append(stageIndex).Append('\t').Append(index).Append('\t')
++                .Append(ResourceCode(resource.Type)).Append('\t').Append(resource.Name).Append('\t')
++                .Append(resource.LogicalSet).Append('\t').Append(resource.LogicalSlot).Append('\t')
++                .Append(resource.PhysicalSet).Append('\t').Append(resource.PhysicalBinding).Append('\t')
++                .Append(Optional(resource.PhysicalSlot)).Append('\t').Append(Optional(resource.PhysicalBankBaseRegister)).Append('\n');
++        }
++        if (buffer == null) return;
++        foreach (Xbox360ShaderDeclaredConstantMember member in buffer.DeclaredMembers) {
++            output.Append("DECL\t").Append(stageIndex).Append('\t').Append(MemberCode(member.Type)).Append('\t')
++                .Append(member.Name).Append('\t').Append(member.OffsetBytes).Append('\t').Append(member.SizeBytes).Append('\n');
++        }
++        foreach (Xbox360ShaderUsedConstantMember member in buffer.UsedMembers) {
++            output.Append("USED\t").Append(stageIndex).Append('\t').Append(member.Name).Append('\t')
++                .Append(member.OffsetBytes).Append('\t').Append(member.RegisterIndices[0]).Append('\t')
++                .Append(member.RegisterIndices.Count).Append('\t').Append(MatrixCode(member.MatrixMajor)).Append('\t')
++                .Append(Optional(member.MatrixStrideBytes)).Append('\n');
++        }
++    }
++
++    static void WriteInterfaces(StringBuilder output, int stage, string direction, IReadOnlyList<Xbox360ShaderInterface> items) {
++        foreach (Xbox360ShaderInterface item in items) {
++            Xbox360ShaderVertexFetchLayout fetch = item.VertexFetch;
++            // The wire has no varying slot for PS outputs. The factory's PS
++            // output PhysicalSlot is compiler/factory metadata, not a wire field.
++            int? wireSlot = stage == 1 && direction == "O" ? null : item.PhysicalSlot;
++            output.Append("INTERFACE\t").Append(stage).Append('\t').Append(direction).Append('\t')
++                .Append(InterfaceCode(item.Kind)).Append('\t').Append(item.Index).Append('\t').Append(item.Width).Append('\t')
++                .Append(Optional(wireSlot)).Append('\t').Append(fetch == null ? -1 : fetch.FetchConstant).Append('\t')
++                .Append(fetch?.Stride ?? 0).Append('\t').Append(fetch?.Offset ?? 0).Append('\t')
++                .Append(fetch == null ? 0 : FetchFormatCode(fetch.HardwareFormat)).Append('\n');
++        }
++    }
++
++    static int StageCode(ShaderStage stage) => stage switch { ShaderStage.Vertex => 1, ShaderStage.Pixel => 2, _ => throw new InvalidDataException("Unsupported shader stage.") };
++    static int ProfileCode(Xbox360ShaderVertexLayout profile) => profile switch { Xbox360ShaderVertexLayout.Mesh3D => 1, Xbox360ShaderVertexLayout.Batch2D => 2, _ => throw new InvalidDataException("Unsupported vertex profile.") };
++    static int InterfaceCode(Xbox360ShaderInterfaceKind kind) => kind switch { Xbox360ShaderInterfaceKind.Location => 1, Xbox360ShaderInterfaceKind.Position => 2, _ => throw new InvalidDataException("Unsupported interface kind.") };
++    static int ResourceCode(ShaderResourceType type) => type switch { ShaderResourceType.ConstantBuffer => 1, ShaderResourceType.Texture2D => 2, ShaderResourceType.Sampler => 3, _ => throw new InvalidDataException("Unsupported resource type.") };
++    static int MemberCode(string type) => type switch { "float" => 1, "float2" => 2, "float3" => 3, "float4" => 4, "float4x4" => 5, _ => throw new InvalidDataException($"Unsupported constant type '{type}'.") };
++    static int MatrixCode(string major) => major switch { null => 0, "row_major" => 1, "column_major" => 2, _ => throw new InvalidDataException($"Unsupported matrix orientation '{major}'.") };
++    static int FetchFormatCode(string format) => format switch { "32_32_FLOAT" => 2, "32_32_32_FLOAT" => 3, "32_32_32_32_FLOAT" => 4, _ => throw new InvalidDataException($"Unsupported fetch format '{format}'.") };
++    static int Optional(int? value) => value ?? -1;
++
++    static void ValidateInputs(string repositoryRoot, string engineRoot, string output, string shaderc) {
++        string sharedProject = Path.Combine(engineRoot, "engine", "helengine.shader.compilation", "helengine.shader.compilation.csproj");
++        string sharedCatalog = Path.Combine(engineRoot, "engine", "helengine.shader", "shaders", "SpriteBatchShaderVariants.cs");
++        string sharedSource = Path.Combine(engineRoot, "engine", "helengine.editor", "shaders", "builtin", "SpriteBatchShader.hlsl");
++        string fixtureVs = Path.Combine(repositoryRoot, "tests", "shaders", "fixtures", "transform_vs.hlsl");
++        string fixturePs = Path.Combine(repositoryRoot, "tests", "shaders", "fixtures", "texture_ps.hlsl");
++        foreach (string prerequisite in new[] { sharedProject, sharedCatalog, sharedSource, fixtureVs, fixturePs, shaderc }) {
++            if (!File.Exists(prerequisite)) throw new FileNotFoundException("Required shader artifact integration source is missing.", prerequisite);
++        }
++        string prefix = repositoryRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
++        if (!output.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) {
++            throw new InvalidOperationException($"Output directory must remain inside the checkout: {output}");
++        }
++        if (!Directory.Exists(output)) throw new DirectoryNotFoundException($"Output directory must already exist: {output}");
++        if (Directory.EnumerateFileSystemEntries(output).Any()) {
++            throw new IOException($"Output directory must be empty; refusing to overwrite existing files: {output}");
++        }
++    }
++
++    static string FindRepositoryRoot(string start) {
++        for (DirectoryInfo directory = new(Path.GetFullPath(start)); directory != null; directory = directory.Parent) {
++            if (File.Exists(Path.Combine(directory.FullName, "builder", "helengine.x360.builder.csproj"))) return directory.FullName;
++        }
++        throw new DirectoryNotFoundException("Could not locate the helengine-x360 checkout from the current directory.");
++    }
++
++    sealed record Arguments(string Output, string Shaderc, string EngineRoot) {
++        public static Arguments Parse(string[] args) {
++            Dictionary<string, string> values = new(StringComparer.Ordinal);
++            for (int index = 0; index < args.Length; index += 2) {
++                if (index + 1 >= args.Length || args[index] is not ("--output" or "--shaderc" or "--engine-root")
++                    || !values.TryAdd(args[index], args[index + 1])) {
++                    throw new ArgumentException("Usage: --output <existing checkout directory> --shaderc <DLL> --engine-root <shared checkout>");
++                }
++            }
++            if (values.Count != 3) throw new ArgumentException("All of --output, --shaderc, and --engine-root are required.");
++            return new Arguments(Path.GetFullPath(values["--output"]), Path.GetFullPath(values["--shaderc"]), Path.GetFullPath(values["--engine-root"]));
++        }
++    }
++
++    sealed class NoIncludes : IShaderIncludeResolver {
++        public static readonly NoIncludes Instance = new();
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) =>
++            throw new InvalidOperationException($"Unexpected include '{includePath}' requested by '{requestingFile}'.");
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderArtifactIntegrationTests.cs b/builder.tests/Xbox360ShaderArtifactIntegrationTests.cs
+new file mode 100644
+index 0000000..543c5fd
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderArtifactIntegrationTests.cs
+@@ -0,0 +1,65 @@
++using System.Buffers.Binary;
++using System.Security.Cryptography;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++public sealed class Xbox360ShaderArtifactIntegrationTests {
++    [Fact]
++    public void Legacy_mesh_pair_serializes_real_compiler_snapshots_at_110_dwords() {
++        Xbox360ShaderCompileResult vertexResult = Xbox360ShaderProgramTestSupport.Reidentify(
++            Xbox360ShaderProgramTestSupport.TransformVertex,
++            programName: "task4-mesh-vs",
++            entryPoint: "main",
++            variant: "task4-mesh-fixture");
++        Xbox360ShaderCompileResult pixelResult = Xbox360ShaderProgramTestSupport.Reidentify(
++            Xbox360ShaderProgramTestSupport.TexturedPixel,
++            programName: "task4-mesh-ps",
++            entryPoint: "main",
++            variant: "task4-mesh-fixture");
++
++        Xbox360ShaderProgramPair pair = Xbox360ShaderProgramPair.Link(
++            Xbox360ShaderProgramFactory.FromCompilation(vertexResult),
++            Xbox360ShaderProgramFactory.FromCompilation(pixelResult));
++        byte[] artifact = Xbox360ShaderArtifactSerializer.Serialize(
++            new Xbox360ShaderArtifact("task4/legacy-mesh", pair));
++
++        Assert.Equal(110, pair.PairUploadDwords);
++        Assert.Equal(8u, ReadU32(artifact, 16));
++        Assert.Equal(8u, ReadU32(artifact, 20));
++        Assert.Equal(SHA256.HashData(vertexResult.Binary.Bytecode), artifact.AsSpan(240 + 120, 32).ToArray());
++        uint pixelOutputOffset = ReadU32(artifact, 400 + 28);
++        Assert.Equal(uint.MaxValue, ReadU32(artifact, checked((int)pixelOutputOffset + 12)));
++        Assert.NotEmpty(artifact);
++    }
++
++    [Fact]
++    public void Contract_fixture_serialization_is_order_independent_and_asset_id_only_changes_integrity() {
++        Xbox360ShaderArtifact first = Xbox360ShaderArtifactTestSupport.RichArtifact();
++        Xbox360ShaderArtifact reordered = Xbox360ShaderArtifactTestSupport.RichArtifact(reverseCollections: true);
++        byte[] baseline = Xbox360ShaderArtifactSerializer.Serialize(first);
++        byte[] reorderedBytes = Xbox360ShaderArtifactSerializer.Serialize(reordered);
++        byte[] changedIdentity = Xbox360ShaderArtifactSerializer.Serialize(
++            new Xbox360ShaderArtifact("asset/another-π", first.Programs));
++
++        Assert.Equal(baseline, reorderedBytes);
++        Assert.NotEqual(baseline, changedIdentity);
++        Assert.NotEqual(baseline.AsSpan(32, 32).ToArray(), changedIdentity.AsSpan(32, 32).ToArray());
++        Assert.Equal(ReadStageWords(baseline, 0), ReadStageWords(changedIdentity, 0));
++        Assert.Equal(ReadStageWords(baseline, 1), ReadStageWords(changedIdentity, 1));
++        Assert.Equal(0x12345678u, ReadStageWords(baseline, 0)[0]);
++        Assert.Equal(0x12345678u, first.Programs.Vertex.MicrocodeWords[0]);
++    }
++
++    static uint[] ReadStageWords(byte[] bytes, int stageIndex) {
++        int stageOffset = 240 + stageIndex * 160;
++        int codeOffset = checked((int)ReadU32(bytes, stageOffset + 12));
++        int count = checked((int)ReadU32(bytes, stageOffset + 16));
++        return Enumerable.Range(0, count)
++            .Select(index => ReadU32(bytes, codeOffset + index * sizeof(uint)))
++            .ToArray();
++    }
++
++    static uint ReadU32(byte[] bytes, int offset) =>
++        BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, sizeof(uint)));
++}
+diff --git a/docs/x360-shader-abi.md b/docs/x360-shader-abi.md
+new file mode 100644
+index 0000000..c09831a
+--- /dev/null
++++ b/docs/x360-shader-abi.md
+@@ -0,0 +1,23 @@
++# Xbox 360 shader artifact ABI
++
++The X3SP v1 file carries one validated Xbox 360 vertex/pixel pair: explicit
++asset identity, compiler provenance, decoded microcode words, interfaces,
++resource bindings, declared constants, used constant accesses, and pair upload
++costs derived by the reader. The writer and pure C reader share a versioned
++binary contract. The exact header, sections, record layouts, enum values,
++sentinels, strings, ordering, validation rules, and hand-derived fixture are
++defined in the [approved X3SP v1 wire appendix](superpowers/specs/2026-09-25-x360-shader-artifact-wire.md).
++
++All scalar fields and stored words use little-endian encoding. Stage bytecode
++digests are computed over the logical words in the compiler's original
++big-endian byte order; the file integrity digest uses the virtual-zero header
++integrity field. The PowerPC reader decodes bytes explicitly and exposes a
++borrowed view only after validating the entire file.
++
++The artifact format preserves host compiler records; it does not validate the
++complete Xenos instruction set, authenticate its producer, emit GPU commands,
++or establish hardware correctness. It is not a cooker or runtime loading path.
++The checked-in minimal fixture and controlled contract fixtures are synthetic
++format tests and must not be executed on a GPU. The real SpriteBatch
++Textured/legacy integration run checks host compiler output and C reader
++agreement only; it makes no Xenia or console validation claim.

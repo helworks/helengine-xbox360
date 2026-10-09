@@ -5,6 +5,9 @@
  * lives until its owner retires it and the GPU fence completes, and is described by a texture fetch
  * constant written into the ring before a draw that samples it.
  *
+ * Legacy RGBA uploads are padded here. Native X3T1 uploads already carry the
+ * exact linear/block-row storage and canonical sampler interpretation; those
+ * bytes are copied directly, without expanding compressed or packed texels.
  * Two hardware requirements shape the copy, and both are silent if broken:
  *
  *   Row alignment. A linear texture's rows must start on a 256-byte boundary,
@@ -28,11 +31,12 @@
 #include "../../engine/frame.h"
 #include "xenia_guest.h"
 #include "xenos_regs.h"
+#include "x360_native_texture.h"
 
 /* One allocation per texture, as meshes do, so the ceiling is a scene budget.
    Interface textures are a font atlas and a handful of sprites. */
 #define HEL_MAX_TEXTURES 32u
-#define HEL_TEXTURE_MAX_DIMENSION 2048u
+#define HEL_TEXTURE_MAX_DIMENSION 8192u
 /* Four bytes a pixel, rows padded to this many pixels; see the note above. */
 #define HEL_TEXTURE_ROW_PIXELS 64u
 
@@ -41,6 +45,8 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t pitch_pixels;
+    /* Complete immutable fetch descriptor for this allocation, including native format and swizzle. */
+    uint32_t fetch[6];
     /* Retired allocations remain readable until the submitted frame completes. */
     uint32_t retired;
 } HelTextureSlot;
@@ -99,6 +105,12 @@ int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
     slot->height = height;
     slot->pitch_pixels = pitch_pixels;
     slot->retired = 0;
+    HelX360NativeTextureLayout layout;
+    if (!hel_x360_native_texture_layout(XE_TEX_FORMAT_8_8_8_8, width, height, &layout) ||
+        !hel_x360_native_texture_fetch(&layout,slot->block.phys,slot->fetch)) {
+        hel_phys_free(&slot->block);
+        return HEL_ERR_MESH_INVALID;
+    }
     if (slot_index == g_texture_count) ++g_texture_count;
     *out_texture = slot_index + 1u; /* handles start at 1; fenced slots can be reused */
     hel_log_u32("HEL texture: created handle", *out_texture);
@@ -123,6 +135,40 @@ int hel_texture_create(const uint8_t *rgba, uint32_t width, uint32_t height,
     return HEL_OK;
 }
 
+int hel_texture_create_native(const uint8_t *colors, uint32_t colors_length,
+    uint32_t width, uint32_t height, HelTexture *out_texture) {
+    if (!out_texture) return HEL_ERR_MESH_INVALID;
+    *out_texture = 0;
+    HelX360NativeTextureLayout layout;
+    const uint8_t *texels = 0;
+    if (!hel_x360_native_texture_parse(colors,colors_length,width,height,&layout,&texels))
+        return HEL_ERR_MESH_INVALID;
+    uint32_t slot_index = 0;
+    while (slot_index < g_texture_count && g_textures[slot_index].block.virt) ++slot_index;
+    if (slot_index >= HEL_MAX_TEXTURES) return HEL_ERR_MESH_LIMIT;
+    HelTextureSlot *slot = &g_textures[slot_index];
+    if (layout.byte_length > UINT32_MAX - 0xFFFFu) return HEL_ERR_MESH_INVALID;
+    const int error = hel_phys_alloc("native texture",(layout.byte_length + 0xFFFFu) & ~0xFFFFu,&slot->block);
+    if (error) return error;
+    if (!hel_x360_native_texture_fetch(&layout,slot->block.phys,slot->fetch)) {
+        hel_phys_free(&slot->block);
+        return HEL_ERR_MESH_INVALID;
+    }
+    volatile uint8_t *destination = (volatile uint8_t *)(uintptr_t)slot->block.virt;
+    for (uint32_t index = 0; index < layout.byte_length; ++index) destination[index] = texels[index];
+    slot->width = width;
+    slot->height = height;
+    slot->pitch_pixels = layout.storage_width;
+    slot->retired = 0;
+    if (slot_index == g_texture_count) ++g_texture_count;
+    *out_texture = slot_index + 1u;
+    hel_log_u32("HEL texture: native handle",*out_texture);
+    hel_log_u32("HEL texture: native hardware format",layout.format);
+    hel_log_u32("HEL texture: native copied bytes",layout.byte_length);
+    hel_log_u32("HEL texture: native row pitch bytes",layout.row_pitch_bytes);
+    return HEL_OK;
+}
+
 void hel_texture_bind(HelTexture texture) {
     if (texture == 0 || texture > g_texture_count) {
         return;
@@ -133,25 +179,6 @@ void hel_texture_bind(HelTexture texture) {
     /* Sizes are stored with one subtracted from each component, and the base
        address is shifted right by twelve, which is why a page-aligned
        allocation is required rather than merely convenient. */
-    uint32_t fetch[6];
-    fetch[0] = XE_FETCH_TYPE_TEXTURE |
-               (XE_TEX_CLAMP_TO_EDGE << 10) | /* x */
-               (XE_TEX_CLAMP_TO_EDGE << 13) | /* y */
-               (XE_TEX_CLAMP_TO_EDGE << 16) | /* z */
-               ((slot->pitch_pixels >> 5) << 22) |
-               (0u << 31); /* linear, not tiled */
-    fetch[1] = XE_TEX_FORMAT_8_8_8_8 | (XE_ENDIAN_NONE << 6) | (0u << 8) |
-               (0u << 10) | (0u << 11) | ((slot->block.phys >> 12) << 12);
-    fetch[2] = ((slot->width - 1u) & 0x1FFFu) |
-               (((slot->height - 1u) & 0x1FFFu) << 13) | (0u << 26);
-    fetch[3] = 0u | (XE_TEX_SWIZZLE_RGBA << 1) | (0u << 13) |
-               (XE_TEX_FILTER_LINEAR << 19) | /* magnify */
-               (XE_TEX_FILTER_LINEAR << 21) | /* minify */
-               (XE_TEX_FILTER_BASEMAP << 23) | /* no mips are uploaded */
-               (XE_TEX_ANISO_DISABLED << 25) | (0u << 28) | (0u << 31);
-    fetch[4] = 0u;
-    fetch[5] = (0u << 0) | (0u << 2) | (0u << 3) | (0u << 5) |
-               (XE_TEX_DIMENSION_2D << 9) | (0u << 11) | (0u << 12);
 
     /* Texture fetch constant 1. Constant 0's six dwords are the same storage
        as vertex fetch constants 0 to 2, and the mesh draw writes vertex
@@ -160,7 +187,7 @@ void hel_texture_bind(HelTexture texture) {
     hel_ring_put(XE_PACKET_TYPE0(
         XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + XE_TEXTURE_FETCH_DWORDS, 6));
     for (uint32_t i = 0; i < 6u; ++i) {
-        hel_ring_put(fetch[i]);
+        hel_ring_put(slot->fetch[i]);
     }
 }
 

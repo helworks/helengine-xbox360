@@ -1,0 +1,320 @@
+﻿diff --git "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\shader_probe.py" b/tools/shader-probe/shader_probe.py
+index 9915a9b..add2b70 100644
+--- "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\shader_probe.py"
++++ b/tools/shader-probe/shader_probe.py
+@@ -182,21 +182,24 @@ def compile_hlsl_from_source(
+     stage,
+     entrypoint,
+     defines=None,
+     include_resolver=None,
+     *,
+     debug_info=False,
+     optimize=False,
+     warnings_as_errors=False,
++    preserve_reflection_names=False,
+ ):
+     """Compile HLSL bytes with shaderc preprocessing and caller-owned includes.
+ 
+     The resolver is called as ``resolver(requesting_source, include_name)`` and
+     returns ``(resolved_source_name, source_bytes)``. No files are read here.
++    ``preserve_reflection_names`` requests internal debug metadata independently
++    of the caller's ``debug_info`` choice.
+     """
+     if not isinstance(source, bytes):
+         raise TypeError("source must be bytes")
+     if not isinstance(source_name, str) or not isinstance(entrypoint, str):
+         raise TypeError("source_name and entrypoint must be str")
+     if b"\0" in source or "\0" in source_name or "\0" in entrypoint:
+         raise ValueError("NUL byte in source, source name, or entrypoint")
+     if stage not in STAGES:
+@@ -264,17 +267,17 @@ def compile_hlsl_from_source(
+         )
+         for macro_name, macro_value in macro_definitions:
+             library.shaderc_compile_options_add_macro_definition(
+                 options, macro_name, len(macro_name), macro_value, len(macro_value)
+             )
+         library.shaderc_compile_options_set_include_callbacks(
+             options, resolver_callback, releaser_callback, None
+         )
+-        if debug_info:
++        if debug_info or preserve_reflection_names:
+             library.shaderc_compile_options_set_generate_debug_info(options)
+         if optimize:
+             # shaderc_optimization_level_performance = 2.
+             library.shaderc_compile_options_set_optimization_level(options, 2)
+         if warnings_as_errors:
+             library.shaderc_compile_options_set_warnings_as_errors(options)
+         result = library.shaderc_compile_into_spv(
+             compiler,
+diff --git "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\backend_protocol.py" b/tools/shader-probe/backend_protocol.py
+index efd983f..8bf7997 100644
+--- "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\backend_protocol.py"
++++ b/tools/shader-probe/backend_protocol.py
+@@ -236,16 +236,17 @@ def compile_request(request, shaderc_path, input_stream=None, output_stream=None
+             request["source_name"],
+             request["stage"],
+             request["entrypoint"],
+             defines=request["defines"],
+             include_resolver=resolve_include,
+             debug_info=opts["debug_info"],
+             optimize=opts["optimize"],
+             warnings_as_errors=opts["warnings_as_errors"],
++            preserve_reflection_names=opts["optimize"],
+         )
+     except (ProtocolError, OSError, TypeError, ValueError, RuntimeError) as error:
+         return {"success": False, "diagnostics": str(error)}, tool_identity
+     if not compiled.succeeded:
+         return {"success": False, "diagnostics": compiled.diagnostics}, tool_identity
+ 
+     reflection, layout = reflect_layout(compiled.spirv, request["stage"], request["entrypoint"])
+     lowered = lower_spirv(compiled.spirv, request["stage"], request["entrypoint"], layout)
+diff --git "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\spirv_parser.py" b/tools/shader-probe/spirv_parser.py
+index 02c580b..d78d23f 100644
+--- "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\spirv_parser.py"
++++ b/tools/shader-probe/spirv_parser.py
+@@ -41,17 +41,17 @@ OP_NAMES = {
+     98: "ImageRead", 99: "ImageWrite",
+     124: "Bitcast", 128: "IAdd", 129: "FAdd", 130: "ISub",
+     131: "FSub", 133: "FMul",
+     136: "FDiv", 140: "FRem", 142: "VectorTimesScalar",
+     144: "VectorTimesMatrix", 145: "MatrixTimesVector",
+     146: "MatrixTimesMatrix", 147: "OuterProduct", 148: "Dot",
+     169: "Select", 245: "Phi", 248: "Label", 249: "Branch",
+     250: "BranchConditional", 253: "Return", 254: "ReturnValue",
+-    255: "Unreachable",
++    255: "Unreachable", 317: "NoLine",
+ }
+ 
+ DECORATION_NAMES = {
+     2: "Block", 3: "BufferBlock", 6: "ArrayStride", 11: "BuiltIn",
+     4: "RowMajor", 5: "ColMajor", 7: "MatrixStride",
+     30: "Location", 33: "Binding", 34: "DescriptorSet", 35: "Offset",
+ }
+ DECORATION_LITERAL_COUNTS = {
+@@ -70,17 +70,17 @@ MIN_OPERANDS = {
+     32: 3, 33: 2, 41: 2, 42: 2, 43: 3, 44: 3, 46: 2, 54: 4,
+     55: 2, 56: 0, 57: 3, 59: 3, 61: 3, 62: 2, 65: 4, 71: 2,
+     72: 3, 79: 6, 80: 3, 81: 4, 82: 5, 83: 3, 86: 4, 87: 4,
+     88: 5, 89: 5, 90: 6, 91: 4, 92: 5, 93: 5, 94: 6,
+     95: 4, 96: 4, 97: 5, 98: 4,
+     99: 3, 124: 3, 128: 4, 129: 4, 130: 4, 131: 4, 133: 4,
+     136: 4, 140: 4, 142: 4, 144: 4, 145: 4, 146: 4, 147: 4,
+     148: 4, 169: 5, 245: 4, 248: 1, 249: 1, 250: 3, 253: 0,
+-    254: 1, 255: 0,
++    254: 1, 255: 0, 317: 0,
+ }
+ 
+ 
+ class SpirvError(ValueError):
+     """Malformed module or an instruction outside the parser's safe subset."""
+ 
+ 
+ @dataclass(frozen=True)
+diff --git "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\lower_xenos.py" b/tools/shader-probe/lower_xenos.py
+index c4fbc96..a65ea1f 100644
+--- "a/.artifacts\\spritebatch-task1-before\\tools\\shader-probe\\lower_xenos.py"
++++ b/tools/shader-probe/lower_xenos.py
+@@ -316,16 +316,18 @@ class _Lowerer:
+                     if ins.operands[2] != 0:
+                         raise LoweringError("function control masks are unsupported")
+                     ended = False
+                 continue
+             if in_entry:
+                 if ins.opcode == 56:
+                     ended = True
+                     in_entry = False
++                elif ins.opcode in (8, 317):  # OpLine and OpNoLine are metadata only.
++                    continue
+                 else:
+                     self.functions.append(ins)
+         if not ended:
+             raise LoweringError("entry point function body is missing or unterminated")
+ 
+         allowed = self._DECLARATIONS | {248, 61, 62, 65, 79, 80, 81, 82, 83,
+                                         124, 129, 131, 133, 136, 142, 144,
+                                         145, 146, 147, 148, 169, 253, 254, 255,
+diff --git "a/.artifacts\\spritebatch-task1-before\\tests\\shader_backend_protocol_test.py" b/tests/shader_backend_protocol_test.py
+index 9a44f29..7fbc13e 100644
+--- "a/.artifacts\\spritebatch-task1-before\\tests\\shader_backend_protocol_test.py"
++++ b/tests/shader_backend_protocol_test.py
+@@ -232,16 +232,151 @@ class BackendProtocolTests(unittest.TestCase):
+         )
+         resources = {item["kind"]: item for item in result["reflection"]["bindings"]}
+         self.assertEqual(resources["texture2d"]["name"], "texture0")
+         self.assertEqual(resources["sampler"]["name"], "sampler0")
+         self.assertEqual((resources["texture2d"]["set"], resources["texture2d"]["binding"]), (0, 0))
+         self.assertEqual((resources["sampler"]["set"], resources["sampler"]["binding"]), (0, 0))
+         self.assertEqual(result["metadata"]["textures"][0]["fetch_constant"], 1)
+ 
++    def test_optimized_textured_spritebatch_reflection_preserves_resource_names(self):
++        source_path = pathlib.Path(
++            r"C:\dev\helworks\helengine\engine\helengine.editor"
++            r"\shaders\builtin\SpriteBatchShader.hlsl"
++        )
++        source = source_path.read_text(encoding="utf-8")
++        for debug_info in (False, True):
++            with self.subTest(debug_info=debug_info):
++                code, result, stderr = run_protocol(request(
++                    source,
++                    "pixel",
++                    source_name=str(source_path),
++                    entrypoint="PS",
++                    variant="Textured",
++                    defines={},
++                    options={
++                        "optimize": True,
++                        "debug_info": debug_info,
++                        "warnings_as_errors": False,
++                    },
++                ))
++
++                self.assertEqual(code, 0, stderr + str(result))
++                self.assertTrue(result["success"], result["diagnostics"])
++                resources = {
++                    item["name"] for item in result["reflection"]["bindings"]
++                }
++                self.assertIn("BatchTexture", resources)
++                self.assertIn("BatchSampler", resources)
++
++    def test_optimized_reflection_preserves_uniform_member_names(self):
++        source = (FIXTURES / "transform_vs.hlsl").read_text(encoding="utf-8")
++        for debug_info in (False, True):
++            with self.subTest(debug_info=debug_info):
++                code, result, stderr = run_protocol(request(
++                    source,
++                    "vertex",
++                    options={
++                        "optimize": True,
++                        "debug_info": debug_info,
++                        "warnings_as_errors": False,
++                    },
++                ))
++
++                self.assertEqual(code, 0, stderr + str(result))
++                self.assertTrue(result["success"], result["diagnostics"])
++                uniform = next(
++                    item for item in result["reflection"]["bindings"]
++                    if item["kind"] == "constant_buffer"
++                )
++                self.assertEqual(uniform["name"], "Transform")
++                self.assertEqual(
++                    [member["name"] for member in uniform["members"]],
++                    ["clipFromObject", "tint"],
++                )
++
++    def test_optimized_includes_preserve_resource_reflection_names(self):
++        source = (
++            '#include "resources.hlsli"\n'
++            'float4 main(float2 uv : TEXCOORD0) : SV_Target0 {\n'
++            '    return IncludedTexture.Sample(IncludedSampler, uv);\n'
++            '}\n'
++        )
++        include = (
++            "Texture2D IncludedTexture : register(t0);\n"
++            "SamplerState IncludedSampler : register(s0);\n"
++        )
++        code, result, stderr = run_protocol(
++            request(source, "pixel", options={
++                "optimize": True,
++                "debug_info": False,
++                "warnings_as_errors": False,
++            }),
++            {"resources.hlsli": ("shared/resources.hlsli", include)},
++        )
++
++        self.assertEqual(code, 0, stderr + str(result))
++        self.assertTrue(result["success"], result["diagnostics"])
++        self.assertEqual(
++            {item["name"] for item in result["reflection"]["bindings"]},
++            {"IncludedTexture", "IncludedSampler"},
++        )
++        self.assertEqual(result["includes"], [{
++            "source_name": "shared/resources.hlsli",
++            "sha256": hashlib.sha256(include.encode("utf-8")).hexdigest(),
++        }])
++
++    def test_required_reflection_names_are_rejected_when_absent(self):
++        from backend_layout import LayoutError, _reflect_resources
++        from spirv_parser import Instruction, SpirvModule
++
++        unnamed_resource = SpirvModule(
++            0x00010000, 0, 100, 0, variables={17: (2, 0, ())}
++        )
++        with self.assertRaisesRegex(LayoutError, "resource variable %17 has no OpName"):
++            _reflect_resources(unnamed_resource, "pixel")
++
++        unnamed_member = SpirvModule(
++            0x00010000,
++            0,
++            100,
++            0,
++            types={
++                2: Instruction(32, (2, 2, 3), 0),
++                3: Instruction(30, (3, 4), 0),
++                4: Instruction(22, (32, 0), 0),
++            },
++            variables={1: (2, 2, ())},
++            decorations={1: {33: (0,), 34: (0,)}},
++            member_decorations={(3, 0): {35: (0,)}},
++            names={1: "NamedBuffer"},
++        )
++        with self.assertRaisesRegex(LayoutError, "member 0 has no OpMemberName"):
++            _reflect_resources(unnamed_member, "vertex")
++
++    def test_debug_line_metadata_does_not_hide_unsupported_runtime_operations(self):
++        source = (
++            "float4 main(float4 color : COLOR0) : SV_Target0 {\n"
++            "    discard;\n"
++            "    return color;\n"
++            "}\n"
++        )
++        code, result, stderr = run_protocol(request(source, "pixel", options={
++            "optimize": False,
++            "debug_info": True,
++            "warnings_as_errors": False,
++        }))
++
++        self.assertNotEqual(code, 0, stderr + str(result))
++        self.assertFalse(result["success"])
++        self.assertIn(
++            "unsupported SPIR-V opcode 252",
++            result["diagnostics"],
++        )
++
+     def test_includes_use_the_live_protocol_and_hash_supplied_contents(self):
+         source = (
+             '#include "active.hlsli"\n'
+             'struct Input { [[vk::location(0)]] float4 color : COLOR0; };\n'
+             'float4 main(Input input) : SV_Target0 { return includedColor(input.color); }\n'
+         )
+         include = "float4 includedColor(float4 color) { return color * color; }\n"
+         code, result, stderr = run_protocol(
+diff --git "a/.artifacts\\spritebatch-task1-before\\docs\\x360-shader-host-protocol.md" b/docs/x360-shader-host-protocol.md
+index 6ed254b..b4d8e8c 100644
+--- "a/.artifacts\\spritebatch-task1-before\\docs\\x360-shader-host-protocol.md"
++++ b/docs/x360-shader-host-protocol.md
+@@ -41,16 +41,24 @@ physical `tf1`; vertex inputs map to the published 12-dword `vf0` layout.
+ Success returns the frozen `result` message with base64 microcode, existing
+ lowerer metadata, actual SPIR-V interface/resource reflection, include content
+ hashes, and identities. Resource and member names come from SPIR-V `OpName` and
+ `OpMemberName` data. Unsupported or absent names needed for resource reflection
+ fail explicitly. Failure returns only `protocol`, `type`, `success:false`, and
+ diagnostics; the process exits nonzero and does not reuse output from another
+ invocation.
+ 
++The host enables shaderc debug metadata internally when `optimize` is true so
++reflection names survive performance optimization. The caller's `debug_info`
++flag remains independent and both request flags remain unchanged in the compile
++identity; `optimize:true` still selects shaderc's performance optimization
++level. The intermediate SPIR-V is not returned. During Xenos lowering only
++`OpLine` and `OpNoLine` source-location directives are skipped; unsupported
++runtime instructions continue to fail explicitly.
++
+ `tool_identity` covers protocol/layout ABI version 1, shaderc DLL bytes, and
+ the protocol, layout, frontend, lowerer, parser, and assembler Python sources.
+ `compile_identity` covers the canonical full request, resolved include
+ identities, tool identity, emitted binary, lowerer metadata, and reflection.
+ There is no host cache. A successful stage is limited to 1024 nonempty,
+ aligned microcode dwords. This per-stage bound does not prove that an arbitrary
+ vertex/pixel pair fits the runtime ring.
+ 

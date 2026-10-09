@@ -1,0 +1,206 @@
+﻿diff --git "a/.artifacts\\x360-artifact-task1-fix1-before\\builder\\shaders\\Xbox360ShaderArtifactSerializer.cs" b/builder/shaders/Xbox360ShaderArtifactSerializer.cs
+index aa38556..bfc6f4a 100644
+--- "a/.artifacts\\x360-artifact-task1-fix1-before\\builder\\shaders\\Xbox360ShaderArtifactSerializer.cs"
++++ b/builder/shaders/Xbox360ShaderArtifactSerializer.cs
+@@ -244,21 +244,22 @@ public static class Xbox360ShaderArtifactSerializer {
+                 index++;
+             }
+         }
+     }
+ 
+     static void WriteAccesses(byte[] output, int sectionOffset, int declarationSectionOffset, StageDraft[] stages) {
+         int index = 0;
+         foreach (StageDraft stage in stages) {
+             foreach (AccessDraft item in stage.Accesses) {
+                 int record = checked(sectionOffset + index * 24);
+-                int declarationRecord = checked(declarationSectionOffset + item.DeclarationIndex * 24);
++                int declarationRecord = checked(declarationSectionOffset
++                    + checked(stage.DeclarationStart + item.DeclarationIndex) * 24);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record, declarationRecord);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 4, item.FirstRegister);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 8, item.RegisterCount);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 12, item.MatrixMajor);
+                 Xbox360ShaderArtifactWire.WriteUInt32(output, record + 16, item.MatrixStride);
+                 index++;
+             }
+         }
+     }
+ 
+diff --git "a/.artifacts\\x360-artifact-task1-fix1-before\\builder.tests\\Xbox360ShaderArtifactSerializerTests.cs" b/builder.tests/Xbox360ShaderArtifactSerializerTests.cs
+index bbd28c6..8304284 100644
+--- "a/.artifacts\\x360-artifact-task1-fix1-before\\builder.tests\\Xbox360ShaderArtifactSerializerTests.cs"
++++ b/builder.tests/Xbox360ShaderArtifactSerializerTests.cs
+@@ -78,20 +78,22 @@ public sealed class Xbox360ShaderArtifactSerializerTests {
+         Assert.Equal(uint.MaxValue, Xbox360ShaderArtifactTestSupport.U32(bytes, resourceSection + 80 + 32));
+         Assert.Equal(23u, Xbox360ShaderArtifactTestSupport.U32(bytes, resourceSection + 120 + 24));
+ 
+         Assert.Equal(3u, Xbox360ShaderArtifactTestSupport.U32(bytes, vs + 60));
+         Assert.Equal(2u, Xbox360ShaderArtifactTestSupport.U32(bytes, vs + 68));
+         Assert.Equal(2u, Xbox360ShaderArtifactTestSupport.U32(bytes, accessSection + 12));
+         Assert.Equal(16u, Xbox360ShaderArtifactTestSupport.U32(bytes, accessSection + 16));
+         Assert.Equal((uint)declarationSection, Xbox360ShaderArtifactTestSupport.U32(bytes, accessSection));
+         Assert.Equal(1u, Xbox360ShaderArtifactTestSupport.U32(bytes, accessSection + 24 + 12));
+         Assert.Equal(16u, Xbox360ShaderArtifactTestSupport.U32(bytes, accessSection + 24 + 16));
++        Assert.Equal((uint)(declarationSection + 3 * 24),
++            Xbox360ShaderArtifactTestSupport.U32(bytes, accessSection + 2 * 24));
+ 
+         Assert.Equal(Convert.FromHexString("1951763138C86EF2059DA0F8CFDD380310C4F0AE4D89A88E6BB163A013A749BB"), bytes.AsSpan(vs + 120, 32).ToArray());
+         Assert.Equal(SHA256.HashData(Convert.FromHexString("1234567801020304A0B0C0D0")), bytes.AsSpan(vs + 120, 32).ToArray());
+         Assert.Equal(SHA256.HashData(Convert.FromHexString("87654321040302010D0C0B0A")), bytes.AsSpan(ps + 120, 32).ToArray());
+     }
+ 
+     [Fact]
+     public void Collection_permutations_produce_identical_bytes_and_full_strings_reuse_exact_spans() {
+         byte[] first = Xbox360ShaderArtifactSerializer.Serialize(Xbox360ShaderArtifactTestSupport.RichArtifact());
+         byte[] permuted = Xbox360ShaderArtifactSerializer.Serialize(Xbox360ShaderArtifactTestSupport.RichArtifact(reverseCollections: true));
+@@ -158,11 +160,87 @@ public sealed class Xbox360ShaderArtifactSerializerTests {
+ 
+         byte[] first = Xbox360ShaderArtifactSerializer.Serialize(artifact);
+         first.AsSpan().Clear();
+         byte[] second = Xbox360ShaderArtifactSerializer.Serialize(artifact);
+ 
+         Assert.Equal("X3SP", Encoding.ASCII.GetString(second, 0, 4));
+         Assert.Equal(beforeVertex, artifact.Programs.Vertex.MicrocodeWords);
+         Assert.Equal(beforePixel, artifact.Programs.Pixel.MicrocodeWords);
+         Assert.NotSame(first, second);
+     }
++
++    [Fact]
++    public void Rejects_microcode_word_counts_above_stage_limit() {
++        Xbox360ShaderProgramPair pair = Xbox360ShaderArtifactTestSupport.MinimalArtifact().Programs;
++        uint[] tooManyWords = new uint[1026];
++        Xbox360ShaderProgram vertex = Xbox360ShaderArtifactTestSupport.Snapshot(pair.Vertex, words: tooManyWords);
++
++        Assert.Throws<InvalidDataException>(() => Xbox360ShaderArtifactSerializer.Serialize(
++            Xbox360ShaderArtifactTestSupport.Artifact(vertex, pair.Pixel)));
++    }
++
++    [Fact]
++    public void Rejects_interface_table_overflow() {
++        Xbox360ShaderProgramPair pair = Xbox360ShaderArtifactTestSupport.MinimalArtifact().Programs;
++        Xbox360ShaderInterface[] inputs = Enumerable.Range(0, 23)
++            .Select(index => Xbox360ShaderArtifactTestSupport.MakeInterface(Xbox360ShaderInterfaceKind.Location, index % 8, 4))
++            .ToArray();
++        Xbox360ShaderProgram vertex = Xbox360ShaderArtifactTestSupport.Snapshot(pair.Vertex, inputs: inputs);
++
++        Assert.Throws<InvalidDataException>(() => Xbox360ShaderArtifactSerializer.Serialize(
++            Xbox360ShaderArtifactTestSupport.Artifact(vertex, pair.Pixel)));
++    }
++
++    [Fact]
++    public void Rejects_resource_table_overflow_and_per_stage_resource_overflow() {
++        Xbox360ShaderProgramPair pair = Xbox360ShaderArtifactTestSupport.MinimalArtifact().Programs;
++        Xbox360ShaderResource[] fourResources = Enumerable.Range(0, 4)
++            .Select(index => Xbox360ShaderArtifactTestSupport.MakeResource($"vsResource{index}", ShaderResourceType.Texture2D))
++            .ToArray();
++        Xbox360ShaderProgram fourOnVertex = Xbox360ShaderArtifactTestSupport.Snapshot(pair.Vertex, resources: fourResources);
++        Assert.Throws<InvalidDataException>(() => Xbox360ShaderArtifactSerializer.Serialize(
++            Xbox360ShaderArtifactTestSupport.Artifact(fourOnVertex, pair.Pixel)));
++
++        Xbox360ShaderResource[] threeVertex = fourResources[..3];
++        Xbox360ShaderResource[] twoPixel = [
++            Xbox360ShaderArtifactTestSupport.MakeResource("psTexture", ShaderResourceType.Texture2D),
++            Xbox360ShaderArtifactTestSupport.MakeResource("psSampler", ShaderResourceType.Sampler)
++        ];
++        Xbox360ShaderProgram boundedVertex = Xbox360ShaderArtifactTestSupport.Snapshot(pair.Vertex, resources: threeVertex);
++        Xbox360ShaderProgram boundedPixel = Xbox360ShaderArtifactTestSupport.Snapshot(pair.Pixel, resources: twoPixel);
++        Assert.Throws<InvalidDataException>(() => Xbox360ShaderArtifactSerializer.Serialize(
++            Xbox360ShaderArtifactTestSupport.Artifact(boundedVertex, boundedPixel)));
++    }
++
++    [Fact]
++    public void Rejects_declared_constant_count_above_stage_limit() {
++        Xbox360ShaderProgramPair pair = Xbox360ShaderArtifactTestSupport.RichArtifact().Programs;
++        Xbox360ShaderDeclaredConstantMember[] declarations = Enumerable.Range(0, 257)
++            .Select(index => Xbox360ShaderArtifactTestSupport.MakeDeclared($"member{index:D3}", "float4", (index % 256) * 16, 16))
++            .ToArray();
++        Xbox360ShaderConstantBufferLayout oversized = Xbox360ShaderArtifactTestSupport.MakeBuffer(
++            4096, 0, declarations, Array.Empty<Xbox360ShaderUsedConstantMember>());
++        Xbox360ShaderProgram vertex = Xbox360ShaderArtifactTestSupport.Snapshot(
++            pair.Vertex, constantBuffer: oversized, replaceConstantBuffer: true);
++
++        Assert.Throws<InvalidDataException>(() => Xbox360ShaderArtifactSerializer.Serialize(
++            Xbox360ShaderArtifactTestSupport.Artifact(vertex, pair.Pixel)));
++    }
++
++    [Fact]
++    public void Rejects_used_constant_access_count_above_stage_limit() {
++        Xbox360ShaderProgramPair pair = Xbox360ShaderArtifactTestSupport.MinimalArtifact().Programs;
++        Xbox360ShaderDeclaredConstantMember declaration = Xbox360ShaderArtifactTestSupport.MakeDeclared("member", "float4", 0, 16);
++        Xbox360ShaderUsedConstantMember[] accesses = Enumerable.Range(0, 257)
++            .Select(_ => Xbox360ShaderArtifactTestSupport.MakeUsed("member", 0, [0]))
++            .ToArray();
++        Xbox360ShaderConstantBufferLayout oversized = Xbox360ShaderArtifactTestSupport.MakeBuffer(
++            16, 0, [declaration], accesses);
++        Xbox360ShaderResource cbuffer = Xbox360ShaderArtifactTestSupport.MakeResource(
++            "constants", ShaderResourceType.ConstantBuffer, logicalSlot: 0, bank: 0);
++        Xbox360ShaderProgram vertex = Xbox360ShaderArtifactTestSupport.Snapshot(
++            pair.Vertex, resources: [cbuffer], constantBuffer: oversized, replaceConstantBuffer: true);
++
++        Assert.Throws<InvalidDataException>(() => Xbox360ShaderArtifactSerializer.Serialize(
++            Xbox360ShaderArtifactTestSupport.Artifact(vertex, pair.Pixel)));
++    }
+ }
+diff --git "a/.artifacts\\x360-artifact-task1-fix1-before\\builder.tests\\Xbox360ShaderArtifactTestSupport.cs" b/builder.tests/Xbox360ShaderArtifactTestSupport.cs
+index 958caac..fcbced5 100644
+--- "a/.artifacts\\x360-artifact-task1-fix1-before\\builder.tests\\Xbox360ShaderArtifactTestSupport.cs"
++++ b/builder.tests/Xbox360ShaderArtifactTestSupport.cs
+@@ -79,20 +79,58 @@ internal static class Xbox360ShaderArtifactTestSupport {
+ 
+     public static Xbox360ShaderProgram CloneProgram(
+         Xbox360ShaderProgram source,
+         string programName = null,
+         string entryPoint = null,
+         string variant = null) => ProgramWith(
+             programName ?? source.ProgramName, entryPoint ?? source.EntryPoint, source.Stage, source.VertexLayout,
+             source.ToolIdentity, source.CompileIdentity, source.MicrocodeWords.ToArray(),
+             source.Inputs.ToArray(), source.Outputs.ToArray(), source.Resources.ToArray(), source.ConstantBuffer, variant ?? source.Variant);
+ 
++    public static Xbox360ShaderProgram Snapshot(
++        Xbox360ShaderProgram source,
++        uint[] words = null,
++        Xbox360ShaderInterface[] inputs = null,
++        Xbox360ShaderInterface[] outputs = null,
++        Xbox360ShaderResource[] resources = null,
++        Xbox360ShaderConstantBufferLayout constantBuffer = null,
++        bool replaceConstantBuffer = false) => ProgramWith(
++            source.ProgramName, source.EntryPoint, source.Stage, source.VertexLayout,
++            source.ToolIdentity, source.CompileIdentity, words ?? source.MicrocodeWords.ToArray(),
++            inputs ?? source.Inputs.ToArray(), outputs ?? source.Outputs.ToArray(),
++            resources ?? source.Resources.ToArray(), replaceConstantBuffer ? constantBuffer : source.ConstantBuffer,
++            source.Variant);
++
++    public static Xbox360ShaderArtifact Artifact(Xbox360ShaderProgram vertex, Xbox360ShaderProgram pixel) =>
++        new("bounds-test", Xbox360ShaderProgramPair.Link(vertex, pixel));
++
++    public static Xbox360ShaderInterface MakeInterface(
++        Xbox360ShaderInterfaceKind kind, int index, int width, int? slot = null,
++        Xbox360ShaderVertexFetchLayout fetch = null) => Interface(kind, index, width, slot, fetch);
++
++    public static Xbox360ShaderResource MakeResource(
++        string name, ShaderResourceType type, int logicalSet = 0, int logicalSlot = 0,
++        int physicalSet = 0, int binding = 0, int? slot = null, int? bank = null) =>
++        Resource(name, type, logicalSet, logicalSlot, physicalSet, binding, slot, bank);
++
++    public static Xbox360ShaderDeclaredConstantMember MakeDeclared(string name, string type, int offset, int size) =>
++        Declared(name, type, offset, size);
++
++    public static Xbox360ShaderUsedConstantMember MakeUsed(
++        string name, int offset, int[] registers, string major = null, int? stride = null) =>
++        Used(name, offset, registers, major, stride);
++
++    public static Xbox360ShaderConstantBufferLayout MakeBuffer(
++        int size, int bank,
++        Xbox360ShaderDeclaredConstantMember[] declarations,
++        Xbox360ShaderUsedConstantMember[] used) => Buffer(size, bank, declarations, used);
++
+     public static uint U32(byte[] bytes, int offset) => BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset, 4));
+ 
+     public static void InvokeFileSizeCheck(int size) {
+         MethodInfo method = typeof(Xbox360ShaderArtifactSerializer).GetMethod("ValidateTotalFileSize", BindingFlags.Static | BindingFlags.NonPublic);
+         try {
+             method.Invoke(null, new object[] { size });
+         } catch (TargetInvocationException exception) when (exception.InnerException != null) {
+             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
+         }
+     }

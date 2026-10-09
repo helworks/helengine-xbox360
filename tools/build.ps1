@@ -125,6 +125,7 @@ $sources = @(
     "src/platform/xenia_guest/x360_shader_content.c",
     "src/platform/xenia_guest/mesh.c",
     "src/platform/xenia_guest/texture.c",
+    "src/platform/xenia_guest/x360_native_texture.c",
     "src/engine/frame.c",
     "src/engine/math.c",
     "src/demo/triangle.c",

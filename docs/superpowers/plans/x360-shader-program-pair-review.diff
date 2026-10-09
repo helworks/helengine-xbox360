@@ -1,0 +1,2184 @@
+﻿diff --git a/builder/shaders/Xbox360ShaderProgram.cs b/builder/shaders/Xbox360ShaderProgram.cs
+new file mode 100644
+index 0000000..6b18ef8
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderProgram.cs
+@@ -0,0 +1,188 @@
++using helengine;
++
++namespace helengine.x360.builder;
++
++public enum Xbox360ShaderInterfaceKind {
++    Location,
++    Position
++}
++
++public sealed class Xbox360ShaderVertexFetchLayout {
++    internal Xbox360ShaderVertexFetchLayout(int fetchConstant, int stride, int offset, string hardwareFormat) {
++        FetchConstant = fetchConstant;
++        Stride = stride;
++        Offset = offset;
++        HardwareFormat = hardwareFormat;
++    }
++
++    public int FetchConstant { get; }
++    public int Stride { get; }
++    public int Offset { get; }
++    public string HardwareFormat { get; }
++}
++
++public sealed class Xbox360ShaderInterface {
++    internal Xbox360ShaderInterface(
++        Xbox360ShaderInterfaceKind kind,
++        int index,
++        int width,
++        string format,
++        int? physicalSlot,
++        Xbox360ShaderVertexFetchLayout vertexFetch) {
++        Kind = kind;
++        Index = index;
++        Width = width;
++        Format = format;
++        PhysicalSlot = physicalSlot;
++        VertexFetch = vertexFetch;
++    }
++
++    public Xbox360ShaderInterfaceKind Kind { get; }
++    public int Index { get; }
++    public int Width { get; }
++    public string Format { get; }
++    public int? PhysicalSlot { get; }
++    public Xbox360ShaderVertexFetchLayout VertexFetch { get; }
++}
++
++public sealed class Xbox360ShaderDeclaredConstantMember {
++    internal Xbox360ShaderDeclaredConstantMember(string name, string type, int offsetBytes, int sizeBytes) {
++        Name = name;
++        Type = type;
++        OffsetBytes = offsetBytes;
++        SizeBytes = sizeBytes;
++    }
++
++    public string Name { get; }
++    public string Type { get; }
++    public int OffsetBytes { get; }
++    public int SizeBytes { get; }
++}
++
++public sealed class Xbox360ShaderUsedConstantMember {
++    internal Xbox360ShaderUsedConstantMember(
++        string name,
++        int offsetBytes,
++        IEnumerable<int> registerIndices,
++        string matrixMajor,
++        int? matrixStrideBytes) {
++        Name = name;
++        OffsetBytes = offsetBytes;
++        RegisterIndices = Array.AsReadOnly(registerIndices.ToArray());
++        MatrixMajor = matrixMajor;
++        MatrixStrideBytes = matrixStrideBytes;
++    }
++
++    public string Name { get; }
++    public int OffsetBytes { get; }
++    public IReadOnlyList<int> RegisterIndices { get; }
++    public string MatrixMajor { get; }
++    public int? MatrixStrideBytes { get; }
++}
++
++public sealed class Xbox360ShaderConstantBufferLayout {
++    internal Xbox360ShaderConstantBufferLayout(
++        int sizeBytes,
++        int registerCapacity,
++        int physicalBankBaseRegister,
++        IEnumerable<Xbox360ShaderDeclaredConstantMember> declaredMembers,
++        IEnumerable<Xbox360ShaderUsedConstantMember> usedMembers) {
++        SizeBytes = sizeBytes;
++        RegisterCapacity = registerCapacity;
++        PhysicalBankBaseRegister = physicalBankBaseRegister;
++        DeclaredMembers = Array.AsReadOnly(declaredMembers.ToArray());
++        UsedMembers = Array.AsReadOnly(usedMembers.ToArray());
++    }
++
++    public int SizeBytes { get; }
++    public int RegisterCapacity { get; }
++    public int PhysicalBankBaseRegister { get; }
++    public IReadOnlyList<Xbox360ShaderDeclaredConstantMember> DeclaredMembers { get; }
++    public IReadOnlyList<Xbox360ShaderUsedConstantMember> UsedMembers { get; }
++}
++
++public sealed class Xbox360ShaderResource {
++    internal Xbox360ShaderResource(
++        string name,
++        ShaderResourceType type,
++        int logicalSet,
++        int logicalSlot,
++        int physicalSet,
++        int physicalBinding,
++        int? physicalSlot,
++        int? physicalBankBaseRegister) {
++        Name = name;
++        Type = type;
++        LogicalSet = logicalSet;
++        LogicalSlot = logicalSlot;
++        PhysicalSet = physicalSet;
++        PhysicalBinding = physicalBinding;
++        PhysicalSlot = physicalSlot;
++        PhysicalBankBaseRegister = physicalBankBaseRegister;
++    }
++
++    public string Name { get; }
++    public ShaderResourceType Type { get; }
++    public int LogicalSet { get; }
++    public int LogicalSlot { get; }
++    public int PhysicalSet { get; }
++    public int PhysicalBinding { get; }
++    public int? PhysicalSlot { get; }
++    public int? PhysicalBankBaseRegister { get; }
++}
++
++/// <summary>A validated, immutable host-side snapshot of one compiled Xenos shader stage.</summary>
++public sealed class Xbox360ShaderProgram {
++    internal Xbox360ShaderProgram(
++        string sourcePath,
++        string programName,
++        string entryPoint,
++        string variant,
++        ShaderCompileTarget target,
++        ShaderStage stage,
++        string toolIdentity,
++        string compileIdentity,
++        string bytecodeSha256,
++        IEnumerable<uint> microcodeWords,
++        int registerCount,
++        int registerField,
++        IEnumerable<Xbox360ShaderInterface> inputs,
++        IEnumerable<Xbox360ShaderInterface> outputs,
++        IEnumerable<Xbox360ShaderResource> resources,
++        Xbox360ShaderConstantBufferLayout constantBuffer) {
++        SourcePath = sourcePath;
++        ProgramName = programName;
++        EntryPoint = entryPoint;
++        Variant = variant;
++        Target = target;
++        Stage = stage;
++        ToolIdentity = toolIdentity;
++        CompileIdentity = compileIdentity;
++        BytecodeSha256 = bytecodeSha256;
++        MicrocodeWords = Array.AsReadOnly(microcodeWords.ToArray());
++        RegisterCount = registerCount;
++        RegisterField = registerField;
++        Inputs = Array.AsReadOnly(inputs.ToArray());
++        Outputs = Array.AsReadOnly(outputs.ToArray());
++        Resources = Array.AsReadOnly(resources.ToArray());
++        ConstantBuffer = constantBuffer;
++    }
++
++    public string SourcePath { get; }
++    public string ProgramName { get; }
++    public string EntryPoint { get; }
++    public string Variant { get; }
++    public ShaderCompileTarget Target { get; }
++    public ShaderStage Stage { get; }
++    public string ToolIdentity { get; }
++    public string CompileIdentity { get; }
++    public string BytecodeSha256 { get; }
++    public IReadOnlyList<uint> MicrocodeWords { get; }
++    public int WordCount => MicrocodeWords.Count;
++    public int RegisterCount { get; }
++    public int RegisterField { get; }
++    public IReadOnlyList<Xbox360ShaderInterface> Inputs { get; }
++    public IReadOnlyList<Xbox360ShaderInterface> Outputs { get; }
++    public IReadOnlyList<Xbox360ShaderResource> Resources { get; }
++    public Xbox360ShaderConstantBufferLayout ConstantBuffer { get; }
++}
+diff --git a/builder/shaders/Xbox360ShaderMetadataReader.cs b/builder/shaders/Xbox360ShaderMetadataReader.cs
+new file mode 100644
+index 0000000..4b4ba76
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderMetadataReader.cs
+@@ -0,0 +1,54 @@
++using System.Text;
++using System.Text.Json;
++
++namespace helengine.x360.builder;
++
++internal static class Xbox360ShaderMetadataReader {
++    const int MaximumMetadataBytes = 8 * 1024 * 1024;
++
++    public static JsonDocument Parse(string json) {
++        if (json == null) {
++            throw new InvalidDataException("Compiler metadata is missing.");
++        }
++
++        if (Encoding.UTF8.GetByteCount(json) > MaximumMetadataBytes) {
++            throw new InvalidDataException($"Compiler metadata exceeds the {MaximumMetadataBytes}-byte limit.");
++        }
++
++        JsonDocument document;
++        try {
++            document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 64 });
++        } catch (JsonException exception) {
++            throw new InvalidDataException("Compiler metadata is not valid JSON.", exception);
++        }
++
++        try {
++            if (document.RootElement.ValueKind != JsonValueKind.Object) {
++                throw new InvalidDataException("Compiler metadata root must be a JSON object.");
++            }
++            ValidateUniqueProperties(document.RootElement, "metadata");
++            return document;
++        } catch {
++            document.Dispose();
++            throw;
++        }
++    }
++
++    static void ValidateUniqueProperties(JsonElement value, string path) {
++        if (value.ValueKind == JsonValueKind.Object) {
++            HashSet<string> names = new(StringComparer.Ordinal);
++            foreach (JsonProperty property in value.EnumerateObject()) {
++                if (!names.Add(property.Name)) {
++                    throw new InvalidDataException($"Compiler metadata contains duplicate property '{path}.{property.Name}'.");
++                }
++                ValidateUniqueProperties(property.Value, $"{path}.{property.Name}");
++            }
++        } else if (value.ValueKind == JsonValueKind.Array) {
++            int index = 0;
++            foreach (JsonElement item in value.EnumerateArray()) {
++                ValidateUniqueProperties(item, $"{path}[{index}]");
++                index++;
++            }
++        }
++    }
++}
+diff --git a/builder/shaders/Xbox360ShaderProgramFactory.cs b/builder/shaders/Xbox360ShaderProgramFactory.cs
+new file mode 100644
+index 0000000..2e90630
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderProgramFactory.cs
+@@ -0,0 +1,740 @@
++using System.Buffers.Binary;
++using System.Globalization;
++using System.Security.Cryptography;
++using System.Text.Json;
++using helengine;
++
++namespace helengine.x360.builder;
++
++public static class Xbox360ShaderProgramFactory {
++    const int MaximumMicrocodeWords = 1024;
++    const int MaximumConstantBufferBytes = 4096;
++
++    public static Xbox360ShaderProgram FromCompilation(Xbox360ShaderCompileResult compilation) {
++        ArgumentNullException.ThrowIfNull(compilation);
++        try {
++            return new SnapshotBuilder(compilation).Build();
++        } catch (OverflowException exception) {
++            throw new InvalidDataException("Shader metadata arithmetic overflowed while creating the validated program snapshot.", exception);
++        }
++    }
++
++    sealed class SnapshotBuilder {
++        readonly Xbox360ShaderCompileResult Result;
++        readonly ShaderCompileRequest Request;
++        readonly ShaderProgramDefinition Definition;
++        readonly ShaderCompiledBinary Binary;
++        JsonElement Metadata;
++        int RegisterCount;
++        int RegisterField;
++
++        public SnapshotBuilder(Xbox360ShaderCompileResult result) {
++            Result = result;
++            Request = result.Request;
++            Definition = result.ProgramDefinition;
++            Binary = result.Binary;
++        }
++
++        public Xbox360ShaderProgram Build() {
++            ValidateCompilerResult();
++            using JsonDocument document = Xbox360ShaderMetadataReader.Parse(Result.NativeMetadataJson);
++            Metadata = document.RootElement;
++            ValidateNativeHeader();
++            uint[] microcodeWords = ReadMicrocodeWords();
++            ValidateRegisterMetadata();
++
++            List<InterfaceDraft> reflectedInputs = ReadInterfaces(Definition.Inputs, "program inputs");
++            List<InterfaceDraft> reflectedOutputs = ReadInterfaces(Definition.Outputs, "program outputs");
++            ValidateStageInterfaces(reflectedInputs, reflectedOutputs);
++
++            Dictionary<int, NativeInput> nativeInputs = ReadAndValidateNativeInputs(reflectedInputs);
++            Dictionary<int, int> varyingSlots = ReadAndValidateVaryingMap(reflectedInputs, reflectedOutputs);
++            ValidateNativeOutputs(reflectedOutputs, varyingSlots);
++
++            (List<Xbox360ShaderResource> resources,
++                Xbox360ShaderConstantBufferLayout constantBuffer) = ReadResourcesAndConstants();
++
++            List<Xbox360ShaderInterface> inputs = BuildInputSnapshots(reflectedInputs, nativeInputs);
++            List<Xbox360ShaderInterface> outputs = BuildOutputSnapshots(reflectedOutputs, varyingSlots);
++
++            return new Xbox360ShaderProgram(
++                Request.Source.Path,
++                Request.ProgramName,
++                Request.EntryPoint,
++                Request.Variant,
++                Request.Target,
++                Request.Stage,
++                Result.ToolIdentity,
++                Result.CompileIdentity,
++                Convert.ToHexString(SHA256.HashData(Binary.Bytecode)),
++                microcodeWords,
++                RegisterCount,
++                RegisterField,
++                inputs,
++                outputs,
++                resources,
++                constantBuffer);
++        }
++
++        void ValidateCompilerResult() {
++            if (!Result.Success) {
++                throw Invalid("compilation result", "the compiler result is not successful");
++            }
++            if (Request == null || Definition == null || Binary == null) {
++                throw Invalid("compilation result", "request, program definition, and binary are required");
++            }
++            if (Request.Target != ShaderCompileTarget.Xbox360) {
++                throw Invalid("request target", $"'{Request.Target}' is not Xbox360");
++            }
++            if (Request.Stage is not (ShaderStage.Vertex or ShaderStage.Pixel)) {
++                throw Invalid("request stage", $"'{Request.Stage}' is not a supported Xenos graphics stage");
++            }
++            if (Request.ShaderModel == null || Request.ShaderModel.Major != 4 || Request.ShaderModel.Minor != 0) {
++                throw Invalid("request shader model", "only Xbox360 model 4.0 is supported");
++            }
++            if (string.IsNullOrWhiteSpace(Request.Source?.Path)
++                || string.IsNullOrWhiteSpace(Request.ProgramName)
++                || string.IsNullOrWhiteSpace(Request.EntryPoint)
++                || string.IsNullOrWhiteSpace(Request.Variant)) {
++                throw Invalid("request", "source path, program name, entrypoint, and variant must be nonempty");
++            }
++
++            if (Definition.Stage != Request.Stage
++                || !string.Equals(Definition.Name, Request.ProgramName, StringComparison.Ordinal)
++                || !string.Equals(Definition.EntryPoint, Request.EntryPoint, StringComparison.Ordinal)) {
++                throw Invalid("program definition", "stage, program name, or entrypoint disagrees with the request");
++            }
++            if (Definition.Variants == null || Definition.Variants.Length != 1
++                || Definition.Variants[0] == null
++                || !string.Equals(Definition.Variants[0].Name, Request.Variant, StringComparison.Ordinal)) {
++                throw Invalid("program definition variants", "the single reflected variant must match the request variant");
++            }
++
++            if (Binary.Target != Request.Target
++                || Binary.Stage != Request.Stage
++                || !string.Equals(Binary.EntryPoint, Request.EntryPoint, StringComparison.Ordinal)
++                || !string.Equals(Binary.Variant, Request.Variant, StringComparison.Ordinal)) {
++                throw Invalid("compiled binary", "target, stage, entrypoint, or variant disagrees with the request");
++            }
++            ValidateIdentity(Result.ToolIdentity, "tool identity");
++            ValidateIdentity(Result.CompileIdentity, "compile identity");
++
++            if (Binary.Bytecode == null || Binary.Bytecode.Length == 0) {
++                throw Invalid("microcode", "bytecode must be nonempty");
++            }
++            if ((Binary.Bytecode.Length & 3) != 0) {
++                throw Invalid("microcode", $"bytecode length {Binary.Bytecode.Length} is not dword-aligned");
++            }
++            int wordCount = Binary.Bytecode.Length / sizeof(uint);
++            if (wordCount > MaximumMicrocodeWords) {
++                throw Invalid("microcode", $"word count {wordCount} exceeds {MaximumMicrocodeWords}");
++            }
++            if (wordCount % 3 != 0) {
++                throw Invalid("microcode", $"dword count {wordCount} is not divisible by three Xenos instructions");
++            }
++        }
++
++        void ValidateNativeHeader() {
++            string stageName = Request.Stage == ShaderStage.Vertex ? "vertex" : "pixel";
++            RequireString(Metadata, "stage", "metadata", stageName);
++            RequireString(Metadata, "entrypoint", "metadata", Request.EntryPoint);
++            RequireString(Metadata, "binary_dword_byte_order", "metadata", "big_endian");
++
++            JsonElement unsupported = RequireArray(Metadata, "unsupported_features", "metadata");
++            if (unsupported.GetArrayLength() != 0) {
++                throw Invalid("metadata.unsupported_features", "must be empty for a production shader program");
++            }
++        }
++
++        uint[] ReadMicrocodeWords() {
++            byte[] bytecode = Binary.Bytecode;
++            uint[] words = new uint[bytecode.Length / sizeof(uint)];
++            for (int index = 0; index < words.Length; index++) {
++                words[index] = BinaryPrimitives.ReadUInt32BigEndian(bytecode.AsSpan(index * sizeof(uint), sizeof(uint)));
++            }
++            return words;
++        }
++
++        void ValidateRegisterMetadata() {
++            RegisterCount = RequireInt(Metadata, "register_count", "metadata", minimum: 1, maximum: 64);
++            int highest = RequireInt(Metadata, "highest_register_index", "metadata", minimum: 0, maximum: 63);
++            RegisterField = RequireInt(Metadata, "sq_program_cntl_register_field", "metadata", minimum: 0, maximum: 63);
++            if (highest != RegisterCount - 1) {
++                throw Invalid("metadata.highest_register_index", $"{highest} does not equal register_count - 1 ({RegisterCount - 1})");
++            }
++            if (RegisterField != RegisterCount - 1) {
++                throw Invalid("metadata.sq_program_cntl_register_field", $"{RegisterField} does not equal register_count - 1 ({RegisterCount - 1})");
++            }
++        }
++
++        List<InterfaceDraft> ReadInterfaces(ShaderVertexElement[] elements, string owner) {
++            if (elements == null) {
++                throw Invalid(owner, "interface collection is missing");
++            }
++            List<InterfaceDraft> interfaces = new(elements.Length);
++            HashSet<(Xbox360ShaderInterfaceKind Kind, int Index)> seen = new();
++            foreach (ShaderVertexElement element in elements) {
++                if (element == null) {
++                    throw Invalid(owner, "contains a null interface entry");
++                }
++                int width = GetWidth(element.Format, $"{owner} format");
++                Xbox360ShaderInterfaceKind kind;
++                if (string.Equals(element.Semantic, "LOCATION", StringComparison.Ordinal)) {
++                    if (element.Index > 7) {
++                        throw Invalid(owner, $"location {element.Index} is outside the 0..7 varying range");
++                    }
++                    kind = Xbox360ShaderInterfaceKind.Location;
++                } else if (string.Equals(element.Semantic, "SV_POSITION", StringComparison.Ordinal)) {
++                    if (element.Index != 0 || width != 4) {
++                        throw Invalid(owner, "SV_POSITION must be float4 at index 0");
++                    }
++                    kind = Xbox360ShaderInterfaceKind.Position;
++                } else {
++                    throw Invalid(owner, $"semantic '{element.Semantic}' is not a LOCATION or SV_POSITION interface");
++                }
++
++                if (!seen.Add((kind, element.Index))) {
++                    throw Invalid(owner, $"duplicate {kind} interface index {element.Index}");
++                }
++                interfaces.Add(new InterfaceDraft(kind, element.Index, width, element.Format));
++            }
++            return interfaces;
++        }
++
++        void ValidateStageInterfaces(List<InterfaceDraft> inputs, List<InterfaceDraft> outputs) {
++            if (Request.Stage == ShaderStage.Vertex) {
++                if (inputs.Any(input => input.Kind != Xbox360ShaderInterfaceKind.Location)) {
++                    throw Invalid("vertex inputs", "builtin interfaces are not supported");
++                }
++                if (inputs.Any(input => input.Index > 3)) {
++                    throw Invalid("vertex inputs", "only LOCATION0 through LOCATION3 have a supported vf0 layout");
++                }
++                if (outputs.Count(output => output.Kind == Xbox360ShaderInterfaceKind.Position) != 1) {
++                    throw Invalid("vertex outputs", "exactly one SV_POSITION float4 output is required");
++                }
++                if (outputs.Any(output => output.Kind is not (Xbox360ShaderInterfaceKind.Location or Xbox360ShaderInterfaceKind.Position))) {
++                    throw Invalid("vertex outputs", "contains an unsupported interface kind");
++                }
++            } else {
++                if (inputs.Any(input => input.Kind != Xbox360ShaderInterfaceKind.Location)) {
++                    throw Invalid("pixel inputs", "builtin interfaces are not supported");
++                }
++                if (outputs.Count != 1
++                    || outputs[0].Kind != Xbox360ShaderInterfaceKind.Location
++                    || outputs[0].Index != 0
++                    || outputs[0].Width != 4) {
++                    throw Invalid("pixel outputs", "exactly one float4 LOCATION0 color output is required");
++                }
++            }
++        }
++
++        Dictionary<int, NativeInput> ReadAndValidateNativeInputs(List<InterfaceDraft> reflectedInputs) {
++            Dictionary<int, NativeInput> inputs = ReadNativeInputMap("inputs");
++            Dictionary<int, NativeInput> inputMap = ReadNativeInputMap("input_map");
++            if (inputs.Count != inputMap.Count || inputs.Any(pair => !inputMap.TryGetValue(pair.Key, out NativeInput other) || pair.Value != other)) {
++                throw Invalid("metadata.inputs/input_map", "the two native input maps disagree");
++            }
++
++            int[] expectedLocations = reflectedInputs.Select(input => input.Index).Order().ToArray();
++            if (!inputs.Keys.Order().SequenceEqual(expectedLocations)) {
++                throw Invalid("metadata.inputs", "native input locations do not exactly match reflected interfaces");
++            }
++
++            foreach (InterfaceDraft input in reflectedInputs) {
++                NativeInput native = inputs[input.Index];
++                if (native.Register < 0 || native.Register >= RegisterCount) {
++                    throw Invalid($"metadata.inputs[{input.Index}].register", "register is outside the declared stage register range");
++                }
++                if (Request.Stage == ShaderStage.Vertex) {
++                    (int width, int offset, string hardwareFormat) = input.Index switch {
++                        0 => (3, 0, "32_32_32_FLOAT"),
++                        1 => (3, 3, "32_32_32_FLOAT"),
++                        2 => (2, 6, "32_32_FLOAT"),
++                        3 => (4, 8, "32_32_32_32_FLOAT"),
++                        _ => throw Invalid("vertex inputs", $"LOCATION{input.Index} is unsupported")
++                    };
++                    if (input.Width != width
++                        || native.FetchConstant != 0
++                        || native.Stride != 12
++                        || native.Offset != offset
++                        || !string.Equals(native.HardwareFormat, hardwareFormat, StringComparison.Ordinal)) {
++                        throw Invalid($"metadata.inputs[{input.Index}]", "fetch constant, stride, offset, or hardware format disagrees with the vf0 layout");
++                    }
++                } else if (!string.Equals(native.Kind, "interpolator", StringComparison.Ordinal)
++                    || native.Register != input.Index) {
++                    throw Invalid($"metadata.inputs[{input.Index}]", "pixel inputs must be interpolators whose register equals their location");
++                }
++            }
++            return inputs;
++        }
++
++        Dictionary<int, NativeInput> ReadNativeInputMap(string propertyName) {
++            JsonElement inputObject = RequireObject(Metadata, propertyName, "metadata");
++            Dictionary<int, NativeInput> result = new();
++            foreach (JsonProperty property in inputObject.EnumerateObject()) {
++                int location = ParseLocationKey(property.Name, $"metadata.{propertyName}", maximum: 7);
++                JsonElement item = property.Value;
++                RequireKind(item, JsonValueKind.Object, $"metadata.{propertyName}[{location}]");
++                int register = RequireInt(item, "register", $"metadata.{propertyName}[{location}]", 0, 63);
++                NativeInput native;
++                if (Request.Stage == ShaderStage.Vertex) {
++                    native = new NativeInput(
++                        register,
++                        RequireInt(item, "fetch_constant", $"metadata.{propertyName}[{location}]", 0, 95),
++                        RequireInt(item, "stride", $"metadata.{propertyName}[{location}]", 1, int.MaxValue),
++                        RequireInt(item, "offset", $"metadata.{propertyName}[{location}]", 0, int.MaxValue),
++                        RequireString(item, "format", $"metadata.{propertyName}[{location}]"),
++                        null);
++                } else {
++                    native = new NativeInput(
++                        register, null, null, null, null,
++                        RequireString(item, "kind", $"metadata.{propertyName}[{location}]"));
++                }
++                result.Add(location, native);
++            }
++            return result;
++        }
++
++        Dictionary<int, int> ReadAndValidateVaryingMap(
++            List<InterfaceDraft> reflectedInputs,
++            List<InterfaceDraft> reflectedOutputs) {
++            JsonElement varyingObject = RequireObject(Metadata, "varying_map", "metadata");
++            Dictionary<int, int> map = new();
++            foreach (JsonProperty property in varyingObject.EnumerateObject()) {
++                int location = ParseLocationKey(property.Name, "metadata.varying_map", maximum: 7);
++                int slot = ReadInt(property.Value, $"metadata.varying_map[{location}]", 0, 7);
++                map.Add(location, slot);
++            }
++
++            IEnumerable<int> requiredLocations = Request.Stage == ShaderStage.Vertex
++                ? reflectedOutputs.Where(item => item.Kind == Xbox360ShaderInterfaceKind.Location).Select(item => item.Index)
++                : reflectedInputs.Where(item => item.Kind == Xbox360ShaderInterfaceKind.Location).Select(item => item.Index);
++            int[] expected = requiredLocations.Order().ToArray();
++            if (!map.Keys.Order().SequenceEqual(expected)) {
++                throw Invalid("metadata.varying_map", "locations do not exactly match vertex outputs or pixel inputs");
++            }
++            foreach ((int location, int slot) in map) {
++                if (slot != location) {
++                    throw Invalid("metadata.varying_map", $"LOCATION{location} must use physical varying slot {location}, not {slot}");
++                }
++            }
++            return map;
++        }
++
++        void ValidateNativeOutputs(List<InterfaceDraft> reflectedOutputs, Dictionary<int, int> varyingSlots) {
++            JsonElement nativeOutputs = RequireArray(Metadata, "outputs", "metadata");
++            HashSet<int> nativeVaryings = new();
++            HashSet<int> nativeColors = new();
++            int positions = 0;
++            foreach (JsonElement item in nativeOutputs.EnumerateArray()) {
++                RequireKind(item, JsonValueKind.Object, "metadata.outputs item");
++                string kind = RequireString(item, "kind", "metadata.outputs item");
++                switch (kind) {
++                    case "position" when Request.Stage == ShaderStage.Vertex:
++                        positions++;
++                        break;
++                    case "varying" when Request.Stage == ShaderStage.Vertex:
++                        int varyingLocation = RequireInt(item, "location", "metadata.outputs varying", 0, 7);
++                        if (!nativeVaryings.Add(varyingLocation)) {
++                            throw Invalid("metadata.outputs", $"duplicate vertex varying export at physical slot {varyingLocation}");
++                        }
++                        break;
++                    case "color" when Request.Stage == ShaderStage.Pixel:
++                        int colorLocation = RequireInt(item, "location", "metadata.outputs color", 0, 7);
++                        if (!nativeColors.Add(colorLocation)) {
++                            throw Invalid("metadata.outputs", $"duplicate pixel color export at location {colorLocation}");
++                        }
++                        break;
++                    default:
++                        throw Invalid("metadata.outputs", $"native output kind '{kind}' is unsupported for {Request.Stage}");
++                }
++            }
++
++            if (Request.Stage == ShaderStage.Vertex) {
++                int[] expectedVaryings = reflectedOutputs
++                    .Where(output => output.Kind == Xbox360ShaderInterfaceKind.Location)
++                    .Select(output => varyingSlots[output.Index])
++                    .Order().ToArray();
++                if (positions != 1 || !nativeVaryings.Order().SequenceEqual(expectedVaryings)) {
++                    throw Invalid("metadata.outputs", "position or varying exports do not match reflected vertex outputs");
++                }
++            } else if (nativeColors.Count != 1 || !nativeColors.Contains(0)) {
++                throw Invalid("metadata.outputs", "pixel color exports must contain exactly LOCATION0");
++            }
++        }
++
++        List<Xbox360ShaderInterface> BuildInputSnapshots(
++            List<InterfaceDraft> reflectedInputs,
++            Dictionary<int, NativeInput> nativeInputs) {
++            List<Xbox360ShaderInterface> inputs = new(reflectedInputs.Count);
++            foreach (InterfaceDraft input in reflectedInputs) {
++                NativeInput native = nativeInputs[input.Index];
++                if (Request.Stage == ShaderStage.Vertex) {
++                    Xbox360ShaderVertexFetchLayout fetch = new(
++                        native.FetchConstant.Value,
++                        native.Stride.Value,
++                        native.Offset.Value,
++                        native.HardwareFormat);
++                    inputs.Add(new Xbox360ShaderInterface(input.Kind, input.Index, input.Width,
++                        input.Format, null, fetch));
++                } else {
++                    inputs.Add(new Xbox360ShaderInterface(input.Kind, input.Index, input.Width,
++                        input.Format, native.Register, null));
++                }
++            }
++            return inputs;
++        }
++
++        List<Xbox360ShaderInterface> BuildOutputSnapshots(
++            List<InterfaceDraft> reflectedOutputs,
++            Dictionary<int, int> varyingSlots) {
++            List<Xbox360ShaderInterface> outputs = new(reflectedOutputs.Count);
++            foreach (InterfaceDraft output in reflectedOutputs) {
++                int? physicalSlot = output.Kind == Xbox360ShaderInterfaceKind.Location
++                    ? Request.Stage == ShaderStage.Vertex ? varyingSlots[output.Index] : output.Index
++                    : null;
++                outputs.Add(new Xbox360ShaderInterface(output.Kind, output.Index, output.Width,
++                    output.Format, physicalSlot, null));
++            }
++            return outputs;
++        }
++
++        (List<Xbox360ShaderResource> Resources, Xbox360ShaderConstantBufferLayout ConstantBuffer) ReadResourcesAndConstants() {
++            if (Definition.Bindings == null) {
++                throw Invalid("program definition bindings", "binding collection is missing");
++            }
++            List<ShaderBinding> constantBindings = new();
++            List<ShaderBinding> textureBindings = new();
++            List<ShaderBinding> samplerBindings = new();
++            foreach (ShaderBinding binding in Definition.Bindings) {
++                if (binding == null || string.IsNullOrWhiteSpace(binding.Name)) {
++                    throw Invalid("program definition bindings", "contains a missing binding or name");
++                }
++                if (binding.Set != 0) {
++                    throw Invalid($"binding '{binding.Name}'", "only descriptor set 0 is supported");
++                }
++                switch (binding.Type) {
++                    case ShaderResourceType.ConstantBuffer:
++                        constantBindings.Add(binding);
++                        break;
++                    case ShaderResourceType.Texture2D:
++                        textureBindings.Add(binding);
++                        break;
++                    case ShaderResourceType.Sampler:
++                        samplerBindings.Add(binding);
++                        break;
++                    default:
++                        throw Invalid($"binding '{binding.Name}'", $"resource type '{binding.Type}' is unsupported");
++                }
++            }
++            if (constantBindings.Count > 1) {
++                throw Invalid("constant buffers", "only one b0/set0 buffer is supported per stage");
++            }
++            if (textureBindings.Count > 1 || samplerBindings.Count > 1) {
++                throw Invalid("texture resources", "only one Texture2D and one Sampler are supported per stage");
++            }
++            if (textureBindings.Count != samplerBindings.Count) {
++                throw Invalid("texture resources", "Texture2D and Sampler must be declared together");
++            }
++            if (textureBindings.Count != 0 && Request.Stage != ShaderStage.Pixel) {
++                throw Invalid("texture resources", "Texture2D and Sampler are pixel-stage only");
++            }
++
++            ShaderBinding constant = constantBindings.SingleOrDefault();
++            Xbox360ShaderConstantBufferLayout constantLayout = null;
++            List<Xbox360ShaderDeclaredConstantMember> declared = new();
++            if (constant != null) {
++                if (constant.Slot != Request.Options.BindingPolicy.ConstantBufferShift) {
++                    throw Invalid($"binding '{constant.Name}'", "logical b0 slot does not match the requested constant-buffer shift");
++                }
++                declared = ValidateDeclaredConstantMembers(constant);
++                int bankBase = Request.Stage == ShaderStage.Vertex ? 0 : 256;
++                constantLayout = ReadConstantBufferMetadata(constant, declared, bankBase);
++            } else {
++                JsonElement uniforms = RequireObject(Metadata, "uniforms", "metadata");
++                if (uniforms.EnumerateObject().Any()) {
++                    throw Invalid("metadata.uniforms", "contains a native uniform mapping without a reflected constant buffer");
++                }
++            }
++
++            List<Xbox360ShaderResource> resources = new();
++            if (constant != null) {
++                resources.Add(new Xbox360ShaderResource(constant.Name, constant.Type, constant.Set,
++                    constant.Slot, 0, 0, null, constantLayout.PhysicalBankBaseRegister));
++            }
++            if (textureBindings.Count == 0) {
++                JsonElement texturesWithoutBindings = RequireArray(Metadata, "textures", "metadata");
++                if (texturesWithoutBindings.GetArrayLength() != 0) {
++                    throw Invalid("metadata.textures", "contains a native texture mapping without a reflected texture/sampler pair");
++                }
++                return (resources, constantLayout);
++            }
++
++            ShaderBinding texture = textureBindings[0];
++            ShaderBinding sampler = samplerBindings[0];
++            ValidateNonConstantBinding(texture);
++            ValidateNonConstantBinding(sampler);
++            int rawTextureBinding = SubtractShift(texture.Slot, Request.Options.BindingPolicy.TextureShift, texture.Name);
++            int rawSamplerBinding = SubtractShift(sampler.Slot, Request.Options.BindingPolicy.SamplerShift, sampler.Name);
++            JsonElement nativeTextures = RequireArray(Metadata, "textures", "metadata");
++            if (nativeTextures.GetArrayLength() != 1) {
++                throw Invalid("metadata.textures", "must contain exactly one native Texture2D/Sampler access");
++            }
++            JsonElement nativeTexture = nativeTextures[0];
++            RequireKind(nativeTexture, JsonValueKind.Object, "metadata.textures[0]");
++            int textureSet = RequireInt(nativeTexture, "texture_set", "metadata.textures[0]", 0, int.MaxValue);
++            int textureBinding = RequireInt(nativeTexture, "texture_binding", "metadata.textures[0]", 0, int.MaxValue);
++            int samplerSet = RequireInt(nativeTexture, "sampler_set", "metadata.textures[0]", 0, int.MaxValue);
++            int samplerBinding = RequireInt(nativeTexture, "sampler_binding", "metadata.textures[0]", 0, int.MaxValue);
++            int fetchConstant = RequireInt(nativeTexture, "fetch_constant", "metadata.textures[0]", 0, 31);
++            RequireString(nativeTexture, "stage", "metadata.textures[0]", "pixel");
++            RequireString(nativeTexture, "dimension", "metadata.textures[0]", "2D");
++            if (textureSet != texture.Set || samplerSet != sampler.Set
++                || textureBinding != rawTextureBinding || samplerBinding != rawSamplerBinding
++                || fetchConstant != 1) {
++                throw Invalid("metadata.textures[0]", "native set, binding, or tf1 slot disagrees with the reflected pair and request shifts");
++            }
++
++            resources.Add(new Xbox360ShaderResource(texture.Name, texture.Type, texture.Set,
++                texture.Slot, textureSet, textureBinding, fetchConstant, null));
++            resources.Add(new Xbox360ShaderResource(sampler.Name, sampler.Type, sampler.Set,
++                sampler.Slot, samplerSet, samplerBinding, fetchConstant, null));
++            return (resources, constantLayout);
++        }
++
++        List<Xbox360ShaderDeclaredConstantMember> ValidateDeclaredConstantMembers(ShaderBinding binding) {
++            if (binding.Size <= 0 || binding.Size > MaximumConstantBufferBytes || binding.Size % 16 != 0) {
++                throw Invalid($"constant buffer '{binding.Name}'", "size must be positive, 16-byte padded, and no more than 4096 bytes");
++            }
++            if (binding.Members == null) {
++                throw Invalid($"constant buffer '{binding.Name}'", "declared members are missing");
++            }
++            List<Xbox360ShaderDeclaredConstantMember> members = new(binding.Members.Length);
++            HashSet<string> names = new(StringComparer.Ordinal);
++            List<(int Start, int End, string Name)> ranges = new();
++            foreach (ShaderConstantMember member in binding.Members) {
++                if (member == null || string.IsNullOrWhiteSpace(member.Name)) {
++                    throw Invalid($"constant buffer '{binding.Name}'", "contains a missing declared member or name");
++                }
++                if (!names.Add(member.Name)) {
++                    throw Invalid($"constant buffer '{binding.Name}'", $"declared member '{member.Name}' appears more than once");
++                }
++                int expectedSize = member.Type switch {
++                    "float" => 4,
++                    "float2" => 8,
++                    "float3" => 12,
++                    "float4" => 16,
++                    "float4x4" => 64,
++                    _ => throw Invalid($"constant buffer member '{member.Name}'", $"type '{member.Type}' is unsupported")
++                };
++                if (member.Size != expectedSize) {
++                    throw Invalid($"constant buffer member '{member.Name}'", $"size {member.Size} does not match {member.Type} ({expectedSize} bytes)");
++                }
++                if (member.Offset < 0 || member.Offset % 16 != 0) {
++                    throw Invalid($"constant buffer member '{member.Name}'", "offset must be nonnegative and float4-aligned");
++                }
++                int end = checked(member.Offset + member.Size);
++                if (end > binding.Size) {
++                    throw Invalid($"constant buffer member '{member.Name}'", "extends beyond the declared buffer size");
++                }
++                ranges.Add((member.Offset, end, member.Name));
++                members.Add(new Xbox360ShaderDeclaredConstantMember(member.Name, member.Type, member.Offset, member.Size));
++            }
++            ranges.Sort((left, right) => left.Start.CompareTo(right.Start));
++            for (int index = 1; index < ranges.Count; index++) {
++                if (ranges[index].Start < ranges[index - 1].End) {
++                    throw Invalid($"constant buffer '{binding.Name}'", $"members '{ranges[index - 1].Name}' and '{ranges[index].Name}' overlap");
++                }
++            }
++            return members;
++        }
++
++        Xbox360ShaderConstantBufferLayout ReadConstantBufferMetadata(
++            ShaderBinding binding,
++            List<Xbox360ShaderDeclaredConstantMember> declared,
++            int bankBase) {
++            JsonElement uniforms = RequireObject(Metadata, "uniforms", "metadata");
++            JsonProperty[] entries = uniforms.EnumerateObject().ToArray();
++            if (entries.Length != 1 || !string.Equals(entries[0].Name, "0", StringComparison.Ordinal)) {
++                throw Invalid("metadata.uniforms", "a reflected constant buffer requires exactly native uniform key '0'");
++            }
++            JsonElement uniform = entries[0].Value;
++            RequireKind(uniform, JsonValueKind.Object, "metadata.uniforms.0");
++            if (RequireInt(uniform, "binding", "metadata.uniforms.0", 0, int.MaxValue) != 0
++                || RequireInt(uniform, "descriptor_set", "metadata.uniforms.0", 0, int.MaxValue) != 0) {
++                throw Invalid("metadata.uniforms.0", "only b0/set0 is supported");
++            }
++            RequireString(uniform, "raw_memory_order", "metadata.uniforms.0", "consecutive_uploaded_vec4_registers");
++            int capacity = RequireInt(uniform, "register_count", "metadata.uniforms.0", 1, 256);
++            if (capacity != binding.Size / 16) {
++                throw Invalid("metadata.uniforms.0.register_count", $"capacity {capacity} does not match reflected buffer size {binding.Size}");
++            }
++            if (uniform.TryGetProperty("register_values", out _)) {
++                throw Invalid("metadata.uniforms.0.register_values", "value-based constant uploads are not supported on this production route");
++            }
++
++            JsonElement usedArray = RequireArray(uniform, "members", "metadata.uniforms.0");
++            List<Xbox360ShaderUsedConstantMember> used = new(usedArray.GetArrayLength());
++            HashSet<int> usedOffsets = new();
++            Dictionary<int, Xbox360ShaderDeclaredConstantMember> declaredByOffset = declared.ToDictionary(member => member.OffsetBytes);
++            foreach (JsonElement item in usedArray.EnumerateArray()) {
++                RequireKind(item, JsonValueKind.Object, "metadata.uniforms.0.members item");
++                int offset = RequireInt(item, "offset_bytes", "metadata.uniforms.0.members item", 0, binding.Size - 1);
++                if (!usedOffsets.Add(offset)) {
++                    throw Invalid("metadata.uniforms.0.members", $"duplicate access at offset {offset}");
++                }
++                if (!declaredByOffset.TryGetValue(offset, out Xbox360ShaderDeclaredConstantMember member)) {
++                    throw Invalid("metadata.uniforms.0.members", $"offset {offset} does not exactly match a declared member");
++                }
++                JsonElement registersElement = RequireArray(item, "registers", "metadata.uniforms.0.members item");
++                int registerCount = member.Type == "float4x4" ? 4 : 1;
++                if (registersElement.GetArrayLength() != registerCount) {
++                    throw Invalid($"metadata.uniforms.0.members offset {offset}", $"expected {registerCount} consecutive register(s)");
++                }
++                int firstRegister = offset / 16;
++                int[] registers = new int[registerCount];
++                for (int index = 0; index < registerCount; index++) {
++                    registers[index] = ReadInt(registersElement[index], $"metadata.uniforms.0.members[{offset}].registers[{index}]", 0, capacity - 1);
++                    if (registers[index] != firstRegister + index) {
++                        throw Invalid($"metadata.uniforms.0.members offset {offset}", "registers must be the exact contiguous range beginning at offset_bytes / 16");
++                    }
++                }
++
++                string major = null;
++                int? stride = null;
++                bool isMatrix = member.Type == "float4x4";
++                bool hasMajor = item.TryGetProperty("major", out JsonElement majorElement);
++                bool hasStride = item.TryGetProperty("matrix_stride_bytes", out JsonElement strideElement);
++                if (isMatrix) {
++                    if (!hasMajor || !hasStride) {
++                        throw Invalid($"metadata.uniforms.0.members offset {offset}", "matrix access requires major orientation and matrix stride");
++                    }
++                    major = ReadString(majorElement, $"metadata.uniforms.0.members offset {offset}.major");
++                    if (major is not ("row_major" or "column_major")) {
++                        throw Invalid($"metadata.uniforms.0.members offset {offset}.major", "must be row_major or column_major");
++                    }
++                    stride = ReadInt(strideElement, $"metadata.uniforms.0.members offset {offset}.matrix_stride_bytes", 1, int.MaxValue);
++                    if (stride != 16) {
++                        throw Invalid($"metadata.uniforms.0.members offset {offset}", "matrix stride must be 16 bytes");
++                    }
++                } else if (hasMajor || hasStride) {
++                    throw Invalid($"metadata.uniforms.0.members offset {offset}", "scalar/vector access must not carry matrix decorations");
++                }
++                used.Add(new Xbox360ShaderUsedConstantMember(member.Name, offset, registers, major, stride));
++            }
++            return new Xbox360ShaderConstantBufferLayout(binding.Size, capacity, bankBase, declared, used);
++        }
++
++        void ValidateNonConstantBinding(ShaderBinding binding) {
++            if (binding.Size != 0 || binding.Members == null || binding.Members.Length != 0) {
++                throw Invalid($"binding '{binding.Name}'", "texture and sampler resources must not carry constant-buffer size or members");
++            }
++        }
++
++        static int SubtractShift(int logicalSlot, int shift, string name) {
++            int raw;
++            try {
++                raw = checked(logicalSlot - shift);
++            } catch (OverflowException exception) {
++                throw new InvalidDataException($"Binding '{name}' physical-slot subtraction overflowed.", exception);
++            }
++            if (raw < 0) {
++                throw Invalid($"binding '{name}'", "logical slot is below the requested binding shift");
++            }
++            return raw;
++        }
++
++        static int ParseLocationKey(string key, string owner, int maximum) {
++            if (!int.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out int location)
++                || location < 0 || location > maximum
++                || !string.Equals(key, location.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)) {
++                throw Invalid(owner, $"key '{key}' is not a canonical location in 0..{maximum}");
++            }
++            return location;
++        }
++
++        static int GetWidth(string format, string owner) => format switch {
++            "float" => 1,
++            "float2" => 2,
++            "float3" => 3,
++            "float4" => 4,
++            _ => throw Invalid(owner, $"format '{format}' is unsupported")
++        };
++
++        static void ValidateIdentity(string identity, string owner) {
++            if (identity == null || identity.Length != 64 || identity.Any(character =>
++                !(character is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F'))) {
++                throw Invalid(owner, "must be exactly 64 hexadecimal characters");
++            }
++        }
++
++        static string RequireString(JsonElement parent, string propertyName, string owner, string expected = null) {
++            JsonElement value = RequireProperty(parent, propertyName, owner);
++            string actual = ReadString(value, $"{owner}.{propertyName}");
++            if (expected != null && !string.Equals(actual, expected, StringComparison.Ordinal)) {
++                throw Invalid($"{owner}.{propertyName}", $"'{actual}' does not match expected '{expected}'");
++            }
++            return actual;
++        }
++
++        static string ReadString(JsonElement value, string owner) {
++            if (value.ValueKind != JsonValueKind.String) {
++                throw Invalid(owner, "must be a JSON string");
++            }
++            string result = value.GetString();
++            if (string.IsNullOrWhiteSpace(result)) {
++                throw Invalid(owner, "must be nonempty");
++            }
++            return result;
++        }
++
++        static int RequireInt(JsonElement parent, string propertyName, string owner, int minimum, int maximum) =>
++            ReadInt(RequireProperty(parent, propertyName, owner), $"{owner}.{propertyName}", minimum, maximum);
++
++        static int ReadInt(JsonElement value, string owner, int minimum, int maximum) {
++            if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out int result)
++                || result < minimum || result > maximum) {
++                throw Invalid(owner, $"value {value.GetRawText()} must be an integer in {minimum}..{maximum}");
++            }
++            return result;
++        }
++
++        static JsonElement RequireObject(JsonElement parent, string propertyName, string owner) {
++            JsonElement value = RequireProperty(parent, propertyName, owner);
++            RequireKind(value, JsonValueKind.Object, $"{owner}.{propertyName}");
++            return value;
++        }
++
++        static JsonElement RequireArray(JsonElement parent, string propertyName, string owner) {
++            JsonElement value = RequireProperty(parent, propertyName, owner);
++            RequireKind(value, JsonValueKind.Array, $"{owner}.{propertyName}");
++            return value;
++        }
++
++        static JsonElement RequireProperty(JsonElement parent, string propertyName, string owner) {
++            if (parent.ValueKind != JsonValueKind.Object || !parent.TryGetProperty(propertyName, out JsonElement value)) {
++                throw Invalid(owner, $"is missing required field '{propertyName}'");
++            }
++            return value;
++        }
++
++        static void RequireKind(JsonElement value, JsonValueKind expected, string owner) {
++            if (value.ValueKind != expected) {
++                throw Invalid(owner, $"must be a JSON {expected.ToString().ToLowerInvariant()}");
++            }
++        }
++
++        static InvalidDataException Invalid(string owner, string detail) =>
++            new($"Xbox360 shader {owner}: {detail}.");
++
++        readonly record struct InterfaceDraft(Xbox360ShaderInterfaceKind Kind, int Index, int Width, string Format);
++
++        readonly record struct NativeInput(
++            int Register,
++            int? FetchConstant,
++            int? Stride,
++            int? Offset,
++            string HardwareFormat,
++            string Kind);
++    }
++}
+diff --git a/builder/shaders/Xbox360ShaderProgramPair.cs b/builder/shaders/Xbox360ShaderProgramPair.cs
+new file mode 100644
+index 0000000..27fc9c5
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderProgramPair.cs
+@@ -0,0 +1,108 @@
++using helengine;
++
++namespace helengine.x360.builder;
++
++/// <summary>A validated vertex/pixel pairing and its bounded host upload costs.</summary>
++public sealed class Xbox360ShaderProgramPair {
++    public const int MaximumSafeUploadBudgetDwords = 8192;
++    const int StateUploadDwordCost = 10;
++
++    Xbox360ShaderProgramPair(
++        Xbox360ShaderProgram vertex,
++        Xbox360ShaderProgram pixel,
++        uint programControl,
++        int interpolatorCount,
++        int programUploadDwords,
++        int constantUploadDwords,
++        int stateUploadDwords) {
++        Vertex = vertex;
++        Pixel = pixel;
++        ProgramControl = programControl;
++        InterpolatorCount = interpolatorCount;
++        ProgramUploadDwords = programUploadDwords;
++        ConstantUploadDwords = constantUploadDwords;
++        StateUploadDwords = stateUploadDwords;
++        PairUploadDwords = checked(programUploadDwords + constantUploadDwords + stateUploadDwords);
++    }
++
++    public Xbox360ShaderProgram Vertex { get; }
++    public Xbox360ShaderProgram Pixel { get; }
++    public uint ProgramControl { get; }
++    public int InterpolatorCount { get; }
++    public int ProgramUploadDwords { get; }
++    public int ConstantUploadDwords { get; }
++    public int StateUploadDwords { get; }
++    public int PairUploadDwords { get; }
++
++    public static Xbox360ShaderProgramPair Link(Xbox360ShaderProgram vertex, Xbox360ShaderProgram pixel) {
++        ArgumentNullException.ThrowIfNull(vertex);
++        ArgumentNullException.ThrowIfNull(pixel);
++        if (vertex.Stage != ShaderStage.Vertex || pixel.Stage != ShaderStage.Pixel) {
++            throw new InvalidDataException("Xbox360 shader pair must be linked in vertex-then-pixel stage order.");
++        }
++        if (vertex.Target != ShaderCompileTarget.Xbox360 || pixel.Target != ShaderCompileTarget.Xbox360) {
++            throw new InvalidDataException("Xbox360 shader pair contains a program for another target.");
++        }
++        if (!string.Equals(vertex.Variant, pixel.Variant, StringComparison.Ordinal)) {
++            throw new InvalidDataException("Xbox360 shader pair programs must use the same variant.");
++        }
++        if (!string.Equals(vertex.ToolIdentity, pixel.ToolIdentity, StringComparison.OrdinalIgnoreCase)) {
++            throw new InvalidDataException("Xbox360 shader pair programs must have the same tool identity.");
++        }
++
++        Xbox360ShaderInterface[] vertexVaryings = vertex.Outputs
++            .Where(output => output.Kind == Xbox360ShaderInterfaceKind.Location)
++            .ToArray();
++        foreach (Xbox360ShaderInterface input in pixel.Inputs) {
++            if (input.Kind != Xbox360ShaderInterfaceKind.Location) {
++                throw new InvalidDataException("Xbox360 pixel inputs must be location varyings.");
++            }
++            Xbox360ShaderInterface output = vertexVaryings.SingleOrDefault(candidate => candidate.Index == input.Index);
++            if (output == null) {
++                throw new InvalidDataException($"Xbox360 pixel input LOCATION{input.Index} has no vertex output.");
++            }
++            if (output.Width != input.Width) {
++                throw new InvalidDataException($"Xbox360 varying LOCATION{input.Index} width differs between vertex and pixel programs.");
++            }
++            if (!output.PhysicalSlot.HasValue || !input.PhysicalSlot.HasValue
++                || output.PhysicalSlot.Value != input.PhysicalSlot.Value) {
++                throw new InvalidDataException($"Xbox360 varying LOCATION{input.Index} has mismatched physical slots.");
++            }
++        }
++
++        int highestVaryingSlot = vertexVaryings.Length == 0
++            ? 0
++            : vertexVaryings.Max(output => output.PhysicalSlot.Value);
++        int interpolatorCount = vertexVaryings.Length == 0 ? 0 : checked(highestVaryingSlot + 1);
++        uint programControl = (uint)vertex.RegisterField
++            | ((uint)pixel.RegisterField << 8)
++            | ((uint)highestVaryingSlot << 20);
++
++        int programUploadDwords = checked(vertex.WordCount + pixel.WordCount + 6);
++        int constantUploadDwords = checked(ConstantCost(vertex) + ConstantCost(pixel));
++        return new Xbox360ShaderProgramPair(
++            vertex,
++            pixel,
++            programControl,
++            interpolatorCount,
++            programUploadDwords,
++            constantUploadDwords,
++            StateUploadDwordCost);
++    }
++
++    public void ValidateUploadBudget(int availableDwords) {
++        if (availableDwords <= 0 || availableDwords > MaximumSafeUploadBudgetDwords) {
++            throw new ArgumentOutOfRangeException(nameof(availableDwords),
++                $"Available upload budget must be between 1 and {MaximumSafeUploadBudgetDwords} dwords.");
++        }
++        if (availableDwords < PairUploadDwords) {
++            throw new InvalidOperationException(
++                $"Shader pair requires {PairUploadDwords} upload dwords; only {availableDwords} are available.");
++        }
++    }
++
++    static int ConstantCost(Xbox360ShaderProgram program) {
++        int capacity = program.ConstantBuffer?.RegisterCapacity ?? 0;
++        return checked(capacity * 4 + (capacity > 0 ? 2 : 0));
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderProgramTests.cs b/builder.tests/Xbox360ShaderProgramTests.cs
+new file mode 100644
+index 0000000..4d6aec3
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderProgramTests.cs
+@@ -0,0 +1,578 @@
++using System.Security.Cryptography;
++using System.Collections.Generic;
++using System.Text.Json.Nodes;
++using helengine;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++public sealed class Xbox360ShaderProgramTests {
++    [Fact]
++    public void FromCompilation_snapshots_the_real_transform_program() {
++        Xbox360ShaderCompileResult compilation = Xbox360ShaderProgramTestSupport.TransformVertex;
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(compilation);
++
++        Assert.Equal("source/transform_vs.hlsl", program.SourcePath);
++        Assert.Equal("arbitrary-vertex-program", program.ProgramName);
++        Assert.Equal("main", program.EntryPoint);
++        Assert.Equal("release-candidate", program.Variant);
++        Assert.Equal(ShaderStage.Vertex, program.Stage);
++        Assert.Equal(51, program.MicrocodeWords.Count);
++        Assert.Equal(9, program.RegisterCount);
++        Assert.Equal(8, program.RegisterField);
++        Assert.Equal("40C01033D5B097352583DE0F004FF1D37D5640C456BCAADF1941D9B7CEC284EF", program.BytecodeSha256);
++        Assert.Equal(program.BytecodeSha256, Convert.ToHexString(SHA256.HashData(compilation.Binary.Bytecode)));
++        Assert.Equal(compilation.ToolIdentity, program.ToolIdentity);
++        Assert.Equal(compilation.CompileIdentity, program.CompileIdentity);
++        Assert.Equal(new[] { (0, 3, 0, 12, 0, "32_32_32_FLOAT"), (2, 2, 0, 12, 6, "32_32_FLOAT"), (3, 4, 0, 12, 8, "32_32_32_32_FLOAT") },
++            program.Inputs.Select(input => (input.Index, input.Width, input.VertexFetch.FetchConstant,
++                input.VertexFetch.Stride, input.VertexFetch.Offset, input.VertexFetch.HardwareFormat)));
++        Assert.Collection(program.Outputs,
++            output => Assert.Equal((Xbox360ShaderInterfaceKind.Location, 0, 4, 0),
++                (output.Kind, output.Index, output.Width, output.PhysicalSlot)),
++            output => Assert.Equal((Xbox360ShaderInterfaceKind.Location, 1, 2, 1),
++                (output.Kind, output.Index, output.Width, output.PhysicalSlot)),
++            output => Assert.Equal((Xbox360ShaderInterfaceKind.Position, 0, 4, null),
++                (output.Kind, output.Index, output.Width, output.PhysicalSlot)));
++
++        Xbox360ShaderResource constantBuffer = Assert.Single(program.Resources,
++            resource => resource.Type == ShaderResourceType.ConstantBuffer);
++        Assert.Equal(17, constantBuffer.LogicalSlot);
++        Assert.Equal(0, constantBuffer.PhysicalBinding);
++        Assert.Equal(80, program.ConstantBuffer.SizeBytes);
++        Assert.Equal(5, program.ConstantBuffer.RegisterCapacity);
++        Assert.Equal(0, program.ConstantBuffer.PhysicalBankBaseRegister);
++        Assert.Equal(new[] { "clipFromObject", "tint" }, program.ConstantBuffer.DeclaredMembers.Select(member => member.Name));
++        Assert.Collection(program.ConstantBuffer.UsedMembers,
++            member => {
++                Assert.Equal(("clipFromObject", 0, "row_major", 16),
++                    (member.Name, member.OffsetBytes, member.MatrixMajor, member.MatrixStrideBytes));
++                Assert.Equal(new[] { 0, 1, 2, 3 }, member.RegisterIndices);
++            },
++            member => {
++                Assert.Equal(("tint", 64, null, null),
++                    (member.Name, member.OffsetBytes, member.MatrixMajor, member.MatrixStrideBytes));
++                Assert.Equal(new[] { 4 }, member.RegisterIndices);
++            });
++    }
++
++    [Fact]
++    public void FromCompilation_snapshots_the_real_textured_pixel_program() {
++        Xbox360ShaderCompileResult compilation = Xbox360ShaderProgramTestSupport.TexturedPixel;
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(compilation);
++
++        Assert.Equal("source/texture_ps.hlsl", program.SourcePath);
++        Assert.Equal("arbitrary-pixel-program", program.ProgramName);
++        Assert.Equal("main", program.EntryPoint);
++        Assert.Equal("release-candidate", program.Variant);
++        Assert.Equal(ShaderStage.Pixel, program.Stage);
++        Assert.Equal(21, program.MicrocodeWords.Count);
++        Assert.Equal(5, program.RegisterCount);
++        Assert.Equal(4, program.RegisterField);
++        Assert.Equal("D70B3ADAFE4D38E2DEE8C77E038B06B712836C58F28E48CE850A2795F547016A", program.BytecodeSha256);
++        Assert.Equal(program.BytecodeSha256, Convert.ToHexString(SHA256.HashData(compilation.Binary.Bytecode)));
++        Assert.Null(program.ConstantBuffer);
++        Assert.Equal(new[] { (ShaderResourceType.Texture2D, 101, 0, (int?)1), (ShaderResourceType.Sampler, 202, 0, (int?)1) },
++            program.Resources.OrderBy(resource => resource.Type).Select(resource =>
++                (resource.Type, resource.LogicalSlot, resource.PhysicalBinding, resource.PhysicalSlot)));
++        Assert.Equal(new[] { (0, 4, (int?)0), (1, 2, (int?)1) }, program.Inputs.Select(input =>
++            (input.Index, input.Width, input.PhysicalSlot)));
++        Assert.Single(program.Outputs);
++        Assert.Equal((Xbox360ShaderInterfaceKind.Location, 0, 4),
++            (program.Outputs[0].Kind, program.Outputs[0].Index, program.Outputs[0].Width));
++    }
++
++    [Fact]
++    public void FromCompilation_returns_read_only_snapshots_detached_from_mutable_compiler_arrays() {
++        Xbox360ShaderCompileResult compilation = Xbox360ShaderProgramTestSupport.CloneResult(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        byte firstByte = compilation.Binary.Bytecode[0];
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(compilation);
++
++        uint firstWord = program.MicrocodeWords[0];
++        compilation.Binary.Bytecode[0] ^= 0xff;
++        compilation.ProgramDefinition.Inputs[0] = new ShaderVertexElement("LOCATION", 7, "float4");
++        compilation.ProgramDefinition.Bindings[0].Members[0] = new ShaderConstantMember("changed", "float", 0, 4);
++        Assert.Equal(firstWord, program.MicrocodeWords[0]);
++        Assert.Equal((byte)(firstByte ^ 0xff), compilation.Binary.Bytecode[0]);
++        Assert.Equal(0, program.Inputs[0].Index);
++        Assert.Equal("clipFromObject", program.ConstantBuffer.DeclaredMembers[0].Name);
++
++        IList<uint> words = Assert.IsAssignableFrom<IList<uint>>(program.MicrocodeWords);
++        Assert.True(words.IsReadOnly);
++        Action mutation = () => words[0] = 0;
++        Assert.Throws<NotSupportedException>(mutation);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_duplicate_json_keys() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string duplicateStage = source.NativeMetadataJson.Insert(
++            source.NativeMetadataJson.IndexOf('{') + 1, "\"stage\":\"vertex\",");
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: duplicateStage);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_metadata_larger_than_eight_mebibytes() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        Xbox360ShaderCompileResult oversized = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: new string(' ', 8 * 1024 * 1024 + 1));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(oversized);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Theory]
++    [InlineData("register_count", 0)]
++    [InlineData("register_count", 65)]
++    [InlineData("highest_register_index", 7)]
++    [InlineData("sq_program_cntl_register_field", 64)]
++    public void FromCompilation_rejects_invalid_register_metadata(string key, int value) {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => root[key] = value);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Theory]
++    [InlineData("stage", "pixel")]
++    [InlineData("entrypoint", "wrong_entry")]
++    [InlineData("binary_dword_byte_order", "little_endian")]
++    public void FromCompilation_rejects_metadata_that_disagrees_with_the_request(string key, string value) {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => root[key] = value);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_unknown_native_features() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            root["unsupported_features"] = new JsonArray(JsonValue.Create("geometry"));
++        });
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_required_metadata_field_with_the_wrong_json_type() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => root["register_count"] = "9");
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_aligned_microcode_whose_dword_count_is_not_instruction_triples() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        byte[] truncated = source.Binary.Bytecode[..^4];
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, binary: Xbox360ShaderProgramTestSupport.CloneBinary(source.Binary, bytecode: truncated));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_request_binary_and_reflection_disagreement() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderProgramDefinition wrongStage = Xbox360ShaderProgramTestSupport.CloneDefinition(
++            source.ProgramDefinition, stage: ShaderStage.Pixel);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, programDefinition: wrongStage);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_invalid_resource_and_physical_input_mappings() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            root["input_map"]["0"]["fetch_constant"] = 1;
++        });
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_duplicate_and_out_of_range_reflected_interfaces() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderVertexElement[] duplicateInputs = source.ProgramDefinition.Inputs
++            .Select(element => new ShaderVertexElement(element.Semantic, element.Index, element.Format))
++            .Append(new ShaderVertexElement("LOCATION", 0, "float3"))
++            .ToArray();
++        Xbox360ShaderCompileResult duplicate = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(
++                source.ProgramDefinition, inputs: duplicateInputs));
++        Action createDuplicate = () => Xbox360ShaderProgramFactory.FromCompilation(duplicate);
++        Assert.Throws<InvalidDataException>(createDuplicate);
++
++        ShaderVertexElement[] outOfRangeOutputs = source.ProgramDefinition.Outputs
++            .Select(element => new ShaderVertexElement(element.Semantic, element.Index, element.Format)).ToArray();
++        outOfRangeOutputs[0] = new ShaderVertexElement("LOCATION", 8, "float4");
++        Xbox360ShaderCompileResult outOfRange = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(
++                source.ProgramDefinition, outputs: outOfRangeOutputs));
++        Action createOutOfRange = () => Xbox360ShaderProgramFactory.FromCompilation(outOfRange);
++        Assert.Throws<InvalidDataException>(createOutOfRange);
++    }
++
++    [Fact]
++    public void FromCompilation_keeps_declared_constants_separate_from_actual_used_accesses() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            JsonArray used = (JsonArray)root["uniforms"]["0"]["members"];
++            used.RemoveAt(0);
++        });
++        Xbox360ShaderCompileResult compilation = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(compilation);
++
++        Assert.Equal(new[] { "clipFromObject", "tint" }, program.ConstantBuffer.DeclaredMembers.Select(member => member.Name));
++        Assert.Equal(new[] { "tint" }, program.ConstantBuffer.UsedMembers.Select(member => member.Name));
++        Assert.Equal("float4x4", program.ConstantBuffer.DeclaredMembers[0].Type);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_native_used_constant_with_wrong_matrix_stride() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            root["uniforms"]["0"]["members"][0]["matrix_stride_bytes"] = 8;
++        });
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_reflected_constant_member_with_invalid_type_layout() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderBinding original = source.ProgramDefinition.Bindings[0];
++        ShaderBinding invalid = new(original.Name, original.Type, original.Set, original.Slot,
++            original.Size, [new ShaderConstantMember("bad", "float4x4", 4, 64)]);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(
++                source.ProgramDefinition, bindings: [invalid]));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_missing_native_uniform_metadata_for_a_declared_buffer() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root =>
++            root["uniforms"] = new JsonObject());
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_mismatched_native_texture_pair() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TexturedPixel;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root =>
++            root["textures"][0]["fetch_constant"] = 2);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_request_for_another_target() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderCompileTarget unsupportedTarget = (ShaderCompileTarget)77;
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source,
++            request: Xbox360ShaderProgramTestSupport.CloneRequest(source.Request, target: unsupportedTarget),
++            binary: Xbox360ShaderProgramTestSupport.CloneBinary(source.Binary, target: unsupportedTarget));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_request_outside_shader_model_four_zero() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source,
++            request: Xbox360ShaderProgramTestSupport.CloneRequest(source.Request, shaderModel: new ShaderModel(4, 1)));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Theory]
++    [InlineData("tool")]
++    [InlineData("000000000000000000000000000000000000000000000000000000000000000g")]
++    public void FromCompilation_rejects_an_invalid_tool_identity(string identity) {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, toolIdentity: identity);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_accepts_register_sixty_four_and_encoded_field_sixty_three() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            root["register_count"] = 64;
++            root["highest_register_index"] = 63;
++            root["sq_program_cntl_register_field"] = 63;
++        });
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.CloneResult(source, nativeMetadataJson: metadata));
++
++        Assert.Equal(64, program.RegisterCount);
++        Assert.Equal(63, program.RegisterField);
++    }
++
++    [Fact]
++    public void FromCompilation_preserves_binding_indices_above_255_and_keeps_texture_fetch_at_tf1() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TexturedPixel;
++        ShaderBinding[] bindings = [
++            new ShaderBinding("image_with_unrelated_name", ShaderResourceType.Texture2D, 0, 401, 0, []),
++            new ShaderBinding("state_with_another_name", ShaderResourceType.Sampler, 0, 502, 0, [])
++        ];
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            root["textures"][0]["texture_binding"] = 300;
++            root["textures"][0]["sampler_binding"] = 300;
++        });
++        ShaderProgramDefinition definition = Xbox360ShaderProgramTestSupport.CloneDefinition(
++            source.ProgramDefinition, bindings: bindings);
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.CloneResult(source, programDefinition: definition, nativeMetadataJson: metadata));
++
++        Xbox360ShaderResource textureResource = Assert.Single(program.Resources,
++            resource => resource.Type == ShaderResourceType.Texture2D);
++        Xbox360ShaderResource samplerResource = Assert.Single(program.Resources,
++            resource => resource.Type == ShaderResourceType.Sampler);
++        Assert.Equal(("image_with_unrelated_name", 401, 300, 1),
++            (textureResource.Name, textureResource.LogicalSlot, textureResource.PhysicalBinding, textureResource.PhysicalSlot));
++        Assert.Equal(("state_with_another_name", 502, 300, 1),
++            (samplerResource.Name, samplerResource.LogicalSlot, samplerResource.PhysicalBinding, samplerResource.PhysicalSlot));
++    }
++
++    [Fact]
++    public void FromCompilation_preserves_constant_offsets_above_255_as_vec4_register_indices() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderBinding shiftedBuffer = new("unrelated_constant_name", ShaderResourceType.ConstantBuffer,
++            0, 17, 272, [new ShaderConstantMember("wide_offset_value", "float4", 256, 16)]);
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            JsonObject uniform = (JsonObject)root["uniforms"]["0"];
++            uniform["register_count"] = 17;
++            JsonArray members = (JsonArray)uniform["members"];
++            members.Clear();
++            members.Add(new JsonObject {
++                ["offset_bytes"] = 256,
++                ["registers"] = new JsonArray(JsonValue.Create(16))
++            });
++        });
++        ShaderProgramDefinition definition = Xbox360ShaderProgramTestSupport.CloneDefinition(
++            source.ProgramDefinition, bindings: [shiftedBuffer]);
++
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.CloneResult(source, programDefinition: definition, nativeMetadataJson: metadata));
++
++        Assert.Equal(272, program.ConstantBuffer.SizeBytes);
++        Assert.Equal(256, program.ConstantBuffer.DeclaredMembers[0].OffsetBytes);
++        Assert.Equal(new[] { 16 }, program.ConstantBuffer.UsedMembers[0].RegisterIndices);
++        Assert.Equal(0, program.ConstantBuffer.PhysicalBankBaseRegister);
++        Assert.Equal("unrelated_constant_name", Assert.Single(program.Resources).Name);
++    }
++
++    [Fact]
++    public void FromCompilation_uses_the_pixel_constant_bank_base_for_a_real_constant_buffer() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.UniformPixel;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            root["register_count"] = 1;
++            root["highest_register_index"] = 0;
++            root["sq_program_cntl_register_field"] = 0;
++        });
++        Xbox360ShaderProgram program = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.CloneResult(source, nativeMetadataJson: metadata));
++
++        Assert.Equal(256, program.ConstantBuffer.PhysicalBankBaseRegister);
++        Assert.Equal(1, program.ConstantBuffer.RegisterCapacity);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_an_unknown_reflected_resource_type() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderBinding[] bindings = [new ShaderBinding(
++            "not_a_supported_resource", (ShaderResourceType)999, 0, 0, 0, [])];
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source,
++            programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(
++                source.ProgramDefinition, bindings: bindings));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_texture_without_its_sampler() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TexturedPixel;
++        ShaderBinding[] bindings = source.ProgramDefinition.Bindings
++            .Where(binding => binding.Type != ShaderResourceType.Sampler)
++            .Select(binding => new ShaderBinding(binding.Name, binding.Type, binding.Set, binding.Slot,
++                binding.Size, binding.Members.Select(member => new ShaderConstantMember(
++                    member.Name, member.Type, member.Offset, member.Size)).ToArray())).ToArray();
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source,
++            programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(
++                source.ProgramDefinition, bindings: bindings));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_pixel_output_that_is_not_float4_location_zero() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TexturedPixel;
++        ShaderVertexElement[] outputs = [new ShaderVertexElement("LOCATION", 0, "float3")];
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source,
++            programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(
++                source.ProgramDefinition, outputs: outputs));
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_value_based_native_uniform_metadata() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root =>
++            root["uniforms"]["0"]["register_values"] = new JsonArray());
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_noncontiguous_native_used_register_range() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root =>
++            root["uniforms"]["0"]["members"][0]["registers"][1] = 3);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_matrix_decorations_on_a_scalar_or_vector_access() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root =>
++            root["uniforms"]["0"]["members"][1]["major"] = "row_major");
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_native_inputs_that_disagree_with_the_pixel_interpolator_map() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TexturedPixel;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root =>
++            root["inputs"]["0"]["register"] = 1);
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_duplicate_native_vertex_varying_export() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            JsonArray outputs = (JsonArray)root["outputs"];
++            outputs.Add(outputs[1].DeepClone());
++        });
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++
++    [Fact]
++    public void FromCompilation_rejects_a_duplicate_native_pixel_color_export() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TexturedPixel;
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            JsonArray outputs = (JsonArray)root["outputs"];
++            outputs.Add(outputs[0].DeepClone());
++        });
++        Xbox360ShaderCompileResult malformed = Xbox360ShaderProgramTestSupport.CloneResult(
++            source, nativeMetadataJson: metadata);
++
++        Action createProgram = () => Xbox360ShaderProgramFactory.FromCompilation(malformed);
++
++        Assert.Throws<InvalidDataException>(createProgram);
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderProgramPairTests.cs b/builder.tests/Xbox360ShaderProgramPairTests.cs
+new file mode 100644
+index 0000000..a59d3a5
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderProgramPairTests.cs
+@@ -0,0 +1,155 @@
++using System.Text.Json.Nodes;
++using helengine;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++public sealed class Xbox360ShaderProgramPairTests {
++    [Fact]
++    public void Link_computes_real_baseline_program_control_and_upload_cost() {
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TexturedPixel);
++
++        Xbox360ShaderProgramPair pair = Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Equal(0x00100408u, pair.ProgramControl);
++        Assert.Equal(2, pair.InterpolatorCount);
++        Assert.Equal(78, pair.ProgramUploadDwords);
++        Assert.Equal(22, pair.ConstantUploadDwords);
++        Assert.Equal(10, pair.StateUploadDwords);
++        Assert.Equal(110, pair.PairUploadDwords);
++        pair.ValidateUploadBudget(110);
++        Action insufficientBudget = () => pair.ValidateUploadBudget(109);
++        Assert.Throws<InvalidOperationException>(insufficientBudget);
++
++        Action zeroBudget = () => pair.ValidateUploadBudget(0);
++        Assert.Throws<ArgumentOutOfRangeException>(zeroBudget);
++        Action oversizedBudget = () => pair.ValidateUploadBudget(8193);
++        Assert.Throws<ArgumentOutOfRangeException>(oversizedBudget);
++    }
++
++    [Fact]
++    public void Link_accepts_a_color_only_pixel_program_and_extra_vertex_outputs() {
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.ColorOnlyPixel);
++
++        Xbox360ShaderProgramPair pair = Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Empty(pixel.Resources);
++        Assert.Equal(2, pair.InterpolatorCount);
++        Assert.Equal(new[] { 0, 1 }, vertex.Outputs
++            .Where(output => output.Kind == Xbox360ShaderInterfaceKind.Location)
++            .Select(output => output.Index));
++        Assert.Single(pixel.Inputs);
++    }
++
++    [Fact]
++    public void Link_does_not_require_program_names_or_entrypoints_to_match() {
++        Xbox360ShaderCompileResult pixelCompilation = Xbox360ShaderProgramTestSupport.Reidentify(
++            Xbox360ShaderProgramTestSupport.TexturedPixel,
++            programName: "another-unrelated-program-label",
++            entryPoint: "shadeFragment");
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(pixelCompilation);
++
++        Xbox360ShaderProgramPair pair = Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Equal("arbitrary-vertex-program", pair.Vertex.ProgramName);
++        Assert.Equal("another-unrelated-program-label", pair.Pixel.ProgramName);
++        Assert.Equal("main", pair.Vertex.EntryPoint);
++        Assert.Equal("shadeFragment", pair.Pixel.EntryPoint);
++    }
++
++    [Fact]
++    public void Link_rejects_programs_in_pixel_then_vertex_order() {
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TexturedPixel);
++
++        Action link = () => Xbox360ShaderProgramPair.Link(pixel, vertex);
++
++        Assert.Throws<InvalidDataException>(link);
++    }
++
++    [Fact]
++    public void Link_rejects_a_variant_mismatch() {
++        Xbox360ShaderCompileResult pixelCompilation = Xbox360ShaderProgramTestSupport.Reidentify(
++            Xbox360ShaderProgramTestSupport.TexturedPixel, variant: "debug");
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(pixelCompilation);
++
++        Action link = () => Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Throws<InvalidDataException>(link);
++    }
++
++    [Fact]
++    public void Link_rejects_a_tool_identity_mismatch() {
++        Xbox360ShaderCompileResult pixelCompilation = Xbox360ShaderProgramTestSupport.Reidentify(
++            Xbox360ShaderProgramTestSupport.TexturedPixel,
++            toolIdentity: new string('A', 64));
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TransformVertex);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(pixelCompilation);
++
++        Action link = () => Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Throws<InvalidDataException>(link);
++    }
++
++    [Fact]
++    public void Link_rejects_a_pixel_input_without_a_vertex_varying() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderVertexElement[] outputs = source.ProgramDefinition.Outputs
++            .Where(output => output.Semantic != "LOCATION" || output.Index != 0)
++            .Select(output => new ShaderVertexElement(output.Semantic, output.Index, output.Format))
++            .ToArray();
++        string metadata = Xbox360ShaderProgramTestSupport.EditMetadata(source, root => {
++            ((JsonObject)root["varying_map"]).Remove("0");
++            JsonArray nativeOutputs = (JsonArray)root["outputs"];
++            for (int index = nativeOutputs.Count - 1; index >= 0; index--) {
++                JsonNode item = nativeOutputs[index];
++                if (item["kind"]?.GetValue<string>() == "varying"
++                    && item["location"]?.GetValue<int>() == 0) {
++                    nativeOutputs.RemoveAt(index);
++                }
++            }
++        });
++        Xbox360ShaderCompileResult missingOutput = Xbox360ShaderProgramTestSupport.CloneResult(
++            source,
++            programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(source.ProgramDefinition, outputs: outputs),
++            nativeMetadataJson: metadata);
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(missingOutput);
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TexturedPixel);
++
++        Action link = () => Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Throws<InvalidDataException>(link);
++    }
++
++    [Fact]
++    public void Link_rejects_a_varying_width_mismatch() {
++        Xbox360ShaderCompileResult source = Xbox360ShaderProgramTestSupport.TransformVertex;
++        ShaderVertexElement[] outputs = source.ProgramDefinition.Outputs.Select(output =>
++            output.Semantic == "LOCATION" && output.Index == 0
++                ? new ShaderVertexElement(output.Semantic, output.Index, "float2")
++                : new ShaderVertexElement(output.Semantic, output.Index, output.Format)).ToArray();
++        Xbox360ShaderProgram vertex = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.CloneResult(source,
++                programDefinition: Xbox360ShaderProgramTestSupport.CloneDefinition(source.ProgramDefinition, outputs: outputs)));
++        Xbox360ShaderProgram pixel = Xbox360ShaderProgramFactory.FromCompilation(
++            Xbox360ShaderProgramTestSupport.TexturedPixel);
++
++        Action link = () => Xbox360ShaderProgramPair.Link(vertex, pixel);
++
++        Assert.Throws<InvalidDataException>(link);
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderProgramTestSupport.cs b/builder.tests/Xbox360ShaderProgramTestSupport.cs
+new file mode 100644
+index 0000000..3060d03
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderProgramTestSupport.cs
+@@ -0,0 +1,201 @@
++using System.Reflection;
++using System.Text.Json.Nodes;
++using helengine;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++internal static class Xbox360ShaderProgramTestSupport {
++    const string ShadercLibraryPath = @"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows\runtimes\win-x64\native\shaderc_shared.dll";
++
++    static readonly Lazy<Xbox360ShaderCompileResult> TransformVertexValue = new(() => CompileFixture(
++        "transform_vs.hlsl", ShaderStage.Vertex, "arbitrary-vertex-program"));
++    static readonly Lazy<Xbox360ShaderCompileResult> TexturedPixelValue = new(() => CompileFixture(
++        "texture_ps.hlsl", ShaderStage.Pixel, "arbitrary-pixel-program"));
++    static readonly Lazy<Xbox360ShaderCompileResult> ColorOnlyPixelValue = new(() => CompileFixture(
++        "flat_ps.hlsl", ShaderStage.Pixel, "generic-color-fragment"));
++    static readonly Lazy<Xbox360ShaderCompileResult> UniformPixelValue = new(() => CompileFixture(
++        "uniform_color_ps.hlsl", ShaderStage.Pixel, "unrelated-uniform-program"));
++
++    static readonly ConstructorInfo CompileResultConstructor = typeof(Xbox360ShaderCompileResult)
++        .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
++        .Single(constructor => constructor.GetParameters().Length == 8);
++
++    public static Xbox360ShaderCompileResult TransformVertex => TransformVertexValue.Value;
++    public static Xbox360ShaderCompileResult TexturedPixel => TexturedPixelValue.Value;
++    public static Xbox360ShaderCompileResult ColorOnlyPixel => ColorOnlyPixelValue.Value;
++    public static Xbox360ShaderCompileResult UniformPixel => UniformPixelValue.Value;
++
++    public static Xbox360ShaderCompileResult CloneResult(
++        Xbox360ShaderCompileResult source,
++        ShaderCompileRequest request = null,
++        ShaderProgramDefinition programDefinition = null,
++        ShaderCompiledBinary binary = null,
++        string nativeMetadataJson = null,
++        string toolIdentity = null,
++        string compileIdentity = null) =>
++        (Xbox360ShaderCompileResult)CompileResultConstructor.Invoke([
++            request ?? CloneRequest(source.Request),
++            programDefinition ?? CloneDefinition(source.ProgramDefinition),
++            binary ?? CloneBinary(source.Binary),
++            source.Diagnostics,
++            nativeMetadataJson ?? source.NativeMetadataJson,
++            toolIdentity ?? source.ToolIdentity,
++            compileIdentity ?? source.CompileIdentity,
++            source.IncludedSources
++        ]);
++
++    public static ShaderCompileRequest CloneRequest(
++        ShaderCompileRequest source,
++        string sourcePath = null,
++        string programName = null,
++        string entryPoint = null,
++        ShaderStage? stage = null,
++        ShaderCompileTarget? target = null,
++        ShaderModel shaderModel = null,
++        string variant = null,
++        ShaderBindingPolicy bindingPolicy = null) => new(
++            new ShaderSourceInfo(sourcePath ?? source.Source.Path, source.Source.Source),
++            programName ?? source.ProgramName,
++            entryPoint ?? source.EntryPoint,
++            stage ?? source.Stage,
++            target ?? source.Target,
++            shaderModel ?? source.ShaderModel,
++            variant ?? source.Variant,
++            source.Defines.ToArray(),
++            new ShaderCompileOptions(
++                bindingPolicy ?? source.Options.BindingPolicy,
++                source.Options.GenerateDebugInfo,
++                source.Options.Optimize,
++                source.Options.TreatWarningsAsErrors));
++
++    public static ShaderProgramDefinition CloneDefinition(
++        ShaderProgramDefinition source,
++        string name = null,
++        ShaderStage? stage = null,
++        string entryPoint = null,
++        ShaderBinding[] bindings = null,
++        ShaderVertexElement[] inputs = null,
++        ShaderVertexElement[] outputs = null,
++        ShaderVariant[] variants = null) => new(
++            name ?? source.Name,
++            stage ?? source.Stage,
++            entryPoint ?? source.EntryPoint,
++            bindings ?? source.Bindings.Select(binding => new ShaderBinding(
++                binding.Name,
++                binding.Type,
++                binding.Set,
++                binding.Slot,
++                binding.Size,
++                binding.Members.Select(member => new ShaderConstantMember(
++                    member.Name, member.Type, member.Offset, member.Size)).ToArray())).ToArray(),
++            inputs ?? source.Inputs.Select(element => new ShaderVertexElement(
++                element.Semantic, element.Index, element.Format)).ToArray(),
++            outputs ?? source.Outputs.Select(element => new ShaderVertexElement(
++                element.Semantic, element.Index, element.Format)).ToArray(),
++            variants ?? source.Variants.Select(variant => new ShaderVariant(
++                variant.Name, variant.Defines.ToArray())).ToArray());
++
++    public static ShaderCompiledBinary CloneBinary(
++        ShaderCompiledBinary source,
++        ShaderCompileTarget? target = null,
++        ShaderStage? stage = null,
++        string entryPoint = null,
++        string variant = null,
++        byte[] bytecode = null) => new(
++            target ?? source.Target,
++            stage ?? source.Stage,
++            entryPoint ?? source.EntryPoint,
++            variant ?? source.Variant,
++            bytecode ?? source.Bytecode.ToArray());
++
++    public static string EditMetadata(Xbox360ShaderCompileResult source, Action<JsonObject> edit) {
++        JsonObject metadata = JsonNode.Parse(source.NativeMetadataJson).AsObject();
++        edit(metadata);
++        return metadata.ToJsonString();
++    }
++
++    public static Xbox360ShaderCompileResult Reidentify(
++        Xbox360ShaderCompileResult source,
++        string programName = null,
++        string entryPoint = null,
++        string variant = null,
++        string toolIdentity = null) {
++        string selectedEntryPoint = entryPoint ?? source.Request.EntryPoint;
++        string selectedVariant = variant ?? source.Request.Variant;
++        ShaderCompileRequest request = CloneRequest(source.Request,
++            programName: programName, entryPoint: selectedEntryPoint, variant: selectedVariant);
++        ShaderVariant[] variants = source.ProgramDefinition.Variants
++            .Select(item => new ShaderVariant(selectedVariant, item.Defines.ToArray())).ToArray();
++        ShaderProgramDefinition definition = CloneDefinition(source.ProgramDefinition,
++            name: programName, entryPoint: selectedEntryPoint, variants: variants);
++        ShaderCompiledBinary binary = CloneBinary(source.Binary,
++            entryPoint: selectedEntryPoint, variant: selectedVariant);
++        string metadata = EditMetadata(source, root => root["entrypoint"] = selectedEntryPoint);
++        return CloneResult(source, request, definition, binary, metadata, toolIdentity);
++    }
++
++    static Xbox360ShaderCompileResult CompileFixture(
++        string fixtureName,
++        ShaderStage stage,
++        string programName) {
++        if (!File.Exists(ShadercLibraryPath)) {
++            throw new FileNotFoundException("The real shaderc integration prerequisite is missing.", ShadercLibraryPath);
++        }
++
++        string root = FindRepositoryRoot();
++        string fixturePath = Path.Combine(root, "tests", "shaders", "fixtures", fixtureName);
++        string source = File.ReadAllText(fixturePath);
++        if (string.Equals(fixtureName, "flat_ps.hlsl", StringComparison.Ordinal)) {
++            source = source.Replace("nointerpolation ", string.Empty, StringComparison.Ordinal);
++        }
++        string sourcePath = $"source/{fixtureName}";
++        ShaderCompileRequest request = new(
++            new ShaderSourceInfo(sourcePath, source),
++            programName,
++            "main",
++            stage,
++            ShaderCompileTarget.Xbox360,
++            new ShaderModel(4, 0),
++            "release-candidate",
++            Array.Empty<ShaderDefine>(),
++            new ShaderCompileOptions(new ShaderBindingPolicy(0, 17, 101, 202, 300), false, false, false));
++
++        string builderDirectory = Path.GetDirectoryName(typeof(Xbox360ShaderBackend).Assembly.Location);
++        string[] bundledTools = [
++            Path.Combine("shader-tools", "xenos_asm.py"),
++            Path.Combine("shader-tools", "shader-probe", "backend_protocol.py"),
++            Path.Combine("shader-tools", "shader-probe", "backend_layout.py"),
++            Path.Combine("shader-tools", "shader-probe", "shader_probe.py"),
++            Path.Combine("shader-tools", "shader-probe", "lower_xenos.py"),
++            Path.Combine("shader-tools", "shader-probe", "spirv_parser.py")
++        ];
++        foreach (string relativePath in bundledTools) {
++            string path = Path.Combine(builderDirectory, relativePath);
++            if (!File.Exists(path)) {
++                throw new FileNotFoundException("Expected the builder-bundled shader tool.", path);
++            }
++        }
++
++        Xbox360ShaderBackend backend = new(new Xbox360ShaderCompilerOptions(
++            shadercLibraryPath: ShadercLibraryPath,
++            timeout: TimeSpan.FromSeconds(30)));
++        ShaderCompileResult result = backend.Compile(request, new EmptyIncludeResolver());
++        return result as Xbox360ShaderCompileResult
++            ?? throw new InvalidOperationException("The real Xbox 360 shader backend returned an unexpected result type.");
++    }
++
++    static string FindRepositoryRoot() {
++        for (DirectoryInfo directory = new(AppContext.BaseDirectory); directory != null; directory = directory.Parent) {
++            if (File.Exists(Path.Combine(directory.FullName, "tests", "shaders", "fixtures", "transform_vs.hlsl"))) {
++                return directory.FullName;
++            }
++        }
++        throw new DirectoryNotFoundException("Could not locate the checkout containing tests/shaders/fixtures.");
++    }
++
++    sealed class EmptyIncludeResolver : IShaderIncludeResolver {
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) =>
++            throw new InvalidOperationException($"Unexpected include '{includePath}' from '{requestingFile}'.");
++    }
++}
+diff --git a/docs/x360-shader-program-layout.md b/docs/x360-shader-program-layout.md
+new file mode 100644
+index 0000000..3433672
+--- /dev/null
++++ b/docs/x360-shader-program-layout.md
+@@ -0,0 +1,112 @@
++# Xbox 360 host shader program layout
++
++Phase 3a adds a validated, immutable host-side representation for one compiled
++Xenos shader stage and a linker for a vertex/pixel pair. It is an in-memory
++boundary for a future artifact writer; it is not a wire format or runtime
++activation path.
++
++## Constructing a program snapshot
++
++Call `Xbox360ShaderProgramFactory.FromCompilation(Xbox360ShaderCompileResult)`.
++The factory accepts successful Xbox 360 shader-model 4.0 vertex or pixel
++results whose request, program definition, binary, and compiler metadata agree
++on the stage and identity fields they expose. It preserves
++`Request.Source.Path`, program name, entrypoint, variant, tool identity, and
++compile identity. Source path remains distinct from any future artifact asset
++ID; this phase does not synthesize IDs.
++
++The snapshot contains:
++
++- big-endian-decoded `uint` microcode words and their bytecode SHA-256;
++- the metadata register count and encoded register field;
++- typed input/output interfaces and validated physical resource mappings;
++- the declared constant-buffer members separately from the members actually
++  accessed by the compiled shader.
++
++All exposed collections are read-only wrappers around copied data. The
++snapshot does not retain caller-mutable definition or bytecode arrays.
++
++## Validation boundary
++
++The metadata reader accepts at most 8 MiB of UTF-8 JSON, requires an object
++root, rejects duplicate properties and wrong JSON types, and does not substitute
++defaults for missing required values. Program metadata must report the matching
++stage and entrypoint, `binary_dword_byte_order: "big_endian"`, no unsupported
++features, and a register count in 1..64. The highest register index and encoded
++program register field must each equal `register_count - 1`. Microcode must be
++nonempty, dword-aligned, divisible into instruction triples, and no more than
++1024 words. This is metadata/contract validation, not full ISA validation.
++
++Reflection and native metadata are checked together. The supported vertex
++fetch layout is a subset of the fixed `vf0` mapping:
++
++| Input location | Format | Offset | Stride |
++| --- | --- | ---: | ---: |
++| 0 | `float3` | 0 | 12 |
++| 1 | `float3` | 3 | 12 |
++| 2 | `float2` | 6 | 12 |
++| 3 | `float4` | 8 | 12 |
++
++Vertex user varyings use locations 0..7 with the native slot equal to location;
++the vertex position output is `SV_POSITION0 float4`. Pixel inputs are location
++varyings with matching native slots, and the pixel output is exactly
++`SV_TARGET0 float4`. Duplicate interfaces/exports, hidden native exports, and
++inconsistent reflection/native maps are rejected. Pair linking permits unused
++extra vertex varying outputs; it does not impose diagnostic-fixture-specific
++position/color/UV requirements beyond each stage's interface contract.
++
++Supported resources are limited to zero or one constant buffer at logical
++`b0/set0` per stage and, for pixel programs only, an optional `Texture2D` plus
++sampler pair. Constant-buffer logical slot follows the request's
++`ConstantBufferShift`; its physical binding is 0. The constant buffer must be
++positive-sized, 16-byte padded, and no larger than 4096 bytes. Member names are
++unique; supported types are float scalar/vectors and `float4x4`, with exact
++sizes, aligned nonoverlapping offsets, and bounds checked against the buffer.
++The physical constant bank base is 0 for vertex and 256 for pixel programs.
++
++Native uniform records describe used members, not necessarily every declared
++member. Each used member must match one declared member at the exact offset and
++have the exact contiguous uploaded vec4-register range. Matrices additionally
++require `row_major` or `column_major` and stride 16; unused matrices have no
++inferred orientation. Missing native uniform metadata for a declared buffer,
++duplicate accesses, partial/nested accesses, and out-of-member accesses are
++rejected rather than guessed.
++
++Textures and samplers must be present together, have no members or size, and
++map to pixel `tf1`. Their raw logical binding is derived by checked subtraction
++of the request's respective binding shift. Names are retained as data and are
++not used to pair resources. Vertex `vf0` and pixel `tf1` mappings remain
++independent of those logical shifts.
++
++## Pair linking and upload cost
++
++Link a pair with `Xbox360ShaderProgramPair.Link(vertex, pixel)`. It requires
++vertex then pixel stages, Xbox 360 targets, the same variant, and the same tool
++identity; program names and entrypoints may differ. Every pixel input must match
++a vertex output on location, width, and physical varying slot. Extra vertex
++outputs are allowed.
++
++The pair exposes these derived values:
++
++```text
++highestVaryingSlot = max(vertex user-output physical slot), or 0 when none
++InterpolatorCount = highestVaryingSlot + 1, or 0 when none
++ProgramControl = vertex.RegisterField
++               | (pixel.RegisterField << 8)
++               | (highestVaryingSlot << 20)
++ProgramUploadDwords = vertex.WordCount + pixel.WordCount + 6
++ConstantUploadDwords = sum(capacity * 4 + (capacity > 0 ? 2 : 0))
++StateUploadDwords = 10
++PairUploadDwords = program + constant + state
++```
++
++`ValidateUploadBudget` accepts only 1..8192 available dwords, accepts exact
++equality with the pair cost, and rejects insufficient capacity. The cost covers
++only program, constant, and the five two-dword SQ register writes; it excludes
++vertex/texture fetch setup, draw state, other draws, and whole-frame safety.
++
++The current real transform-vertex/textured-pixel baseline yields
++`ProgramControl = 0x00100408`, two interpolators, and 110 dwords total
++(78 program + 22 constants + 10 SQ state). No GPU upload, default constants,
++binary serialization, guest reader, cooker, renderer changes, or material
++selection are part of this phase.

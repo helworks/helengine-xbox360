@@ -13,6 +13,18 @@ namespace helengine.x360.builder;
 /// must not reach the console by accident.
 /// </remarks>
 public sealed class Xbox360ContentStager {
+    /// <summary>Stages mutually exclusive editor and builder outputs through the same complete hash and path preflight.</summary>
+    public IReadOnlyList<Xbox360StagedAsset> Stage(
+        IReadOnlyList<PlatformBuildArtifact> artifacts,
+        IReadOnlyList<PlatformBuildArtifact> builderCookedArtifacts,
+        string sourceRootPath,
+        string stagingRootPath,
+        CancellationToken cancellationToken) {
+        ArgumentNullException.ThrowIfNull(artifacts);
+        ArgumentNullException.ThrowIfNull(builderCookedArtifacts);
+        return Stage(artifacts.Concat(builderCookedArtifacts).ToArray(), sourceRootPath, stagingRootPath, cancellationToken);
+    }
+
     /// <summary>Stages every declared artifact and returns the staged list sorted by path.</summary>
     /// <param name="artifacts">Cooked artifacts declared by the build manifest.</param>
     /// <param name="sourceRootPath">Editor package-source root that owns the cooked files.</param>

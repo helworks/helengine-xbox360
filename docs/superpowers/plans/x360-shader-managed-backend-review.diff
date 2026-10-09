@@ -1,0 +1,1998 @@
+﻿diff --git a/build/review-phase2e/Xbox360PlatformAssetBuilder.before.cs b/builder/Xbox360PlatformAssetBuilder.cs
+index d60b671..5d25180 100644
+--- a/build/review-phase2e/Xbox360PlatformAssetBuilder.before.cs
++++ b/builder/Xbox360PlatformAssetBuilder.cs
+@@ -16,7 +16,7 @@ namespace helengine.x360.builder;
+ /// declares, writes the scene catalog the console reads at boot, and runs the native build
+ /// that compiles the core and links the image.
+ /// </remarks>
+-public sealed class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder {
++public sealed partial class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder {
+     /// <summary>The image the native build must produce for a build to count as successful.</summary>
+     public const string ImageFileName = "helengine.xex";
+ 
+diff --git a/build/review-phase2e/builder.before.csproj b/builder/helengine.x360.builder.csproj
+index 30b183e..0d3be53 100644
+--- a/build/review-phase2e/builder.before.csproj
++++ b/builder/helengine.x360.builder.csproj
+@@ -15,6 +15,39 @@
+     <ProjectReference Include="$(HelengineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj" />
+     <ProjectReference Include="$(HelengineRoot)\engine\helengine.core\helengine.core.csproj" />
+     <ProjectReference Include="$(HelengineRoot)\engine\helengine.files\helengine.files.csproj" />
++    <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
++  </ItemGroup>
++  <ItemGroup>
++    <Content Include="$(MSBuildProjectDirectory)\..\tools\xenos_asm.py"
++             Link="shader-tools\xenos_asm.py"
++             CopyToOutputDirectory="PreserveNewest"
++             CopyToPublishDirectory="PreserveNewest"
++             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\xenos_asm.py')" />
++    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_protocol.py"
++             Link="shader-tools\shader-probe\backend_protocol.py"
++             CopyToOutputDirectory="PreserveNewest"
++             CopyToPublishDirectory="PreserveNewest"
++             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_protocol.py')" />
++    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_layout.py"
++             Link="shader-tools\shader-probe\backend_layout.py"
++             CopyToOutputDirectory="PreserveNewest"
++             CopyToPublishDirectory="PreserveNewest"
++             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\backend_layout.py')" />
++    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\shader_probe.py"
++             Link="shader-tools\shader-probe\shader_probe.py"
++             CopyToOutputDirectory="PreserveNewest"
++             CopyToPublishDirectory="PreserveNewest"
++             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\shader_probe.py')" />
++    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\lower_xenos.py"
++             Link="shader-tools\shader-probe\lower_xenos.py"
++             CopyToOutputDirectory="PreserveNewest"
++             CopyToPublishDirectory="PreserveNewest"
++             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\lower_xenos.py')" />
++    <Content Include="$(MSBuildProjectDirectory)\..\tools\shader-probe\spirv_parser.py"
++             Link="shader-tools\shader-probe\spirv_parser.py"
++             CopyToOutputDirectory="PreserveNewest"
++             CopyToPublishDirectory="PreserveNewest"
++             Condition="Exists('$(MSBuildProjectDirectory)\..\tools\shader-probe\spirv_parser.py')" />
+   </ItemGroup>
+   <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
+     <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.baseplatform\helengine.baseplatform.csproj')" Text="helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT to the shared engine checkout." />
+diff --git a/build/review-phase2e/tests.before.csproj b/builder.tests/helengine.x360.builder.tests.csproj
+index d2e19a0..456347d 100644
+--- a/build/review-phase2e/tests.before.csproj
++++ b/builder.tests/helengine.x360.builder.tests.csproj
+@@ -11,12 +11,32 @@
+ 
+   <ItemGroup>
+     <Using Include="Xunit" />
++    <Compile Remove="fixtures\Xbox360ShaderProtocolFixture\**\*.cs" />
+     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+     <PackageReference Include="xunit" Version="2.9.3" />
+     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
++    <ProjectReference Include="..\builder\helengine.x360.builder.csproj" />
++    <ProjectReference Include="fixtures\Xbox360ShaderProtocolFixture\Xbox360ShaderProtocolFixture.csproj" ReferenceOutputAssembly="false" />
+     <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
+   </ItemGroup>
+ 
++  <Target Name="CopyXbox360ShaderProtocolFixture" AfterTargets="Build">
++    <MSBuild Projects="$(MSBuildThisFileDirectory)fixtures\Xbox360ShaderProtocolFixture\Xbox360ShaderProtocolFixture.csproj" Targets="GetTargetPath" BuildInParallel="false">
++      <Output TaskParameter="TargetOutputs" ItemName="_Xbox360ShaderProtocolFixtureAssembly" />
++    </MSBuild>
++    <ItemGroup>
++      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly)" />
++      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).exe')" />
++      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).deps.json')" />
++      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).runtimeconfig.json')" />
++    </ItemGroup>
++    <MakeDir Directories="$(OutDir)shader-protocol-fixture" />
++    <Copy
++      SourceFiles="@(Xbox360ShaderProtocolFixtureFiles)"
++      DestinationFiles="@(Xbox360ShaderProtocolFixtureFiles->'$(OutDir)shader-protocol-fixture\%(Filename)%(Extension)')"
++      SkipUnchangedFiles="true" />
++  </Target>
++
+   <Target Name="ValidateHelengineRoot" BeforeTargets="CollectPackageReferences">
+     <Error Condition="!Exists('$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj')" Text="helengine checkout not found. Set HelengineRoot or HELENGINE_ROOT to the shared engine checkout." />
+   </Target>
+diff --git a/builder/shaders/Xbox360PlatformShaderBackendRegistration.cs b/builder/shaders/Xbox360PlatformShaderBackendRegistration.cs
+new file mode 100644
+index 0000000..e4419c6
+--- /dev/null
++++ b/builder/shaders/Xbox360PlatformShaderBackendRegistration.cs
+@@ -0,0 +1,14 @@
++using helengine;
++
++namespace helengine.x360.builder;
++
++public sealed partial class Xbox360PlatformAssetBuilder : IShaderBackendRegistryContributor {
++    /// <inheritdoc />
++    public void RegisterShaderBackends(ShaderBackendRegistry shaderBackendRegistry) {
++        if (shaderBackendRegistry == null) {
++            throw new ArgumentNullException(nameof(shaderBackendRegistry));
++        }
++
++        shaderBackendRegistry.Register(new Xbox360ShaderBackend());
++    }
++}
+diff --git a/builder/shaders/Xbox360ShaderBackend.cs b/builder/shaders/Xbox360ShaderBackend.cs
+new file mode 100644
+index 0000000..f86f48d
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderBackend.cs
+@@ -0,0 +1,66 @@
++using helengine;
++
++namespace helengine.x360.builder;
++
++/// <summary>Compiles the supported Xbox 360 shader subset through the host protocol worker.</summary>
++public sealed class Xbox360ShaderBackend : IShaderBackend, IShaderBackendCachePolicy {
++    static readonly ShaderBackendCapabilities BackendCapabilities = new(
++        new ShaderModel(4, 0),
++        new ShaderModel(4, 0),
++        [ShaderStage.Vertex, ShaderStage.Pixel],
++        false);
++
++    readonly Xbox360ShaderCompiler Compiler;
++
++    public Xbox360ShaderBackend() : this(new Xbox360ShaderCompilerOptions()) {
++    }
++
++    public Xbox360ShaderBackend(Xbox360ShaderCompilerOptions options) {
++        Compiler = new Xbox360ShaderCompiler(options ?? throw new ArgumentNullException(nameof(options)));
++    }
++
++    public ShaderCompileTarget Target => ShaderCompileTarget.Xbox360;
++    public ShaderBackendCapabilities Capabilities => BackendCapabilities;
++    public bool UseSharedCache => false;
++
++    public ShaderCompileResult Compile(ShaderCompileRequest request, IShaderIncludeResolver includeResolver) {
++        if (request == null) {
++            throw new ArgumentNullException(nameof(request));
++        }
++
++        if (includeResolver == null) {
++            throw new ArgumentNullException(nameof(includeResolver));
++        }
++
++        ValidateRequest(request);
++        return Compiler.Compile(request, includeResolver);
++    }
++
++    internal static void ValidateRequest(ShaderCompileRequest request) {
++        if (request.Target != ShaderCompileTarget.Xbox360) {
++            throw Failure(request, "Unsupported target; this backend only supports Xbox360.");
++        }
++
++        if (request.Stage != ShaderStage.Vertex && request.Stage != ShaderStage.Pixel) {
++            throw Failure(request, $"Unsupported stage '{request.Stage}'; only vertex and pixel shaders are supported.");
++        }
++
++        if (request.ShaderModel.Major != 4 || request.ShaderModel.Minor != 0) {
++            throw Failure(request, $"Unsupported shader model '{request.ShaderModel}'; only shader model 4.0 is supported.");
++        }
++
++        if (request.Options.BindingPolicy.DefaultSpace != 0) {
++            throw Failure(request, "The binding policy default space must be zero for Xbox 360 shader compilation.");
++        }
++
++        HashSet<string> defineNames = new(StringComparer.Ordinal);
++        foreach (ShaderDefine define in request.Defines) {
++            if (!defineNames.Add(define.Name)) {
++                throw Failure(request, $"Duplicate define name '{define.Name}' cannot be represented by the protocol define map.");
++            }
++        }
++    }
++
++    static Xbox360ShaderCompilationException Failure(ShaderCompileRequest request, string diagnostic) =>
++        new(request, diagnostic);
++}
+diff --git a/builder/shaders/Xbox360ShaderCompilationException.cs b/builder/shaders/Xbox360ShaderCompilationException.cs
+new file mode 100644
+index 0000000..c14a005
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderCompilationException.cs
+@@ -0,0 +1,30 @@
++using helengine;
++
++namespace helengine.x360.builder;
++
++/// <summary>Reports a failed Xenos compile together with the request that produced it.</summary>
++public sealed class Xbox360ShaderCompilationException : InvalidOperationException {
++    public Xbox360ShaderCompilationException(ShaderCompileRequest request, string diagnostic, Exception innerException = null)
++        : base(BuildMessage(request, diagnostic), innerException) {
++        Request = request ?? throw new ArgumentNullException(nameof(request));
++        Diagnostic = string.IsNullOrWhiteSpace(diagnostic)
++            ? "The Xbox 360 shader compiler failed without a diagnostic."
++            : diagnostic;
++    }
++
++    public ShaderCompileRequest Request { get; }
++    public string Diagnostic { get; }
++    public string SourcePath => Request.Source.Path;
++    public string ProgramName => Request.ProgramName;
++    public string EntryPoint => Request.EntryPoint;
++    public ShaderStage Stage => Request.Stage;
++    public string Variant => Request.Variant;
++
++    static string BuildMessage(ShaderCompileRequest request, string diagnostic) {
++        if (request == null) {
++            return diagnostic ?? "The Xbox 360 shader compiler failed.";
++        }
++
++        return $"Xbox 360 shader compilation failed for source '{request.Source.Path}', program '{request.ProgramName}', entry '{request.EntryPoint}', stage '{request.Stage}', variant '{request.Variant}': {diagnostic}";
++    }
++}
+diff --git a/builder/shaders/Xbox360ShaderCompileResult.cs b/builder/shaders/Xbox360ShaderCompileResult.cs
+new file mode 100644
+index 0000000..002f97b
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderCompileResult.cs
+@@ -0,0 +1,30 @@
++using helengine;
++
++namespace helengine.x360.builder;
++
++/// <summary>Host-only shader result carrying compiler metadata for a future cooker.</summary>
++public sealed class Xbox360ShaderCompileResult : ShaderCompileResult {
++    internal Xbox360ShaderCompileResult(
++        ShaderCompileRequest request,
++        ShaderProgramDefinition programDefinition,
++        ShaderCompiledBinary binary,
++        IReadOnlyList<ShaderCompileDiagnostic> diagnostics,
++        string nativeMetadataJson,
++        string toolIdentity,
++        string compileIdentity,
++        IReadOnlyList<Xbox360IncludedSource> includedSources)
++        : base(request, programDefinition, binary, diagnostics, success: true) {
++        NativeMetadataJson = nativeMetadataJson;
++        ToolIdentity = toolIdentity;
++        CompileIdentity = compileIdentity;
++        IncludedSources = includedSources;
++    }
++
++    public string NativeMetadataJson { get; }
++    public string ToolIdentity { get; }
++    public string CompileIdentity { get; }
++    public IReadOnlyList<Xbox360IncludedSource> IncludedSources { get; }
++}
++
++/// <summary>Identity of an include actually consumed by shaderc.</summary>
++public sealed record Xbox360IncludedSource(string SourceName, string Sha256);
+diff --git a/builder/shaders/Xbox360ShaderCompiler.cs b/builder/shaders/Xbox360ShaderCompiler.cs
+new file mode 100644
+index 0000000..46e20f2
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderCompiler.cs
+@@ -0,0 +1,525 @@
++using System.Diagnostics;
++using System.Text;
++using System.Text.Json;
++using helengine;
++
++namespace helengine.x360.builder;
++
++/// <summary>Invokes and validates one host protocol process for a single compile request.</summary>
++/// <remarks>The include resolver is synchronous; a timeout cannot interrupt arbitrary callback code while it is running.</remarks>
++public sealed class Xbox360ShaderCompiler {
++    const int MaximumProtocolLineBytes = 8 * 1024 * 1024;
++    const int MaximumIncludeRequests = 4096;
++    const int MaximumRetainedStandardErrorChars = 64 * 1024;
++    static readonly TimeSpan MaximumCleanupWait = TimeSpan.FromSeconds(2);
++    static readonly UTF8Encoding StrictUtf8 = new(false, true);
++    readonly Xbox360ShaderCompilerOptions Options;
++
++    public Xbox360ShaderCompiler(Xbox360ShaderCompilerOptions options) {
++        Options = options ?? throw new ArgumentNullException(nameof(options));
++    }
++
++    public ShaderCompileResult Compile(ShaderCompileRequest request, IShaderIncludeResolver includeResolver) {
++        if (request == null) {
++            throw new ArgumentNullException(nameof(request));
++        }
++        if (includeResolver == null) {
++            throw new ArgumentNullException(nameof(includeResolver));
++        }
++
++        try {
++            Xbox360ShaderBackend.ValidateRequest(request);
++            ProcessConfiguration configuration = ResolveProcessConfiguration();
++            using JsonDocument response = RunProtocolProcessAsync(request, includeResolver, configuration)
++                .GetAwaiter()
++                .GetResult();
++            return Xbox360ShaderProtocolMapper.Map(request, response.RootElement);
++        } catch (Xbox360ShaderCompilationException) {
++            throw;
++        } catch (Exception exception) {
++            throw new Xbox360ShaderCompilationException(request, exception.Message, exception);
++        }
++    }
++
++    async Task<JsonDocument> RunProtocolProcessAsync(
++        ShaderCompileRequest request,
++        IShaderIncludeResolver includeResolver,
++        ProcessConfiguration configuration) {
++        using CancellationTokenSource timeout = new();
++        timeout.CancelAfter(Options.Timeout);
++
++        ProcessStartInfo startInfo = new() {
++            FileName = configuration.PythonExecutable,
++            WorkingDirectory = configuration.BuilderAssemblyDirectory,
++            UseShellExecute = false,
++            CreateNoWindow = true,
++            RedirectStandardInput = true,
++            RedirectStandardOutput = true,
++            RedirectStandardError = true,
++            StandardInputEncoding = StrictUtf8,
++            StandardOutputEncoding = StrictUtf8,
++            StandardErrorEncoding = StrictUtf8
++        };
++        startInfo.ArgumentList.Add("-u");
++        startInfo.ArgumentList.Add(configuration.ProtocolScriptPath);
++        startInfo.ArgumentList.Add("--shaderc");
++        startInfo.ArgumentList.Add(configuration.ShadercLibraryPath);
++
++        using Process process = new() { StartInfo = startInfo };
++        try {
++            if (!process.Start()) {
++                throw new InvalidOperationException($"Python executable '{configuration.PythonExecutable}' did not start.");
++            }
++        } catch (Exception exception) {
++            throw new InvalidOperationException(
++                $"Could not start the Xbox 360 shader protocol process '{configuration.PythonExecutable}': {exception.Message}",
++                exception);
++        }
++
++        Task<string> standardErrorTask = DrainStandardErrorAsync(process.StandardError);
++        BoundedProtocolLineReader output = new(process.StandardOutput.BaseStream, MaximumProtocolLineBytes, StrictUtf8);
++
++        try {
++            await WriteProtocolMessageAsync(process.StandardInput.BaseStream, BuildCompileMessage(request), timeout.Token)
++                .WaitAsync(timeout.Token)
++                .ConfigureAwait(false);
++            int includeCount = 0;
++            while (true) {
++                string line = await output.ReadLineAsync(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
++                if (line == null) {
++                    throw new InvalidDataException("The protocol process reached EOF before sending a final result.");
++                }
++
++                JsonDocument message;
++                try {
++                    message = JsonDocument.Parse(line);
++                } catch (JsonException exception) {
++                    throw new InvalidDataException($"The protocol process returned malformed JSON: {exception.Message}", exception);
++                }
++
++                JsonElement root = message.RootElement;
++                try {
++                    ValidateProtocolHeader(root);
++                    string messageType = RequiredString(root, "type", "protocol message");
++                    if (messageType == "include") {
++                        try {
++                            await HandleIncludeRequestAsync(
++                                request,
++                                includeResolver,
++                                root,
++                                ++includeCount,
++                                process.StandardInput.BaseStream,
++                                timeout.Token).ConfigureAwait(false);
++                        } finally {
++                            message.Dispose();
++                        }
++                        continue;
++                    }
++                    if (messageType != "result") {
++                        throw new InvalidDataException($"Unsupported protocol message type '{messageType}'.");
++                    }
++
++                    bool success = RequiredBoolean(root, "success", "result");
++                    await process.StandardInput.BaseStream.FlushAsync(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
++                    process.StandardInput.Close();
++                    await process.WaitForExitAsync(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
++
++                    string extraLine = await output.ReadLineAsync(timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
++                    if (extraLine != null) {
++                        throw new InvalidDataException("The protocol process wrote an extra message after its final result.");
++                    }
++
++                    string standardError = await standardErrorTask.WaitAsync(timeout.Token).ConfigureAwait(false);
++                    if (success && process.ExitCode != 0) {
++                        throw new InvalidDataException($"The protocol process returned success but exited with an unexpected exit code {process.ExitCode}.{AppendStandardError(string.Empty, standardError)}");
++                    }
++                    if (!success) {
++                        string diagnostics = OptionalString(root, "diagnostics", "result");
++                        string failure = string.IsNullOrWhiteSpace(diagnostics)
++                            ? "The Python backend reported a failed compile without diagnostics."
++                            : diagnostics;
++                        if (process.ExitCode == 0) {
++                            failure = $"The protocol process reported failure but exited with code 0. {failure}";
++                        }
++                        failure = AppendStandardError(failure, standardError);
++                        throw new InvalidDataException(failure);
++                    }
++
++                    return message;
++                } catch {
++                    message.Dispose();
++                    throw;
++                }
++            }
++        } catch (Exception exception) {
++            string cleanupDiagnostic = await StopOwnedChildAsync(process).ConfigureAwait(false);
++            string standardError = await GetStandardErrorAsync(standardErrorTask).ConfigureAwait(false);
++            string detail = timeout.IsCancellationRequested
++                ? $"The shader protocol process exceeded its timeout of {Options.Timeout}."
++                : exception.Message;
++            detail = AppendStandardError(detail, standardError);
++            detail = AppendStandardError(detail, cleanupDiagnostic);
++            throw new InvalidDataException(detail, exception);
++        } finally {
++            if (HasNotExited(process)) {
++                _ = await StopOwnedChildAsync(process).ConfigureAwait(false);
++            }
++        }
++    }
++
++    async Task HandleIncludeRequestAsync(
++        ShaderCompileRequest request,
++        IShaderIncludeResolver includeResolver,
++        JsonElement message,
++        int includeCount,
++        Stream standardInput,
++        CancellationToken cancellationToken) {
++        if (includeCount > MaximumIncludeRequests) {
++            throw new InvalidDataException($"The protocol requested more than {MaximumIncludeRequests} includes.");
++        }
++
++        int id = RequiredNonnegativeInteger(message, "id", "include request");
++        if (id != includeCount || id == 0) {
++            throw new InvalidDataException($"Include request ID {id} did not match expected ID {includeCount}.");
++        }
++
++        string requestingSource = RequiredString(message, "requesting_source", "include request");
++        string includeName = RequiredString(message, "include_name", "include request");
++        Dictionary<string, object> response = new(StringComparer.Ordinal) {
++            ["protocol"] = 1,
++            ["type"] = "include_result",
++            ["id"] = id
++        };
++        try {
++            ShaderIncludeResult include = includeResolver.Resolve(requestingSource, includeName);
++            if (include == null) {
++                throw new InvalidOperationException("The include resolver returned no result.");
++            }
++            response["source_name"] = include.Path;
++            response["source"] = include.Source;
++        } catch (Exception exception) when (!cancellationToken.IsCancellationRequested) {
++            response["error"] = string.IsNullOrWhiteSpace(exception.Message)
++                ? "The include resolver failed without a diagnostic."
++                : exception.Message;
++        }
++
++        await WriteProtocolMessageAsync(standardInput, response, cancellationToken)
++            .WaitAsync(cancellationToken)
++            .ConfigureAwait(false);
++    }
++
++    ProcessConfiguration ResolveProcessConfiguration() {
++        string assemblyPath = typeof(Xbox360ShaderCompiler).Assembly.Location;
++        if (string.IsNullOrWhiteSpace(assemblyPath)) {
++            throw new InvalidOperationException("The builder assembly location is unavailable; the default shader protocol path cannot be resolved.");
++        }
++
++        string assemblyDirectory = Path.GetDirectoryName(Path.GetFullPath(assemblyPath));
++        string protocolScript = Options.ProtocolScriptPath;
++        if (string.IsNullOrWhiteSpace(protocolScript)) {
++            protocolScript = Path.Combine(assemblyDirectory, "shader-tools", "shader-probe", "backend_protocol.py");
++        }
++        protocolScript = ResolveAssemblyRelativePath(protocolScript, assemblyDirectory);
++        if (!File.Exists(protocolScript)) {
++            throw new FileNotFoundException($"The Python protocol script was not found at '{protocolScript}'.", protocolScript);
++        }
++
++        string shaderc = Options.ShadercLibraryPath;
++        if (string.IsNullOrWhiteSpace(shaderc)) {
++            shaderc = FirstNonemptyEnvironmentValue("HEL_X360_SHADERC", "SHADERC_SHARED_LIBRARY");
++        }
++        if (string.IsNullOrWhiteSpace(shaderc)) {
++            throw new InvalidOperationException("Set HEL_X360_SHADERC or SHADERC_SHARED_LIBRARY to the shaderc_shared.dll path.");
++        }
++        shaderc = ResolveAssemblyRelativePath(shaderc, assemblyDirectory);
++        if (!File.Exists(shaderc)) {
++            throw new FileNotFoundException($"The shaderc shared library was not found at '{shaderc}'.", shaderc);
++        }
++
++        string python = Options.PythonExecutable;
++        if (string.IsNullOrWhiteSpace(python)) {
++            python = Environment.GetEnvironmentVariable("HEL_X360_PYTHON");
++        }
++        if (string.IsNullOrWhiteSpace(python)) {
++            python = "python";
++        }
++
++        bool hasDirectory = Path.IsPathRooted(python)
++            || python.IndexOf(Path.DirectorySeparatorChar) >= 0
++            || python.IndexOf(Path.AltDirectorySeparatorChar) >= 0;
++        if (hasDirectory) {
++            python = ResolveAssemblyRelativePath(python, assemblyDirectory);
++            if (!File.Exists(python)) {
++                throw new FileNotFoundException($"The Python executable was not found at '{python}'.", python);
++            }
++        }
++
++        return new ProcessConfiguration(assemblyDirectory, python, protocolScript, shaderc);
++    }
++
++    static string ResolveAssemblyRelativePath(string path, string assemblyDirectory) =>
++        Path.GetFullPath(path, assemblyDirectory);
++
++    static string FirstNonemptyEnvironmentValue(string firstName, string secondName) {
++        string first = Environment.GetEnvironmentVariable(firstName);
++        if (!string.IsNullOrWhiteSpace(first)) {
++            return first;
++        }
++        string second = Environment.GetEnvironmentVariable(secondName);
++        return string.IsNullOrWhiteSpace(second) ? null : second;
++    }
++
++    static object BuildCompileMessage(ShaderCompileRequest request) {
++        Dictionary<string, string> defines = new(StringComparer.Ordinal);
++        foreach (ShaderDefine define in request.Defines) {
++            if (!defines.TryAdd(define.Name, define.Value)) {
++                throw new InvalidOperationException($"Duplicate define name '{define.Name}' cannot be represented by the protocol define map.");
++            }
++        }
++
++        ShaderCompileOptions options = request.Options;
++        ShaderBindingPolicy policy = options.BindingPolicy;
++        return new {
++            protocol = 1,
++            type = "compile",
++            source = request.Source.Source,
++            source_name = request.Source.Path,
++            stage = GetStageName(request.Stage),
++            entrypoint = request.EntryPoint,
++            program = request.ProgramName,
++            variant = request.Variant,
++            target = "x360",
++            shader_model = "4.0",
++            defines,
++            options = new {
++                debug_info = options.GenerateDebugInfo,
++                optimize = options.Optimize,
++                warnings_as_errors = options.TreatWarningsAsErrors
++            },
++            binding_policy = new {
++                default_space = policy.DefaultSpace,
++                constant_buffer_shift = policy.ConstantBufferShift,
++                texture_shift = policy.TextureShift,
++                sampler_shift = policy.SamplerShift,
++                storage_shift = policy.StorageShift
++            }
++        };
++    }
++
++    static string GetStageName(ShaderStage stage) => stage switch {
++        ShaderStage.Vertex => "vertex",
++        ShaderStage.Pixel => "pixel",
++        _ => throw new InvalidOperationException($"Unsupported shader stage '{stage}'.")
++    };
++
++    static async Task WriteProtocolMessageAsync(Stream stream, object message, CancellationToken cancellationToken) {
++        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(message);
++        if (payload.Length + 1 > MaximumProtocolLineBytes) {
++            throw new InvalidDataException($"A protocol message exceeds the {MaximumProtocolLineBytes} UTF-8 byte limit.");
++        }
++
++        byte[] line = new byte[payload.Length + 1];
++        Buffer.BlockCopy(payload, 0, line, 0, payload.Length);
++        line[^1] = (byte)'\n';
++        await stream.WriteAsync(line, 0, line.Length, cancellationToken).WaitAsync(cancellationToken).ConfigureAwait(false);
++        await stream.FlushAsync(cancellationToken).WaitAsync(cancellationToken).ConfigureAwait(false);
++    }
++
++    static async Task<string> DrainStandardErrorAsync(StreamReader reader) {
++        char[] buffer = new char[4096];
++        StringBuilder retained = new();
++        long totalChars = 0;
++        while (true) {
++            int read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
++            if (read == 0) {
++                break;
++            }
++
++            totalChars += read;
++            int retainCount = Math.Min(read, MaximumRetainedStandardErrorChars - retained.Length);
++            if (retainCount > 0) {
++                retained.Append(buffer, 0, retainCount);
++            }
++        }
++
++        if (totalChars > retained.Length) {
++            retained.Append($"\n[stderr truncated after {MaximumRetainedStandardErrorChars} characters]");
++        }
++        return retained.ToString();
++    }
++
++    static async Task<string> GetStandardErrorAsync(Task<string> standardErrorTask) {
++        try {
++            return await standardErrorTask.WaitAsync(MaximumCleanupWait).ConfigureAwait(false);
++        } catch (TimeoutException) {
++            return "[stderr drain did not finish before cleanup deadline]";
++        } catch (Exception exception) {
++            return $"[stderr could not be read: {exception.Message}]";
++        }
++    }
++
++    static string AppendStandardError(string diagnostic, string standardError) {
++        if (string.IsNullOrWhiteSpace(standardError)) {
++            return diagnostic;
++        }
++        return string.IsNullOrWhiteSpace(diagnostic)
++            ? $"stderr: {standardError}"
++            : $"{diagnostic}\nstderr: {standardError}";
++    }
++
++    static void ValidateProtocolHeader(JsonElement message) {
++        if (message.ValueKind != JsonValueKind.Object) {
++            throw new InvalidDataException("A protocol message must be a JSON object.");
++        }
++        int protocol = RequiredNonnegativeInteger(message, "protocol", "protocol message");
++        if (protocol != 1) {
++            throw new InvalidDataException($"Unsupported protocol version {protocol}; expected 1.");
++        }
++        _ = RequiredString(message, "type", "protocol message");
++    }
++
++    static string RequiredString(JsonElement value, string propertyName, string owner) {
++        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(propertyName, out JsonElement property)) {
++            throw new InvalidDataException($"{owner} is missing required field '{propertyName}'.");
++        }
++        if (property.ValueKind != JsonValueKind.String) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be a string.");
++        }
++        string result = property.GetString();
++        if (string.IsNullOrWhiteSpace(result)) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be nonempty.");
++        }
++        return result;
++    }
++
++    static string OptionalString(JsonElement value, string propertyName, string owner) {
++        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(propertyName, out JsonElement property)) {
++            throw new InvalidDataException($"{owner} is missing required field '{propertyName}'.");
++        }
++        if (property.ValueKind != JsonValueKind.String) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be a string.");
++        }
++        return property.GetString();
++    }
++
++    static bool RequiredBoolean(JsonElement value, string propertyName, string owner) {
++        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(propertyName, out JsonElement property)) {
++            throw new InvalidDataException($"{owner} is missing required field '{propertyName}'.");
++        }
++        if (property.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be a boolean.");
++        }
++        return property.GetBoolean();
++    }
++
++    static int RequiredNonnegativeInteger(JsonElement value, string propertyName, string owner) {
++        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(propertyName, out JsonElement property)) {
++            throw new InvalidDataException($"{owner} is missing required field '{propertyName}'.");
++        }
++        if (property.ValueKind != JsonValueKind.Number || !property.TryGetInt32(out int result) || result < 0) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be a nonnegative 32-bit integer.");
++        }
++        return result;
++    }
++
++    static bool HasNotExited(Process process) {
++        try {
++            return !process.HasExited;
++        } catch (InvalidOperationException) {
++            return false;
++        }
++    }
++
++    static async Task<string> StopOwnedChildAsync(Process process) {
++        string killError = null;
++        try {
++            if (HasNotExited(process)) {
++                process.Kill(entireProcessTree: false);
++            }
++        } catch (InvalidOperationException) {
++            killError = "The protocol child exited while cleanup was starting.";
++        } catch (System.ComponentModel.Win32Exception exception) {
++            killError = $"Could not terminate the protocol child: {exception.Message}";
++        }
++
++        try {
++            if (HasNotExited(process)) {
++                await process.WaitForExitAsync().WaitAsync(MaximumCleanupWait).ConfigureAwait(false);
++            }
++        } catch (TimeoutException) {
++            string timeout = $"The owned protocol child did not exit within {MaximumCleanupWait.TotalSeconds:0} seconds after termination was requested.";
++            return string.IsNullOrWhiteSpace(killError) ? timeout : $"{killError} {timeout}";
++        } catch (InvalidOperationException) {
++            // The process handle has already been closed.
++        } catch (System.ComponentModel.Win32Exception exception) {
++            string waitError = $"Could not confirm protocol child exit: {exception.Message}";
++            return string.IsNullOrWhiteSpace(killError) ? waitError : $"{killError} {waitError}";
++        }
++        return killError;
++    }
++
++    sealed record ProcessConfiguration(
++        string BuilderAssemblyDirectory,
++        string PythonExecutable,
++        string ProtocolScriptPath,
++        string ShadercLibraryPath);
++
++    sealed class BoundedProtocolLineReader {
++        readonly Stream Input;
++        readonly int MaximumLineBytes;
++        readonly UTF8Encoding Encoding;
++        readonly byte[] Buffer = new byte[8192];
++        int Offset;
++        int Count;
++
++        public BoundedProtocolLineReader(Stream input, int maximumLineBytes, UTF8Encoding encoding) {
++            Input = input;
++            MaximumLineBytes = maximumLineBytes;
++            Encoding = encoding;
++        }
++
++        public async Task<string> ReadLineAsync(CancellationToken cancellationToken) {
++            using MemoryStream line = new();
++            while (true) {
++                if (Offset == Count) {
++                    Count = await Input.ReadAsync(Buffer, 0, Buffer.Length, cancellationToken)
++                        .WaitAsync(cancellationToken)
++                        .ConfigureAwait(false);
++                    Offset = 0;
++                    if (Count == 0) {
++                        if (line.Length == 0) {
++                            return null;
++                        }
++                        throw new InvalidDataException("The protocol process ended with a truncated message before newline.");
++                    }
++                }
++
++                int available = Count - Offset;
++                int newline = Array.IndexOf(Buffer, (byte)'\n', Offset, available);
++                int end = newline >= 0 ? newline : Count;
++                int length = end - Offset;
++                if (line.Length + length + 1 > MaximumLineBytes) {
++                    throw new InvalidDataException($"A protocol message exceeds the {MaximumLineBytes} UTF-8 byte limit (8MiB).");
++                }
++                if (length > 0) {
++                    line.Write(Buffer, Offset, length);
++                }
++                Offset = newline >= 0 ? newline + 1 : Count;
++                if (newline < 0) {
++                    continue;
++                }
++
++                byte[] bytes = line.ToArray();
++                int byteCount = bytes.Length;
++                if (byteCount > 0 && bytes[byteCount - 1] == (byte)'\r') {
++                    byteCount--;
++                }
++                try {
++                    return Encoding.GetString(bytes, 0, byteCount);
++                } catch (DecoderFallbackException exception) {
++                    throw new InvalidDataException($"A protocol message is not valid UTF-8: {exception.Message}", exception);
++                }
++            }
++        }
++    }
++}
+diff --git a/builder/shaders/Xbox360ShaderCompilerOptions.cs b/builder/shaders/Xbox360ShaderCompilerOptions.cs
+new file mode 100644
+index 0000000..3a268f6
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderCompilerOptions.cs
+@@ -0,0 +1,25 @@
++namespace helengine.x360.builder;
++
++/// <summary>Configures the host Python protocol process used by the Xbox 360 shader backend.</summary>
++public sealed class Xbox360ShaderCompilerOptions {
++    public Xbox360ShaderCompilerOptions(
++        string pythonExecutable = null,
++        string protocolScriptPath = null,
++        string shadercLibraryPath = null,
++        TimeSpan? timeout = null) {
++        TimeSpan effectiveTimeout = timeout ?? TimeSpan.FromSeconds(60);
++        if (effectiveTimeout <= TimeSpan.Zero) {
++            throw new ArgumentOutOfRangeException(nameof(timeout), "The shader compiler timeout must be positive.");
++        }
++
++        PythonExecutable = pythonExecutable;
++        ProtocolScriptPath = protocolScriptPath;
++        ShadercLibraryPath = shadercLibraryPath;
++        Timeout = effectiveTimeout;
++    }
++
++    public string PythonExecutable { get; }
++    public string ProtocolScriptPath { get; }
++    public string ShadercLibraryPath { get; }
++    public TimeSpan Timeout { get; }
++}
+diff --git a/builder/shaders/Xbox360ShaderProtocolMapper.cs b/builder/shaders/Xbox360ShaderProtocolMapper.cs
+new file mode 100644
+index 0000000..8b005dc
+--- /dev/null
++++ b/builder/shaders/Xbox360ShaderProtocolMapper.cs
+@@ -0,0 +1,325 @@
++using System.Globalization;
++using System.Text.Json;
++using helengine;
++
++namespace helengine.x360.builder;
++
++internal static class Xbox360ShaderProtocolMapper {
++    const int MaximumBinaryBytes = 1024 * 4;
++    const int MaximumIncludes = 4096;
++
++    public static Xbox360ShaderCompileResult Map(ShaderCompileRequest request, JsonElement result) {
++        bool success = RequiredBoolean(result, "success", "result");
++        string diagnostics = RequiredString(result, "diagnostics", "result", allowEmpty: true);
++        if (!success) {
++            throw new Xbox360ShaderCompilationException(
++                request,
++                string.IsNullOrWhiteSpace(diagnostics)
++                    ? "The Python backend reported a compilation failure without diagnostics."
++                    : diagnostics);
++        }
++
++        JsonElement metadata = RequiredObject(result, "metadata", "result");
++        string expectedStage = GetStageName(request.Stage);
++        string actualStage = RequiredString(metadata, "stage", "metadata");
++        if (!string.Equals(actualStage, expectedStage, StringComparison.Ordinal)) {
++            throw new InvalidDataException($"Compiler metadata stage '{actualStage}' does not match request stage '{expectedStage}'.");
++        }
++
++        string actualEntryPoint = RequiredString(metadata, "entrypoint", "metadata");
++        if (!string.Equals(actualEntryPoint, request.EntryPoint, StringComparison.Ordinal)) {
++            throw new InvalidDataException($"Compiler metadata entrypoint '{actualEntryPoint}' does not match request entrypoint '{request.EntryPoint}'.");
++        }
++
++        byte[] binary = ReadBinary(result);
++        string toolIdentity = ReadIdentity(result, "tool_identity");
++        string compileIdentity = ReadIdentity(result, "compile_identity");
++        JsonElement reflection = RequiredObject(result, "reflection", "result");
++        ShaderVertexElement[] inputs = ReadInterfaces(reflection, "inputs");
++        ShaderVertexElement[] outputs = ReadInterfaces(reflection, "outputs");
++        ShaderBinding[] bindings = ReadBindings(reflection, request.Options.BindingPolicy);
++        Xbox360IncludedSource[] includes = ReadIncludes(result);
++        ShaderVariant[] variants = [new ShaderVariant(request.Variant, BuildVariantDefines(request.Defines))];
++        ShaderProgramDefinition definition = new(
++            request.ProgramName,
++            request.Stage,
++            request.EntryPoint,
++            bindings,
++            inputs,
++            outputs,
++            variants);
++        ShaderCompiledBinary compiledBinary = new(
++            request.Target,
++            request.Stage,
++            request.EntryPoint,
++            request.Variant,
++            binary);
++        ShaderCompileDiagnostic[] resultDiagnostics = string.IsNullOrEmpty(diagnostics)
++            ? Array.Empty<ShaderCompileDiagnostic>()
++            : [new ShaderCompileDiagnostic(ShaderDiagnosticSeverity.Warning, diagnostics, request.Source.Path, 0, 0)];
++
++        return new Xbox360ShaderCompileResult(
++            request,
++            definition,
++            compiledBinary,
++            resultDiagnostics,
++            metadata.GetRawText(),
++            toolIdentity,
++            compileIdentity,
++            includes);
++    }
++
++    static byte[] ReadBinary(JsonElement result) {
++        string encoded = RequiredString(result, "binary_base64", "result");
++        if (encoded.Length == 0 || encoded.Length > ((MaximumBinaryBytes + 2) / 3) * 4 || encoded.Length % 4 != 0) {
++            throw new InvalidDataException("Result binary_base64 is empty, truncated, or exceeds the 1024-dword binary limit.");
++        }
++
++        int padding = encoded.EndsWith("==", StringComparison.Ordinal) ? 2
++            : encoded.EndsWith("=", StringComparison.Ordinal) ? 1
++            : 0;
++        int contentLength = encoded.Length - padding;
++        for (int index = 0; index < contentLength; index++) {
++            char value = encoded[index];
++            bool valid = value is >= 'A' and <= 'Z'
++                or >= 'a' and <= 'z'
++                or >= '0' and <= '9'
++                or '+' or '/';
++            if (!valid) {
++                throw new InvalidDataException("Result binary_base64 contains an invalid base64 character.");
++            }
++        }
++        for (int index = contentLength; index < encoded.Length; index++) {
++            if (encoded[index] != '=') {
++                throw new InvalidDataException("Result binary_base64 has invalid padding.");
++            }
++        }
++
++        byte[] binary;
++        try {
++            binary = Convert.FromBase64String(encoded);
++        } catch (FormatException exception) {
++            throw new InvalidDataException("Result binary_base64 is malformed or truncated.", exception);
++        }
++
++        if (binary.Length == 0) {
++            throw new InvalidDataException("The compiler returned an empty binary.");
++        }
++        if ((binary.Length & 3) != 0) {
++            throw new InvalidDataException($"The compiler returned {binary.Length} bytes; Xenos microcode must be dword-aligned.");
++        }
++        if (binary.Length > MaximumBinaryBytes) {
++            throw new InvalidDataException("The compiler binary exceeds the 1024-dword limit.");
++        }
++        return binary;
++    }
++
++    static ShaderVertexElement[] ReadInterfaces(JsonElement reflection, string propertyName) {
++        JsonElement values = RequiredArray(reflection, propertyName, "reflection");
++        List<ShaderVertexElement> interfaces = new();
++        HashSet<string> signatures = new(StringComparer.Ordinal);
++        foreach (JsonElement value in values.EnumerateArray()) {
++            RequireKind(value, JsonValueKind.Object, $"reflection.{propertyName} item");
++            _ = RequiredString(value, "name", $"reflection.{propertyName} item");
++            string format = RequiredString(value, "format", $"reflection.{propertyName} item");
++            if (format is not ("float" or "float2" or "float3" or "float4")) {
++                throw new InvalidDataException($"Unsupported reflected interface format '{format}'.");
++            }
++
++            JsonElement location = RequiredProperty(value, "location", $"reflection.{propertyName} item");
++            JsonElement builtin = RequiredProperty(value, "builtin", $"reflection.{propertyName} item");
++            bool hasLocation = location.ValueKind != JsonValueKind.Null;
++            bool hasBuiltin = builtin.ValueKind != JsonValueKind.Null;
++            if (hasLocation == hasBuiltin) {
++                throw new InvalidDataException($"Reflected {propertyName} item must specify exactly one of location or builtin.");
++            }
++
++            string semantic;
++            int index;
++            if (hasBuiltin) {
++                int builtinId = ReadNonnegativeInteger(builtin, $"reflection.{propertyName}.builtin");
++                if (builtinId != 0 || format != "float4") {
++                    throw new InvalidDataException($"Unsupported reflected builtin {builtinId} with format '{format}'.");
++                }
++                semantic = "SV_POSITION";
++                index = 0;
++            } else {
++                index = ReadNonnegativeInteger(location, $"reflection.{propertyName}.location");
++                if (index > 7) {
++                    throw new InvalidDataException($"Reflected interface location {index} is outside the Xenos 0..7 varying range.");
++                }
++                semantic = "LOCATION";
++            }
++
++            string signature = string.Concat(semantic, ":", index.ToString(CultureInfo.InvariantCulture));
++            if (!signatures.Add(signature)) {
++                throw new InvalidDataException($"Duplicate reflected interface semantic '{signature}'.");
++            }
++            interfaces.Add(new ShaderVertexElement(semantic, index, format));
++        }
++        return interfaces.ToArray();
++    }
++
++    static ShaderBinding[] ReadBindings(JsonElement reflection, ShaderBindingPolicy policy) {
++        JsonElement values = RequiredArray(reflection, "bindings", "reflection");
++        List<ShaderBinding> bindings = new();
++        HashSet<string> physicalSlots = new(StringComparer.Ordinal);
++        foreach (JsonElement value in values.EnumerateArray()) {
++            RequireKind(value, JsonValueKind.Object, "reflection.bindings item");
++            string name = RequiredString(value, "name", "reflection.bindings item");
++            string kind = RequiredString(value, "kind", $"binding '{name}'");
++            int set = ReadNonnegativeInteger(RequiredProperty(value, "set", $"binding '{name}'"), $"binding '{name}'.set");
++            int physicalBinding = ReadNonnegativeInteger(RequiredProperty(value, "binding", $"binding '{name}'"), $"binding '{name}'.binding");
++            if (set != 0) {
++                throw new InvalidDataException($"Binding '{name}' uses set {set}; the Xenos host layout supports set 0 only.");
++            }
++
++            ShaderResourceType type;
++            int shift;
++            switch (kind) {
++                case "constant_buffer":
++                    type = ShaderResourceType.ConstantBuffer;
++                    shift = policy.ConstantBufferShift;
++                    break;
++                case "texture2d":
++                    type = ShaderResourceType.Texture2D;
++                    shift = policy.TextureShift;
++                    break;
++                case "sampler":
++                    type = ShaderResourceType.Sampler;
++                    shift = policy.SamplerShift;
++                    break;
++                default:
++                    throw new InvalidDataException($"Unsupported reflected resource kind '{kind}' for binding '{name}'.");
++            }
++
++            string physicalKey = string.Concat(kind, ":", set.ToString(CultureInfo.InvariantCulture), ":", physicalBinding.ToString(CultureInfo.InvariantCulture));
++            if (!physicalSlots.Add(physicalKey)) {
++                throw new InvalidDataException($"Duplicate reflected physical binding '{physicalKey}'.");
++            }
++
++            int logicalSlot;
++            try {
++                logicalSlot = checked(physicalBinding + shift);
++            } catch (OverflowException exception) {
++                throw new InvalidDataException($"Logical binding slot overflowed for resource '{name}'.", exception);
++            }
++
++            int size = ReadNonnegativeInteger(RequiredProperty(value, "size", $"binding '{name}'"), $"binding '{name}'.size");
++            JsonElement memberValues = RequiredArray(value, "members", $"binding '{name}'");
++            List<ShaderConstantMember> members = new();
++            foreach (JsonElement member in memberValues.EnumerateArray()) {
++                RequireKind(member, JsonValueKind.Object, $"binding '{name}' member");
++                members.Add(new ShaderConstantMember(
++                    RequiredString(member, "name", $"binding '{name}' member"),
++                    RequiredString(member, "type", $"binding '{name}' member"),
++                    ReadNonnegativeInteger(RequiredProperty(member, "offset", $"binding '{name}' member"), $"binding '{name}' member offset"),
++                    ReadNonnegativeInteger(RequiredProperty(member, "size", $"binding '{name}' member"), $"binding '{name}' member size")));
++            }
++
++            if (type == ShaderResourceType.ConstantBuffer) {
++                if (size <= 0) {
++                    throw new InvalidDataException($"Reflected constant buffer '{name}' has no positive declared size.");
++                }
++            } else if (size != 0 || members.Count != 0) {
++                throw new InvalidDataException($"Non-constant resource '{name}' must not carry constant-buffer size or members.");
++            }
++
++            bindings.Add(new ShaderBinding(name, type, set, logicalSlot, size, members.ToArray()));
++        }
++        return bindings.ToArray();
++    }
++
++    static Xbox360IncludedSource[] ReadIncludes(JsonElement result) {
++        JsonElement values = RequiredArray(result, "includes", "result");
++        if (values.GetArrayLength() > MaximumIncludes) {
++            throw new InvalidDataException($"Compiler returned more than {MaximumIncludes} include identities.");
++        }
++
++        List<Xbox360IncludedSource> includes = new();
++        foreach (JsonElement value in values.EnumerateArray()) {
++            RequireKind(value, JsonValueKind.Object, "result.includes item");
++            string sourceName = RequiredString(value, "source_name", "result.includes item");
++            string sha256 = ReadIdentity(value, "sha256");
++            includes.Add(new Xbox360IncludedSource(sourceName, sha256));
++        }
++        return includes.ToArray();
++    }
++
++    static string[] BuildVariantDefines(IReadOnlyList<ShaderDefine> defines) {
++        string[] values = new string[defines.Count];
++        for (int index = 0; index < defines.Count; index++) {
++            ShaderDefine define = defines[index];
++            values[index] = string.IsNullOrEmpty(define.Value)
++                ? define.Name
++                : string.Concat(define.Name, "=", define.Value);
++        }
++        return values;
++    }
++
++    static string ReadIdentity(JsonElement value, string propertyName) {
++        string identity = RequiredString(value, propertyName, "result");
++        if (identity.Length != 64 || identity.Any(character => !Uri.IsHexDigit(character))) {
++            throw new InvalidDataException($"Result {propertyName} must be a 64-character SHA256 identity.");
++        }
++        return identity;
++    }
++
++    static string GetStageName(ShaderStage stage) => stage switch {
++        ShaderStage.Vertex => "vertex",
++        ShaderStage.Pixel => "pixel",
++        _ => throw new InvalidDataException($"Unsupported stage '{stage}'.")
++    };
++
++    static string RequiredString(JsonElement value, string propertyName, string owner, bool allowEmpty = false) {
++        JsonElement property = RequiredProperty(value, propertyName, owner);
++        if (property.ValueKind != JsonValueKind.String) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be a string.");
++        }
++        string result = property.GetString();
++        if (!allowEmpty && string.IsNullOrWhiteSpace(result)) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be nonempty.");
++        }
++        return result;
++    }
++
++    static bool RequiredBoolean(JsonElement value, string propertyName, string owner) {
++        JsonElement property = RequiredProperty(value, propertyName, owner);
++        if (property.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) {
++            throw new InvalidDataException($"{owner}.{propertyName} must be a boolean.");
++        }
++        return property.GetBoolean();
++    }
++
++    static JsonElement RequiredObject(JsonElement value, string propertyName, string owner) {
++        JsonElement property = RequiredProperty(value, propertyName, owner);
++        RequireKind(property, JsonValueKind.Object, $"{owner}.{propertyName}");
++        return property;
++    }
++
++    static JsonElement RequiredArray(JsonElement value, string propertyName, string owner) {
++        JsonElement property = RequiredProperty(value, propertyName, owner);
++        RequireKind(property, JsonValueKind.Array, $"{owner}.{propertyName}");
++        return property;
++    }
++
++    static JsonElement RequiredProperty(JsonElement value, string propertyName, string owner) {
++        if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(propertyName, out JsonElement property)) {
++            throw new InvalidDataException($"{owner} is missing required field '{propertyName}'.");
++        }
++        return property;
++    }
++
++    static int ReadNonnegativeInteger(JsonElement value, string label) {
++        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out int result) || result < 0) {
++            throw new InvalidDataException($"{label} must be a nonnegative 32-bit integer.");
++        }
++        return result;
++    }
++
++    static void RequireKind(JsonElement value, JsonValueKind expected, string label) {
++        if (value.ValueKind != expected) {
++            throw new InvalidDataException($"{label} must be a JSON {expected.ToString().ToLowerInvariant()}.");
++        }
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderBackendTests.cs b/builder.tests/Xbox360ShaderBackendTests.cs
+new file mode 100644
+index 0000000..88984b5
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderBackendTests.cs
+@@ -0,0 +1,120 @@
++using helengine;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++public sealed class Xbox360ShaderBackendTests {
++    [Fact]
++    public void Backend_advertises_only_its_compiled_shader_subset_and_bypasses_shared_cache() {
++        var backend = new Xbox360ShaderBackend();
++
++        Assert.Equal(ShaderCompileTarget.Xbox360, backend.Target);
++        Assert.Equal(4, backend.Capabilities.MinimumShaderModel.Major);
++        Assert.Equal(0, backend.Capabilities.MinimumShaderModel.Minor);
++        Assert.Equal(4, backend.Capabilities.MaximumShaderModel.Major);
++        Assert.Equal(0, backend.Capabilities.MaximumShaderModel.Minor);
++        Assert.Equal([ShaderStage.Vertex, ShaderStage.Pixel], backend.Capabilities.SupportedStages);
++        Assert.False(backend.Capabilities.SupportsRayTracing);
++        Assert.False(Assert.IsAssignableFrom<IShaderBackendCachePolicy>(backend).UseSharedCache);
++    }
++
++    [Fact]
++    public void Registry_contribution_is_lazy_and_does_not_make_builder_a_target_provider() {
++        var options = new Xbox360ShaderCompilerOptions(
++            pythonExecutable: "missing-python-for-lazy-registration",
++            protocolScriptPath: Path.Combine(Path.GetTempPath(), "missing-x360-protocol.py"),
++            shadercLibraryPath: Path.Combine(Path.GetTempPath(), "missing-x360-shaderc.dll"));
++        var backend = new Xbox360ShaderBackend(options);
++        var registry = new ShaderBackendRegistry();
++        registry.Register(backend);
++
++        Assert.True(registry.ContainsTarget(ShaderCompileTarget.Xbox360));
++
++        var builder = new Xbox360PlatformAssetBuilder();
++        Assert.IsAssignableFrom<IShaderBackendRegistryContributor>(builder);
++        var contributedRegistry = new ShaderBackendRegistry();
++        ((IShaderBackendRegistryContributor)builder).RegisterShaderBackends(contributedRegistry);
++        Assert.True(contributedRegistry.ContainsTarget(ShaderCompileTarget.Xbox360));
++        Assert.DoesNotContain(
++            typeof(Xbox360PlatformAssetBuilder).GetInterfaces(),
++            interfaceType => interfaceType.Name == "IShaderCompileTargetProvider");
++    }
++
++    [Theory]
++    [InlineData(ShaderCompileTarget.DirectX11, ShaderStage.Vertex, 4, 0, "target")]
++    [InlineData(ShaderCompileTarget.Xbox360, ShaderStage.Compute, 4, 0, "stage")]
++    [InlineData(ShaderCompileTarget.Xbox360, ShaderStage.Vertex, 5, 0, "model")]
++    public void Unsupported_request_contracts_fail_with_request_context_before_tool_launch(
++        ShaderCompileTarget target,
++        ShaderStage stage,
++        int modelMajor,
++        int modelMinor,
++        string diagnosticPart) {
++        var backend = new Xbox360ShaderBackend(new Xbox360ShaderCompilerOptions(
++            pythonExecutable: "missing-python-for-preflight",
++            protocolScriptPath: Path.Combine(Path.GetTempPath(), "missing-x360-protocol.py"),
++            shadercLibraryPath: Path.Combine(Path.GetTempPath(), "missing-x360-shaderc.dll")));
++        ShaderCompileRequest request = CreateRequest(target: target, stage: stage, model: new ShaderModel(modelMajor, modelMinor));
++
++        Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(
++            () => backend.Compile(request, new EmptyIncludeResolver()));
++
++        Assert.Contains(diagnosticPart, exception.Diagnostic, StringComparison.OrdinalIgnoreCase);
++        Assert.Equal(request.Source.Path, exception.SourcePath);
++        Assert.Equal(request.ProgramName, exception.ProgramName);
++        Assert.Equal(request.EntryPoint, exception.EntryPoint);
++        Assert.Equal(request.Stage, exception.Stage);
++        Assert.Equal(request.Variant, exception.Variant);
++    }
++
++    [Fact]
++    public void Nonzero_default_space_is_rejected_before_tool_launch() {
++        var backend = new Xbox360ShaderBackend(new Xbox360ShaderCompilerOptions(
++            pythonExecutable: "missing-python-for-policy-check",
++            protocolScriptPath: Path.Combine(Path.GetTempPath(), "missing-x360-protocol.py"),
++            shadercLibraryPath: Path.Combine(Path.GetTempPath(), "missing-x360-shaderc.dll")));
++        ShaderCompileRequest request = CreateRequest(defaultSpace: 1);
++
++        Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(
++            () => backend.Compile(request, new EmptyIncludeResolver()));
++
++        Assert.Contains("default space", exception.Diagnostic, StringComparison.OrdinalIgnoreCase);
++    }
++
++    [Fact]
++    public void Duplicate_define_names_are_rejected_instead_of_collapsing_to_a_map() {
++        var backend = new Xbox360ShaderBackend(new Xbox360ShaderCompilerOptions(
++            pythonExecutable: "missing-python-for-duplicate-defines",
++            protocolScriptPath: Path.Combine(Path.GetTempPath(), "missing-x360-protocol.py"),
++            shadercLibraryPath: Path.Combine(Path.GetTempPath(), "missing-x360-shaderc.dll")));
++        ShaderCompileRequest request = CreateRequest(defines: [new ShaderDefine("USE_COLOR", "1"), new ShaderDefine("USE_COLOR", "0")]);
++
++        Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(
++            () => backend.Compile(request, new EmptyIncludeResolver()));
++
++        Assert.Contains("duplicate define", exception.Diagnostic, StringComparison.OrdinalIgnoreCase);
++    }
++
++    static ShaderCompileRequest CreateRequest(
++        ShaderCompileTarget target = ShaderCompileTarget.Xbox360,
++        ShaderStage stage = ShaderStage.Vertex,
++        ShaderModel model = null,
++        int defaultSpace = 0,
++        IReadOnlyList<ShaderDefine> defines = null) {
++        return new ShaderCompileRequest(
++            new ShaderSourceInfo("sample.hlsl", "float4 VSMain() : SV_Position { return 0; }"),
++            "sample-program",
++            "VSMain",
++            stage,
++            target,
++            model ?? new ShaderModel(4, 0),
++            "sample-variant",
++            defines ?? Array.Empty<ShaderDefine>(),
++            new ShaderCompileOptions(new ShaderBindingPolicy(defaultSpace, 0, 100, 200, 300), false, false, false));
++    }
++
++    sealed class EmptyIncludeResolver : IShaderIncludeResolver {
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) =>
++            throw new InvalidOperationException("This request does not include source files.");
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderCompilerProcessTests.cs b/builder.tests/Xbox360ShaderCompilerProcessTests.cs
+new file mode 100644
+index 0000000..6c25a5f
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderCompilerProcessTests.cs
+@@ -0,0 +1,235 @@
++using System.Diagnostics;
++using System.Text.Json;
++using helengine;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++public sealed class Xbox360ShaderCompilerProcessTests {
++    [Fact]
++    public void Success_maps_physical_reflection_to_generic_logical_shifts_and_keeps_host_metadata() {
++        using var fixture = new ProtocolFixture("success");
++        ShaderCompileRequest request = CreateRequest(
++            ShaderStage.Pixel,
++            "PSShade",
++            "textured-program",
++            "textured-variant",
++            [new ShaderDefine("USE_TEXTURE", "1")],
++            new ShaderBindingPolicy(0, 17, 101, 203, 307),
++            new ShaderCompileOptions(new ShaderBindingPolicy(0, 17, 101, 203, 307), true, true, false));
++
++        Xbox360ShaderCompileResult result = Assert.IsType<Xbox360ShaderCompileResult>(
++            fixture.CreateBackend().Compile(request, new EmptyIncludeResolver()));
++
++        Assert.True(result.Success);
++        Assert.Equal("textured-program", result.ProgramDefinition.Name);
++        Assert.Equal("PSShade", result.ProgramDefinition.EntryPoint);
++        Assert.Equal("textured-variant", result.Binary.Variant);
++        Assert.Equal(new byte[] { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef }, result.Binary.Bytecode);
++        Assert.Equal("LOCATION", result.ProgramDefinition.Inputs[0].Semantic);
++        Assert.Equal(2, result.ProgramDefinition.Inputs[0].Index);
++        Assert.Equal("float2", result.ProgramDefinition.Inputs[0].Format);
++        Assert.Equal("LOCATION", result.ProgramDefinition.Outputs[0].Semantic);
++        Assert.Equal(0, result.ProgramDefinition.Outputs[0].Index);
++        Assert.Equal("float4", result.ProgramDefinition.Outputs[0].Format);
++        Assert.Equal(3, result.ProgramDefinition.Bindings.Length);
++        Assert.Equal(17, result.ProgramDefinition.Bindings[0].Slot);
++        Assert.Equal(102, result.ProgramDefinition.Bindings[1].Slot);
++        Assert.Equal(205, result.ProgramDefinition.Bindings[2].Slot);
++        Assert.Equal("Tint", result.ProgramDefinition.Bindings[0].Members[0].Name);
++        Assert.Equal("float4", result.ProgramDefinition.Bindings[0].Members[0].Type);
++        Assert.Equal(0, result.ProgramDefinition.Bindings[0].Members[0].Offset);
++        Assert.Equal(16, result.ProgramDefinition.Bindings[0].Members[0].Size);
++        Assert.Equal("USE_TEXTURE=1", result.ProgramDefinition.Variants[0].Defines[0]);
++        Assert.Equal(new string('A', 64), result.ToolIdentity);
++        Assert.Equal(new string('B', 64), result.CompileIdentity);
++        Assert.Equal(ShaderDiagnosticSeverity.Warning, result.Diagnostics[0].Severity);
++        Assert.Contains("warning: include path kept intact: common.hlsli", result.Diagnostics[0].Message);
++        Assert.Equal("sample.hlsl", result.Diagnostics[0].FilePath);
++        Assert.Equal(0, result.Diagnostics[0].Line);
++        Assert.Equal(0, result.Diagnostics[0].Column);
++
++        using JsonDocument metadata = JsonDocument.Parse(result.NativeMetadataJson);
++        JsonElement wireRequest = metadata.RootElement.GetProperty("wire_request");
++        Assert.Equal("x360", wireRequest.GetProperty("target").GetString());
++        Assert.Equal("4.0", wireRequest.GetProperty("shader_model").GetString());
++        Assert.True(wireRequest.GetProperty("options").GetProperty("debug_info").GetBoolean());
++        Assert.True(wireRequest.GetProperty("options").GetProperty("optimize").GetBoolean());
++        Assert.Equal(0, wireRequest.GetProperty("binding_policy").GetProperty("default_space").GetInt32());
++        Assert.Equal(17, wireRequest.GetProperty("binding_policy").GetProperty("constant_buffer_shift").GetInt32());
++        Assert.Equal(101, wireRequest.GetProperty("binding_policy").GetProperty("texture_shift").GetInt32());
++        Assert.Equal(203, wireRequest.GetProperty("binding_policy").GetProperty("sampler_shift").GetInt32());
++        Assert.Equal(307, wireRequest.GetProperty("binding_policy").GetProperty("storage_shift").GetInt32());
++    }
++
++    [Fact]
++    public void Include_requests_are_resolved_once_and_provenance_is_preserved() {
++        using var fixture = new ProtocolFixture("include");
++        var resolver = new RecordingIncludeResolver();
++
++        Xbox360ShaderCompileResult result = Assert.IsType<Xbox360ShaderCompileResult>(
++            fixture.CreateBackend().Compile(CreateRequest(), resolver));
++
++        Assert.Equal(1, resolver.ResolveCount);
++        Assert.Equal("sample.hlsl", resolver.RequestingFile);
++        Assert.Equal("common.hlsli", resolver.IncludePath);
++        Assert.Single(result.IncludedSources);
++        Assert.Equal("resolved/common.hlsli", result.IncludedSources[0].SourceName);
++        Assert.Equal(new string('C', 64), result.IncludedSources[0].Sha256);
++    }
++
++    [Theory]
++    [InlineData("malformed", "JSON")]
++    [InlineData("eof", "EOF")]
++    [InlineData("nonzero", "fixture shader failure")]
++    [InlineData("exit-mismatch", "exit code")]
++    [InlineData("bad-base64", "base64")]
++    [InlineData("bad-alignment", "dword")]
++    [InlineData("wrong-stage", "stage")]
++    [InlineData("wrong-entrypoint", "entrypoint")]
++    [InlineData("oversized-line", "8MiB")]
++    public void Invalid_protocol_results_fail_with_diagnostics(string mode, string expectedDiagnostic) {
++        using var fixture = new ProtocolFixture(mode);
++
++        Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(() => {
++            fixture.CreateBackend().Compile(CreateRequest(), new EmptyIncludeResolver());
++        });
++
++        Assert.Contains(expectedDiagnostic, exception.Diagnostic, StringComparison.OrdinalIgnoreCase);
++        Assert.Equal("sample.hlsl", exception.SourcePath);
++        Assert.Equal("sample-program", exception.ProgramName);
++        Assert.Equal("VSMain", exception.EntryPoint);
++    }
++
++    [Fact]
++    public void Timeout_terminates_the_child_started_for_this_compile() {
++        string pidPath = Path.Combine(Path.GetTempPath(), $"x360-protocol-child-{Guid.NewGuid():N}.pid");
++        using var fixture = new ProtocolFixture($"timeout|{pidPath}");
++        try {
++            Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(() => {
++                fixture.CreateBackend(TimeSpan.FromMilliseconds(350)).Compile(CreateRequest(), new EmptyIncludeResolver());
++            });
++
++            Assert.Contains("timeout", exception.Diagnostic, StringComparison.OrdinalIgnoreCase);
++            int childId = int.Parse(File.ReadAllText(pidPath));
++            bool childExited;
++            try {
++                using Process child = Process.GetProcessById(childId);
++                childExited = child.WaitForExit(5000);
++            } catch (ArgumentException) {
++                childExited = true;
++            }
++            Assert.True(childExited, "The timed-out protocol child must exit.");
++        } finally {
++            if (File.Exists(pidPath)) {
++                File.Delete(pidPath);
++            }
++        }
++    }
++
++    [Fact]
++    public void Missing_tools_fail_at_compile_time_with_request_context() {
++        string missing = Path.Combine(Path.GetTempPath(), $"x360-missing-{Guid.NewGuid():N}");
++        var backend = new Xbox360ShaderBackend(new Xbox360ShaderCompilerOptions(
++            pythonExecutable: missing,
++            protocolScriptPath: missing + ".py",
++            shadercLibraryPath: missing + ".dll"));
++
++        Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(() => {
++            backend.Compile(CreateRequest(), new EmptyIncludeResolver());
++        });
++
++        Assert.Contains("protocol script", exception.Diagnostic, StringComparison.OrdinalIgnoreCase);
++        Assert.Equal("sample-program", exception.ProgramName);
++    }
++
++    [Fact]
++    public void Unrepresentable_timeout_fails_before_starting_the_protocol_child() {
++        string launchMarkerPath = Path.Combine(Path.GetTempPath(), $"x360-protocol-launch-{Guid.NewGuid():N}.marker");
++        using var fixture = new ProtocolFixture($"launch-marker|{launchMarkerPath}");
++        try {
++            Xbox360ShaderCompilationException exception = Assert.Throws<Xbox360ShaderCompilationException>(() => {
++                fixture.CreateBackend(TimeSpan.MaxValue).Compile(CreateRequest(), new EmptyIncludeResolver());
++            });
++
++            Assert.False(string.IsNullOrWhiteSpace(exception.Diagnostic));
++            bool childStarted = SpinWait.SpinUntil(() => File.Exists(launchMarkerPath), TimeSpan.FromSeconds(2));
++            Assert.False(childStarted, "An invalid timeout must be rejected before creating the protocol child.");
++        } finally {
++            if (File.Exists(launchMarkerPath)) {
++                File.Delete(launchMarkerPath);
++            }
++        }
++    }
++
++    static ShaderCompileRequest CreateRequest(
++        ShaderStage stage = ShaderStage.Vertex,
++        string entryPoint = "VSMain",
++        string programName = "sample-program",
++        string variant = "sample-variant",
++        IReadOnlyList<ShaderDefine> defines = null,
++        ShaderBindingPolicy bindingPolicy = null,
++        ShaderCompileOptions options = null) {
++        bindingPolicy ??= new ShaderBindingPolicy(0, 0, 100, 200, 300);
++        options ??= new ShaderCompileOptions(bindingPolicy, false, false, false);
++        return new ShaderCompileRequest(
++            new ShaderSourceInfo("sample.hlsl", "float4 VSMain() : SV_Position { return 0; }"),
++            programName,
++            entryPoint,
++            stage,
++            ShaderCompileTarget.Xbox360,
++            new ShaderModel(4, 0),
++            variant,
++            defines ?? Array.Empty<ShaderDefine>(),
++            options);
++    }
++
++    sealed class EmptyIncludeResolver : IShaderIncludeResolver {
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) =>
++            throw new InvalidOperationException("No include was expected in this fixture.");
++    }
++
++    sealed class RecordingIncludeResolver : IShaderIncludeResolver {
++        public int ResolveCount { get; private set; }
++        public string RequestingFile { get; private set; }
++        public string IncludePath { get; private set; }
++
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) {
++            ResolveCount++;
++            RequestingFile = requestingFile;
++            IncludePath = includePath;
++            return new ShaderIncludeResult("resolved/common.hlsli", "float4 SharedTint;");
++        }
++    }
++
++    sealed class ProtocolFixture : IDisposable {
++        readonly string DirectoryPath;
++        readonly string ShadercMarkerPath;
++        readonly string ScriptPath;
++
++        public ProtocolFixture(string mode) {
++            DirectoryPath = Path.Combine(Path.GetTempPath(), $"x360-protocol-fixture-{Guid.NewGuid():N}");
++            Directory.CreateDirectory(DirectoryPath);
++            ShadercMarkerPath = Path.Combine(DirectoryPath, "shaderc.fixture");
++            ScriptPath = Path.Combine(DirectoryPath, "backend_protocol.py");
++            File.WriteAllText(ShadercMarkerPath, mode);
++            File.WriteAllText(ScriptPath, "fixture process marker; this is not the protocol worker");
++        }
++
++        public Xbox360ShaderBackend CreateBackend(TimeSpan? timeout = null) {
++            string fixtureExe = Path.Combine(AppContext.BaseDirectory, "shader-protocol-fixture", "Xbox360ShaderProtocolFixture.exe");
++            Assert.True(File.Exists(fixtureExe), $"Expected the C# process fixture at '{fixtureExe}'.");
++            return new Xbox360ShaderBackend(new Xbox360ShaderCompilerOptions(
++                pythonExecutable: fixtureExe,
++                protocolScriptPath: ScriptPath,
++                shadercLibraryPath: ShadercMarkerPath,
++                timeout: timeout ?? TimeSpan.FromSeconds(5)));
++        }
++
++        public void Dispose() {
++            if (Directory.Exists(DirectoryPath)) {
++                Directory.Delete(DirectoryPath, recursive: true);
++            }
++        }
++    }
++}
+diff --git a/builder.tests/Xbox360ShaderCompilerIntegrationTests.cs b/builder.tests/Xbox360ShaderCompilerIntegrationTests.cs
+new file mode 100644
+index 0000000..f7cb3ca
+--- /dev/null
++++ b/builder.tests/Xbox360ShaderCompilerIntegrationTests.cs
+@@ -0,0 +1,274 @@
++using System.Security.Cryptography;
++using System.Text;
++using System.Text.Json;
++using helengine;
++using helengine.x360.builder;
++
++namespace helengine.x360.builder.tests;
++
++public sealed class Xbox360ShaderCompilerIntegrationTests {
++    const string ShadercLibraryPath = @"C:\dev\helworks\helengine-wiiu\builder\bin\Debug\net9.0-windows\runtimes\win-x64\native\shaderc_shared.dll";
++    const string TransformBinarySha256 = "40C01033D5B097352583DE0F004FF1D37D5640C456BCAADF1941D9B7CEC284EF";
++    const string TextureBinarySha256 = "D70B3ADAFE4D38E2DEE8C77E038B06B712836C58F28E48CE850A2795F547016A";
++
++    [Fact]
++    public void Real_shaderc_transform_reflects_actual_vertex_layout_and_stable_binary() {
++        Xbox360ShaderBackend backend = CreateRealBackend();
++        string sourcePath = Path.Combine(FindRepositoryRoot(), "tests", "shaders", "fixtures", "transform_vs.hlsl");
++        string source = File.ReadAllText(sourcePath);
++        ShaderCompileRequest request = CreateRequest(source, "fixtures/transform_vs.hlsl", "main", ShaderStage.Vertex);
++
++        Xbox360ShaderCompileResult result = Assert.IsType<Xbox360ShaderCompileResult>(backend.Compile(request, new EmptyIncludeResolver()));
++
++        Assert.True(result.Success);
++        Assert.Equal(TransformBinarySha256, Convert.ToHexString(SHA256.HashData(result.Binary.Bytecode)));
++        Assert.Empty(result.Diagnostics);
++        Assert.Equal(request.ProgramName, result.ProgramDefinition.Name);
++        Assert.Equal(request.EntryPoint, result.ProgramDefinition.EntryPoint);
++        Assert.Equal(request.Variant, result.Binary.Variant);
++        Assert.Equal(new[] { ("LOCATION", 0, "float3"), ("LOCATION", 2, "float2"), ("LOCATION", 3, "float4") },
++            result.ProgramDefinition.Inputs.Select(item => (item.Semantic, item.Index, item.Format)));
++        Assert.Equal(new[] { ("LOCATION", 0, "float4"), ("LOCATION", 1, "float2"), ("SV_POSITION", 0, "float4") },
++            result.ProgramDefinition.Outputs.Select(item => (item.Semantic, item.Index, item.Format)));
++
++        ShaderBinding transform = Assert.Single(result.ProgramDefinition.Bindings);
++        Assert.Equal("Transform", transform.Name);
++        Assert.Equal(ShaderResourceType.ConstantBuffer, transform.Type);
++        Assert.Equal(0, transform.Set);
++        Assert.Equal(0, transform.Slot);
++        Assert.Equal(80, transform.Size);
++        Assert.Collection(transform.Members,
++            member => Assert.Equal(("clipFromObject", "float4x4", 0, 64), (member.Name, member.Type, member.Offset, member.Size)),
++            member => Assert.Equal(("tint", "float4", 64, 16), (member.Name, member.Type, member.Offset, member.Size)));
++        Assert.Equal(64, result.ToolIdentity.Length);
++        Assert.Equal(64, result.CompileIdentity.Length);
++        Assert.Empty(result.IncludedSources);
++
++        using JsonDocument metadata = JsonDocument.Parse(result.NativeMetadataJson);
++        Assert.Equal("vertex", metadata.RootElement.GetProperty("stage").GetString());
++        Assert.Equal("main", metadata.RootElement.GetProperty("entrypoint").GetString());
++        Assert.Equal("big_endian", metadata.RootElement.GetProperty("binary_dword_byte_order").GetString());
++
++        Xbox360ShaderCompileResult alternateVariant = Assert.IsType<Xbox360ShaderCompileResult>(
++            backend.Compile(Clone(request, variant: "alternate"), new EmptyIncludeResolver()));
++        Assert.Equal(result.Binary.Bytecode, alternateVariant.Binary.Bytecode);
++        Assert.NotEqual(result.CompileIdentity, alternateVariant.CompileIdentity);
++        Assert.Equal(result.ToolIdentity, alternateVariant.ToolIdentity);
++
++        Xbox360ShaderCompileResult differentOptions = Assert.IsType<Xbox360ShaderCompileResult>(
++            backend.Compile(Clone(request, treatWarningsAsErrors: true), new EmptyIncludeResolver()));
++        Assert.NotEqual(result.CompileIdentity, differentOptions.CompileIdentity);
++    }
++
++    [Fact]
++    public void Real_shaderc_textured_pixel_maps_raw_texture_pair_with_request_shifts() {
++        Xbox360ShaderBackend backend = CreateRealBackend();
++        string sourcePath = Path.Combine(FindRepositoryRoot(), "tests", "shaders", "fixtures", "texture_ps.hlsl");
++        ShaderCompileRequest request = CreateRequest(
++            File.ReadAllText(sourcePath), "fixtures/texture_ps.hlsl", "main", ShaderStage.Pixel,
++            bindingPolicy: new ShaderBindingPolicy(0, 0, 100, 200, 300));
++
++        Xbox360ShaderCompileResult result = Assert.IsType<Xbox360ShaderCompileResult>(backend.Compile(request, new EmptyIncludeResolver()));
++
++        Assert.Equal(TextureBinarySha256, Convert.ToHexString(SHA256.HashData(result.Binary.Bytecode)));
++        ShaderBinding textureBinding = Assert.Single(result.ProgramDefinition.Bindings, item => item.Type == ShaderResourceType.Texture2D);
++        Assert.Equal("texture0", textureBinding.Name);
++        Assert.Equal(0, textureBinding.Set);
++        Assert.Equal(100, textureBinding.Slot);
++        ShaderBinding samplerBinding = Assert.Single(result.ProgramDefinition.Bindings, item => item.Type == ShaderResourceType.Sampler);
++        Assert.Equal("sampler0", samplerBinding.Name);
++        Assert.Equal(0, samplerBinding.Set);
++        Assert.Equal(200, samplerBinding.Slot);
++        Assert.Equal(new[] { ("LOCATION", 0, "float4"), ("LOCATION", 1, "float2") },
++            result.ProgramDefinition.Inputs.Select(item => (item.Semantic, item.Index, item.Format)));
++        Assert.Single(result.ProgramDefinition.Outputs);
++        Assert.Equal(("LOCATION", 0, "float4"),
++            (result.ProgramDefinition.Outputs[0].Semantic, result.ProgramDefinition.Outputs[0].Index, result.ProgramDefinition.Outputs[0].Format));
++
++        using JsonDocument metadata = JsonDocument.Parse(result.NativeMetadataJson);
++        JsonElement texture = Assert.Single(metadata.RootElement.GetProperty("textures").EnumerateArray());
++        Assert.Equal(0, texture.GetProperty("texture_binding").GetInt32());
++        Assert.Equal(0, texture.GetProperty("sampler_binding").GetInt32());
++        Assert.Equal(1, texture.GetProperty("fetch_constant").GetInt32());
++    }
++
++    [Fact]
++    public void Real_shader_service_resolves_conditional_nested_includes_and_recompiles_changed_content() {
++        Xbox360ShaderBackend backend = CreateRealBackend();
++        string source = """
++            #if ENABLED
++            #include "outer.hlsli"
++            #else
++            #include "inactive.hlsli"
++            #endif
++            struct Input { [[vk::location(0)]] float4 color : COLOR0; };
++            float4 PSShade(Input input) : SV_Target0 { return includedColor(input.color); }
++            """;
++        string firstInner = "cbuffer IncludedTint : register(b0) { float4 tint; };\nfloat4 includedColor(float4 color) { return color * tint; }\n";
++        string secondInner = "cbuffer IncludedTint : register(b0) { float4 tint; };\nfloat4 includedColor(float4 color) { return color + tint; }\n";
++        var resolver = new NestedIncludeResolver(firstInner);
++        var cache = new ThrowingCache();
++        var service = new ShaderCompileService(resolver, cache, new ShaderSourceHasher());
++        service.RegisterBackend(backend);
++        ShaderCompileRequest request = CreateRequest(
++            source, "virtual/main.hlsl", "PSShade", ShaderStage.Pixel,
++            programName: "include-program", variant: "include-variant",
++            defines: [new ShaderDefine("ENABLED", "1")]);
++
++        Xbox360ShaderCompileResult first = Assert.IsType<Xbox360ShaderCompileResult>(service.Compile(request));
++        Assert.Equal(new[] { "outer.hlsli", "inner.hlsli" }, resolver.RequestedNames);
++        Assert.Equal(new[] { "virtual/outer.hlsli", "virtual/inner.hlsli" }, first.IncludedSources.Select(item => item.SourceName));
++        Assert.Equal(Sha256(firstInner), first.IncludedSources[1].Sha256);
++        ShaderBinding includedTint = Assert.Single(first.ProgramDefinition.Bindings);
++        Assert.Equal("IncludedTint", includedTint.Name);
++        Assert.Equal(0, includedTint.Slot);
++        Assert.Equal(("tint", "float4", 0, 16),
++            (includedTint.Members[0].Name, includedTint.Members[0].Type, includedTint.Members[0].Offset, includedTint.Members[0].Size));
++        Assert.Equal("PSShade", first.ProgramDefinition.EntryPoint);
++        Assert.Equal("ENABLED=1", Assert.Single(first.ProgramDefinition.Variants).Defines[0]);
++
++        resolver.InnerSource = secondInner;
++        resolver.ResetRequests();
++        Xbox360ShaderCompileResult second = Assert.IsType<Xbox360ShaderCompileResult>(service.Compile(request));
++
++        Assert.Equal(new[] { "outer.hlsli", "inner.hlsli" }, resolver.RequestedNames);
++        Assert.NotSame(first, second);
++        Assert.NotEqual(first.Binary.Bytecode, second.Binary.Bytecode);
++        Assert.NotEqual(first.CompileIdentity, second.CompileIdentity);
++        Assert.Equal(Sha256(secondInner), second.IncludedSources[1].Sha256);
++        Assert.Equal(0, cache.LookupCount);
++        Assert.Equal(0, cache.StoreCount);
++
++        resolver.InnerSource = "float4 includedColor(float4 color) { return color * ; }\n";
++        Xbox360ShaderCompilationException failed = Assert.Throws<Xbox360ShaderCompilationException>(() => service.Compile(request));
++        Assert.False(string.IsNullOrWhiteSpace(failed.Diagnostic));
++        Assert.Contains("virtual/inner.hlsli", failed.Diagnostic, StringComparison.OrdinalIgnoreCase);
++        Assert.Equal(request.Source.Path, failed.SourcePath);
++        resolver.InnerSource = secondInner;
++        Xbox360ShaderCompileResult recovered = Assert.IsType<Xbox360ShaderCompileResult>(service.Compile(request));
++        Assert.NotSame(second, recovered);
++        Assert.Equal(second.Binary.Bytecode, recovered.Binary.Bytecode);
++        Assert.Equal(0, cache.LookupCount);
++        Assert.Equal(0, cache.StoreCount);
++    }
++
++    static Xbox360ShaderBackend CreateRealBackend() {
++        Assert.True(File.Exists(ShadercLibraryPath), $"Real shaderc integration prerequisite is missing: {ShadercLibraryPath}");
++        string builderDirectory = Path.GetDirectoryName(typeof(Xbox360ShaderBackend).Assembly.Location);
++        string[] bundledTools = [
++            Path.Combine("shader-tools", "xenos_asm.py"),
++            Path.Combine("shader-tools", "shader-probe", "backend_protocol.py"),
++            Path.Combine("shader-tools", "shader-probe", "backend_layout.py"),
++            Path.Combine("shader-tools", "shader-probe", "shader_probe.py"),
++            Path.Combine("shader-tools", "shader-probe", "lower_xenos.py"),
++            Path.Combine("shader-tools", "shader-probe", "spirv_parser.py")
++        ];
++        foreach (string relativePath in bundledTools) {
++            string path = Path.Combine(builderDirectory, relativePath);
++            Assert.True(File.Exists(path), $"Expected the builder-bundled shader tool at '{path}'.");
++        }
++
++        return new Xbox360ShaderBackend(new Xbox360ShaderCompilerOptions(
++            shadercLibraryPath: ShadercLibraryPath,
++            timeout: TimeSpan.FromSeconds(30)));
++    }
++
++    static ShaderCompileRequest CreateRequest(
++        string source,
++        string sourcePath,
++        string entryPoint,
++        ShaderStage stage,
++        string programName = "integration-program",
++        string variant = "default",
++        IReadOnlyList<ShaderDefine> defines = null,
++        ShaderBindingPolicy bindingPolicy = null,
++        bool generateDebugInfo = false,
++        bool optimize = false,
++        bool treatWarningsAsErrors = false) {
++        bindingPolicy ??= new ShaderBindingPolicy(0, 0, 100, 200, 300);
++        return new ShaderCompileRequest(
++            new ShaderSourceInfo(sourcePath, source),
++            programName,
++            entryPoint,
++            stage,
++            ShaderCompileTarget.Xbox360,
++            new ShaderModel(4, 0),
++            variant,
++            defines ?? Array.Empty<ShaderDefine>(),
++            new ShaderCompileOptions(bindingPolicy, generateDebugInfo, optimize, treatWarningsAsErrors));
++    }
++
++    static ShaderCompileRequest Clone(
++        ShaderCompileRequest request,
++        string variant = null,
++        bool? generateDebugInfo = null,
++        bool? optimize = null,
++        bool? treatWarningsAsErrors = null) => new(
++            request.Source,
++            request.ProgramName,
++            request.EntryPoint,
++            request.Stage,
++            request.Target,
++            request.ShaderModel,
++            variant ?? request.Variant,
++            request.Defines,
++            new ShaderCompileOptions(
++                request.Options.BindingPolicy,
++                generateDebugInfo ?? request.Options.GenerateDebugInfo,
++                optimize ?? request.Options.Optimize,
++                treatWarningsAsErrors ?? request.Options.TreatWarningsAsErrors));
++
++    static string FindRepositoryRoot() {
++        for (DirectoryInfo directory = new(AppContext.BaseDirectory); directory != null; directory = directory.Parent) {
++            if (File.Exists(Path.Combine(directory.FullName, "tests", "shaders", "fixtures", "transform_vs.hlsl"))) {
++                return directory.FullName;
++            }
++        }
++        throw new DirectoryNotFoundException("Could not locate the checkout containing tests/shaders/fixtures.");
++    }
++
++    static string Sha256(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
++
++    sealed class EmptyIncludeResolver : IShaderIncludeResolver {
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) =>
++            throw new InvalidOperationException($"Unexpected include '{includePath}' from '{requestingFile}'.");
++    }
++
++    sealed class NestedIncludeResolver : IShaderIncludeResolver {
++        readonly List<string> Requests = new();
++
++        public NestedIncludeResolver(string innerSource) {
++            InnerSource = innerSource;
++        }
++
++        public string InnerSource { get; set; }
++        public IReadOnlyList<string> RequestedNames => Requests;
++
++        public ShaderIncludeResult Resolve(string requestingFile, string includePath) {
++            Requests.Add(includePath);
++            return includePath switch {
++                "outer.hlsli" => new ShaderIncludeResult("virtual/outer.hlsli", "#include \"inner.hlsli\"\n"),
++                "inner.hlsli" => new ShaderIncludeResult("virtual/inner.hlsli", InnerSource),
++                _ => throw new FileNotFoundException($"Unexpected active include '{includePath}' requested by '{requestingFile}'.")
++            };
++        }
++
++        public void ResetRequests() => Requests.Clear();
++    }
++
++    sealed class ThrowingCache : IShaderCompileCache {
++        public int LookupCount { get; private set; }
++        public int StoreCount { get; private set; }
++
++        public bool TryGet(ShaderCompileCacheKey key, out ShaderCompileResult result) {
++            LookupCount++;
++            result = null;
++            throw new InvalidOperationException("Xbox 360 shader service must bypass the shared cache.");
++        }
++
++        public void Store(ShaderCompileCacheKey key, ShaderCompileResult result) {
++            StoreCount++;
++            throw new InvalidOperationException("Xbox 360 shader service must bypass the shared cache.");
++        }
++    }
++}
+diff --git a/builder.tests/fixtures/Xbox360ShaderProtocolFixture/Xbox360ShaderProtocolFixture.csproj b/builder.tests/fixtures/Xbox360ShaderProtocolFixture/Xbox360ShaderProtocolFixture.csproj
+new file mode 100644
+index 0000000..6e3a131
+--- /dev/null
++++ b/builder.tests/fixtures/Xbox360ShaderProtocolFixture/Xbox360ShaderProtocolFixture.csproj
+@@ -0,0 +1,8 @@
++<Project Sdk="Microsoft.NET.Sdk">
++  <PropertyGroup>
++    <OutputType>Exe</OutputType>
++    <TargetFramework>net9.0</TargetFramework>
++    <ImplicitUsings>enable</ImplicitUsings>
++    <Nullable>disable</Nullable>
++  </PropertyGroup>
++</Project>
+diff --git a/builder.tests/fixtures/Xbox360ShaderProtocolFixture/Program.cs b/builder.tests/fixtures/Xbox360ShaderProtocolFixture/Program.cs
+new file mode 100644
+index 0000000..2972d38
+--- /dev/null
++++ b/builder.tests/fixtures/Xbox360ShaderProtocolFixture/Program.cs
+@@ -0,0 +1,126 @@
++using System.Diagnostics;
++using System.Text.Json;
++
++if (args.Length < 4 || args[^2] != "--shaderc") {
++    return 90;
++}
++
++string[] modeParts = File.ReadAllText(args[^1]).Split('|', 2);
++string mode = modeParts[0];
++if (mode == "launch-marker") {
++    File.WriteAllText(modeParts[1], Process.GetCurrentProcess().Id.ToString());
++    return 0;
++}
++
++using JsonDocument requestDocument = JsonDocument.Parse(Console.ReadLine() ?? string.Empty);
++JsonElement request = requestDocument.RootElement;
++
++if (mode == "timeout") {
++    if (modeParts.Length > 1) {
++        File.WriteAllText(modeParts[1], Process.GetCurrentProcess().Id.ToString());
++    }
++    Thread.Sleep(TimeSpan.FromSeconds(30));
++    return 0;
++}
++
++if (mode == "malformed") {
++    Console.WriteLine("{malformed-json}");
++    return 0;
++}
++
++if (mode == "eof") {
++    return 0;
++}
++
++if (mode == "oversized-line") {
++    Console.WriteLine(new string('x', 8 * 1024 * 1024 + 32));
++    return 0;
++}
++
++string includedSourceName = null;
++if (mode == "include") {
++    Console.WriteLine(JsonSerializer.Serialize(new {
++        protocol = 1,
++        type = "include",
++        id = 1,
++        requesting_source = request.GetProperty("source_name").GetString(),
++        include_name = "common.hlsli"
++    }));
++    using JsonDocument includeDocument = JsonDocument.Parse(Console.ReadLine() ?? string.Empty);
++    JsonElement includeResponse = includeDocument.RootElement;
++    if (includeResponse.GetProperty("protocol").GetInt32() != 1
++        || includeResponse.GetProperty("type").GetString() != "include_result"
++        || includeResponse.GetProperty("id").GetInt32() != 1
++        || includeResponse.GetProperty("source_name").GetString() != "resolved/common.hlsli"
++        || includeResponse.GetProperty("source").GetString() != "float4 SharedTint;") {
++        Console.WriteLine(JsonSerializer.Serialize(Failure("include response did not match the resolver result")));
++        return 91;
++    }
++    includedSourceName = includeResponse.GetProperty("source_name").GetString();
++}
++
++if (mode == "nonzero") {
++    Console.WriteLine(JsonSerializer.Serialize(Failure("fixture shader failure")));
++    return 17;
++}
++
++string stage = request.GetProperty("stage").GetString();
++string entrypoint = request.GetProperty("entrypoint").GetString();
++string reflectedStage = mode == "wrong-stage" ? (stage == "vertex" ? "pixel" : "vertex") : stage;
++string reflectedEntrypoint = mode == "wrong-entrypoint" ? "DifferentEntry" : entrypoint;
++string binaryBase64 = mode switch {
++    "bad-base64" => "%%%not-base64%%%",
++    "bad-alignment" => Convert.ToBase64String([1, 2, 3]),
++    _ => Convert.ToBase64String([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef])
++};
++
++object metadata = new {
++    stage = reflectedStage,
++    entrypoint = reflectedEntrypoint,
++    wire_request = JsonSerializer.Deserialize<JsonElement>(request.GetRawText()),
++    physical_resources = new[] {
++        new { kind = "constant_buffer", set = 0, binding = 0 },
++        new { kind = "texture2d", set = 0, binding = 1 },
++        new { kind = "sampler", set = 0, binding = 2 }
++    }
++};
++
++object[] bindings = stage == "pixel"
++    ? [
++        new { name = "Globals", kind = "constant_buffer", set = 0, binding = 0, size = 16, members = new object[] { new { name = "Tint", type = "float4", offset = 0, size = 16 } } },
++        new { name = "Albedo", kind = "texture2d", set = 0, binding = 1, size = 0, members = Array.Empty<object>() },
++        new { name = "LinearSampler", kind = "sampler", set = 0, binding = 2, size = 0, members = Array.Empty<object>() }
++    ]
++    : [
++        new { name = "Globals", kind = "constant_buffer", set = 0, binding = 0, size = 16, members = new object[] { new { name = "Tint", type = "float4", offset = 0, size = 16 } } }
++    ];
++
++object[] inputs = stage == "pixel"
++    ? [new { name = "uv", location = (int?)2, builtin = (int?)null, format = "float2" }]
++    : [new { name = "position", location = (int?)0, builtin = (int?)null, format = "float3" }];
++object[] outputs = stage == "vertex"
++    ? [new { name = "position", location = (int?)null, builtin = (int?)0, format = "float4" }]
++    : [new { name = "color", location = (int?)0, builtin = (int?)null, format = "float4" }];
++object result = new {
++    protocol = 1,
++    type = "result",
++    success = true,
++    binary_base64 = binaryBase64,
++    metadata,
++    reflection = new { inputs, outputs, bindings },
++    diagnostics = "warning: include path kept intact: common.hlsli",
++    includes = includedSourceName == null
++        ? Array.Empty<object>()
++        : [new { source_name = includedSourceName, sha256 = new string('C', 64) }],
++    tool_identity = new string('A', 64),
++    compile_identity = new string('B', 64)
++};
++Console.WriteLine(JsonSerializer.Serialize(result));
++return mode == "exit-mismatch" ? 19 : 0;
++
++static object Failure(string diagnostics) => new {
++    protocol = 1,
++    type = "result",
++    success = false,
++    diagnostics
++};
+diff --git a/docs/x360-shader-backend.md b/docs/x360-shader-backend.md
+new file mode 100644
+index 0000000..a314dde
+--- /dev/null
++++ b/docs/x360-shader-backend.md
+@@ -0,0 +1,48 @@
++# Xbox 360 managed shader backend
++
++The host-side `Xbox360ShaderBackend` registers for the shared Xbox 360 shader
++target through `Xbox360PlatformAssetBuilder.RegisterShaderBackends`. Registry
++construction is lazy: Python and shaderc are resolved only when a shader is
++compiled. This backend deliberately does not implement the legacy target
++provider and does not change editor target selection, material cooking, runtime
++activation, or the guest ABI.
++
++The backend currently accepts shader model 4.0 vertex and pixel requests,
++requires binding `DefaultSpace` to be zero, and opts out of the shared compile
++cache. Every request starts one host protocol process so changed include/tool
++contents cannot be hidden by stale service-cache entries.
++
++## Host tools
++
++By default, the backend launches `python` (or `HEL_X360_PYTHON`) and loads
++`shader-tools/shader-probe/backend_protocol.py` relative to the builder
++assembly. It bundles the protocol's Python dependencies beside that assembly.
++The shaderc DLL is supplied explicitly using `HEL_X360_SHADERC` or
++`SHADERC_SHARED_LIBRARY`; callers and tests may instead pass all paths through
++`Xbox360ShaderCompilerOptions`. The backend does not search sibling platform
++outputs for a DLL. Missing tools are reported on compile, not while registering
++the backend.
++
++Compilation uses protocol 1 JSON-lines over redirected UTF-8 standard streams.
++Messages are bounded to 8 MiB including newline, include requests to 4096, and
++the process timeout defaults to 60 seconds. On protocol failure or timeout the
++compiler terminates only the child it started. Include resolution follows the
++provided synchronous `IShaderIncludeResolver`; the process timeout cannot
++interrupt arbitrary user callback code while that callback is executing.
++
++## Results and current ABI boundary
++
++Successful results contain the host-lowered big-endian Xenos bytecode and the
++compiled module's reflected interfaces/resources. Reflection uses `LOCATION`
++indices for explicit interface locations and `SV_POSITION` for SPIR-V
++BuiltIn Position; it does not reconstruct arbitrary original HLSL semantics.
++Resource logical slots use the request's constant-buffer, texture, and sampler
++shifts, while raw set/binding data stays in host metadata. Warnings are
++preserved as shared warning diagnostics.
++
++`Xbox360ShaderCompileResult` additionally exposes native metadata JSON, tool
++and compile identities, and the source names/hashes of includes consumed by
++shaderc. Those host-only fields are for later cooker work and are not a final
++guest serialization contract. Unsupported compiler/lowering features fail
++with request context rather than receiving placeholder binaries or reflected
++bindings.

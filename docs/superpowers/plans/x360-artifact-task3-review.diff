@@ -1,0 +1,2173 @@
+﻿diff --git "a/.artifacts\\x360-artifact-task3-before\\src\\platform\\xenia_guest\\x360_shader_artifact_internal.h" b/src/platform/xenia_guest/x360_shader_artifact_internal.h
+index 86303dc..e1baf08 100644
+--- "a/.artifacts\\x360-artifact-task3-before\\src\\platform\\xenia_guest\\x360_shader_artifact_internal.h"
++++ b/src/platform/xenia_guest/x360_shader_artifact_internal.h
+@@ -1,39 +1,22 @@
+ #ifndef HEL_X360_SHADER_ARTIFACT_INTERNAL_H
+ #define HEL_X360_SHADER_ARTIFACT_INTERNAL_H
+ 
+ #include <stddef.h>
+ #include <stdint.h>
+ 
+-typedef enum HelX3spErrorCode {
+-    HEL_X3SP_ERROR_OK = 0,
+-    HEL_X3SP_ERROR_ARGUMENT = 1,
+-    HEL_X3SP_ERROR_ENVELOPE = 2,
+-    HEL_X3SP_ERROR_INTEGRITY = 3,
+-    HEL_X3SP_ERROR_RANGE = 4,
+-    HEL_X3SP_ERROR_UNSUPPORTED = 5,
+-    HEL_X3SP_ERROR_SEMANTIC = 6
+-} HelX3spErrorCode;
+-
+-typedef struct HelX3spSection {
+-    uint32_t offset;
+-    uint32_t length;
+-    uint32_t count;
+-} HelX3spSection;
++#include "x360_shader_artifact.h"
+ 
+ typedef struct HelX3spEnvelope {
+     const uint8_t *data;
+     size_t size;
+     HelX3spSection sections[8];
+ } HelX3spEnvelope;
+ 
+-typedef struct HelX3spError {
+-    uint32_t code;
+-    uint32_t offset;
+-} HelX3spError;
+-
+ int hel_x3sp_validate_envelope(const uint8_t *data, size_t size,
+                                HelX3spEnvelope *out, HelX3spError *error);
++int hel_x3sp_validate_semantics(HelX3spView *view, HelX3spError *error);
++int hel_x3sp_validate_string_bytes(const uint8_t *data, size_t size);
+ /* Call only after proving that four bytes at p are within the input range. */
+ uint32_t hel_x3sp_read_le32(const uint8_t *p);
+ 
+ #endif
+diff --git "a/.artifacts\\x360-artifact-task3-before\\tools\\test-shader-artifact.ps1" b/tools/test-shader-artifact.ps1
+index edbde6a..1499aab 100644
+--- "a/.artifacts\\x360-artifact-task3-before\\tools\\test-shader-artifact.ps1"
++++ b/tools/test-shader-artifact.ps1
+@@ -1,12 +1,12 @@
+ [CmdletBinding()]
+ param(
+-    [ValidateSet('Envelope')]
+-    [string]$Suite = 'Envelope'
++    [ValidateSet('All', 'Envelope', 'Semantic')]
++    [string]$Suite = 'All'
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+ $artifactRoot = Join-Path $repoRoot '.artifacts\shader-artifact'
+ $image = 'devkitpro/devkitppc@sha256:db8e39c73546d461d5606dc7dfed462a7d5957498502562e3b46769d02496cc1'
+ 
+ if (-not (Test-Path -LiteralPath $artifactRoot)) {
+@@ -34,23 +34,61 @@ $outputMount = $outputPath.Replace('\', '/')
+ $containerScript = @'
+ set -euo pipefail
+ export PATH=/opt/devkitpro/devkitPPC/bin:$PATH
+ cd /work
+ 
+ echo "Host compiler: $(gcc --version | head -n 1)"
+ echo "PowerPC compiler: $(powerpc-eabi-gcc --version | head -n 1)"
+ 
+-gcc -std=c11 -O1 -Wall -Wextra -Werror \
+-  -I/work/src/platform/xenia_guest \
+-  -o /out/shader-artifact-envelope-test \
+-  /work/tests/shader_artifact_envelope_test.c \
+-  /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
+-  /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
+-/out/shader-artifact-envelope-test
++test_names=()
++if [ "$X3SP_SUITE" = All ] || [ "$X3SP_SUITE" = Envelope ]; then
++  test_names+=(envelope)
++fi
++if [ "$X3SP_SUITE" = All ] || [ "$X3SP_SUITE" = Semantic ]; then
++  test_names+=(semantic)
++fi
++
++test_sources() {
++  case "$1" in
++    envelope)
++      printf '%s\n' \
++        /work/tests/shader_artifact_envelope_test.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
++      ;;
++    semantic)
++      printf '%s\n' \
++        /work/tests/shader_artifact_test.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_semantics.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
++        /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
++      ;;
++    *) return 2 ;;
++  esac
++}
++
++for test_name in "${test_names[@]}"; do
++  mapfile -t sources < <(test_sources "$test_name")
++  gcc -std=c11 -O1 -Wall -Wextra -Werror \
++    -I/work/src/platform/xenia_guest \
++    -o "/out/shader-artifact-$test_name-test" "${sources[@]}"
++  test_log="/out/host-test-$test_name.log"
++  set +e
++  timeout 30s "/out/shader-artifact-$test_name-test" >"$test_log" 2>&1
++  test_status=$?
++  set -e
++  if [ "$test_status" -ne 0 ]; then
++    echo "host $test_name test FAILED (exit $test_status)"
++    cat "$test_log"
++    exit "$test_status"
++  fi
++  cat "$test_log"
++done
+ 
+ run_sanitizer() {
+   sanitizer="$1"
+   flag="-fsanitize=$sanitizer"
+   extra_flags=()
+   if [ "$sanitizer" = address ]; then
+     extra_flags=(-fno-pie -no-pie)
+   fi
+@@ -77,54 +115,65 @@ run_sanitizer() {
+       echo "$sanitizer: UNAVAILABLE (runtime probe exited $probe_status)"
+     fi
+     cp "$probe_log" "$saved_probe_log"
+     sed -n '1,20p' "$probe_log"
+     return 0
+   fi
+   cp "$probe_log" "$saved_probe_log"
+ 
+-  echo "$sanitizer: available; running focused harness"
+-  gcc -std=c11 -O1 -g -Wall -Wextra -Werror "$flag" \
+-    "${extra_flags[@]}" \
+-    -I/work/src/platform/xenia_guest \
+-    -o "/tmp/shader-artifact-envelope-$sanitizer" \
+-    /work/tests/shader_artifact_envelope_test.c \
+-    /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
+-    /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c
+-  test_log="/tmp/shader-artifact-envelope-$sanitizer.log"
+-  set +e
+-  timeout 30s "/tmp/shader-artifact-envelope-$sanitizer" >"$test_log" 2>&1
+-  test_status=$?
+-  set -e
+-  if [ "$test_status" -ne 0 ]; then
+-    echo "$sanitizer: focused harness FAILED (exit $test_status)"
+-    tail -n 40 "$test_log"
+-    return "$test_status"
+-  fi
+-  cat "$test_log"
++  echo "$sanitizer: available; running selected harnesses"
++  for test_name in "${test_names[@]}"; do
++    mapfile -t sources < <(test_sources "$test_name")
++    test_binary="/tmp/shader-artifact-$test_name-$sanitizer"
++    test_log="/tmp/shader-artifact-test-$test_name-$sanitizer.log"
++    saved_test_log="/out/sanitizer-test-$test_name-$sanitizer.log"
++    gcc -std=c11 -O1 -g -Wall -Wextra -Werror "$flag" \
++      "${extra_flags[@]}" -I/work/src/platform/xenia_guest \
++      -o "$test_binary" "${sources[@]}"
++    set +e
++    timeout 30s "$test_binary" >"$test_log" 2>&1
++    test_status=$?
++    set -e
++    cp "$test_log" "$saved_test_log"
++    if [ "$test_status" -ne 0 ]; then
++      echo "$sanitizer: $test_name harness FAILED (exit $test_status); log: $saved_test_log"
++      tail -n 40 "$test_log"
++      return "$test_status"
++    fi
++    cat "$test_log"
++  done
+ }
+ 
+ run_sanitizer address
+ run_sanitizer undefined
+ 
+ powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
+   -I/work/src/platform/xenia_guest -c \
+   /work/src/platform/xenia_guest/x360_shader_artifact_sha256.c \
+   -o /out/x360_shader_artifact_sha256.ppc.o
+ powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
+   -I/work/src/platform/xenia_guest -c \
+   /work/src/platform/xenia_guest/x360_shader_artifact_envelope.c \
+   -o /out/x360_shader_artifact_envelope.ppc.o
++powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
++  -I/work/src/platform/xenia_guest -c \
++  /work/src/platform/xenia_guest/x360_shader_artifact.c \
++  -o /out/x360_shader_artifact.ppc.o
++powerpc-eabi-gcc -std=c11 -Wall -Wextra -Werror -ffreestanding \
++  -I/work/src/platform/xenia_guest -c \
++  /work/src/platform/xenia_guest/x360_shader_artifact_semantics.c \
++  -o /out/x360_shader_artifact_semantics.ppc.o
+ echo "PowerPC freestanding objects compiled"
+ '@
+ $containerScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($containerScript))
+ $containerCommand = "printf '%s' '$containerScriptBase64' | base64 -d | bash"
+ 
+ Write-Host "Suite: $Suite"
+ Write-Host "Output: $outputPath"
+ & docker run --pull=never --rm --network none `
+     --mount "type=bind,source=$sourceMount,target=/work,readonly" `
+     --mount "type=bind,source=$outputMount,target=/out" `
++    --env "X3SP_SUITE=$Suite" `
+     $image bash -lc $containerCommand
+ if ($LASTEXITCODE -ne 0) {
+     throw "Shader artifact suite '$Suite' failed with exit code $LASTEXITCODE"
+ }
+diff --git a/src/platform/xenia_guest/x360_shader_artifact.h b/src/platform/xenia_guest/x360_shader_artifact.h
+new file mode 100644
+index 0000000..d601825
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact.h
+@@ -0,0 +1,56 @@
++#ifndef HEL_X360_SHADER_ARTIFACT_H
++#define HEL_X360_SHADER_ARTIFACT_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++typedef enum HelX3spErrorCode {
++    HEL_X3SP_ERROR_OK = 0,
++    HEL_X3SP_ERROR_ARGUMENT = 1,
++    HEL_X3SP_ERROR_ENVELOPE = 2,
++    HEL_X3SP_ERROR_INTEGRITY = 3,
++    HEL_X3SP_ERROR_RANGE = 4,
++    HEL_X3SP_ERROR_UNSUPPORTED = 5,
++    HEL_X3SP_ERROR_SEMANTIC = 6
++} HelX3spErrorCode;
++
++typedef struct HelX3spSection {
++    uint32_t offset;
++    uint32_t length;
++    uint32_t count;
++} HelX3spSection;
++
++typedef struct HelX3spError {
++    uint32_t code;
++    uint32_t offset;
++} HelX3spError;
++
++typedef struct HelX3spSpan {
++    const uint8_t *data;
++    size_t size;
++} HelX3spSpan;
++
++typedef struct HelX3spView {
++    const uint8_t *data;
++    size_t size;
++    HelX3spSection sections[8];
++    uint32_t program_control;
++    uint32_t interpolator_count;
++    uint32_t program_upload_dwords;
++    uint32_t constant_upload_dwords;
++    uint32_t state_upload_dwords;
++    uint32_t pair_upload_dwords;
++} HelX3spView;
++
++/* Views borrow data. Keep it alive and unchanged until all uses are finished. */
++int hel_x3sp_parse(const uint8_t *data, size_t size,
++                   HelX3spView *out, HelX3spError *error);
++int hel_x3sp_record(const HelX3spView *view, uint32_t kind, uint32_t index,
++                    HelX3spSpan *out);
++int hel_x3sp_string(const HelX3spView *view, uint32_t offset, uint32_t length,
++                    HelX3spSpan *out);
++int hel_x3sp_word(const HelX3spView *view, uint32_t stage_index,
++                  uint32_t word_index, uint32_t *out);
++int hel_x3sp_span_u32(HelX3spSpan span, size_t offset, uint32_t *out);
++
++#endif
+diff --git a/src/platform/xenia_guest/x360_shader_artifact.c b/src/platform/xenia_guest/x360_shader_artifact.c
+new file mode 100644
+index 0000000..0700be4
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact.c
+@@ -0,0 +1,202 @@
++#include "x360_shader_artifact.h"
++
++#include "x360_shader_artifact_internal.h"
++
++#include <string.h>
++
++static const uint32_t record_sizes[8] = {
++    48u, 160u, 4u, 36u, 40u, 24u, 24u, 1u
++};
++
++static int view_range_valid(const HelX3spView *view, size_t offset, size_t size)
++{
++    return view != NULL && view->data != NULL && offset <= view->size &&
++           size <= view->size - offset;
++}
++
++int hel_x3sp_parse(const uint8_t *data, size_t size,
++                   HelX3spView *out, HelX3spError *error)
++{
++    HelX3spEnvelope envelope;
++    HelX3spView result;
++    size_t i;
++    int status;
++
++    if (out != NULL)
++        memset(out, 0, sizeof *out);
++    if (error != NULL) {
++        error->code = HEL_X3SP_ERROR_OK;
++        error->offset = 0;
++    }
++    if (out == NULL || data == NULL) {
++        if (error != NULL)
++            error->code = HEL_X3SP_ERROR_ARGUMENT;
++        return HEL_X3SP_ERROR_ARGUMENT;
++    }
++
++    status = hel_x3sp_validate_envelope(data, size, &envelope, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++
++    memset(&result, 0, sizeof result);
++    result.data = data;
++    result.size = size;
++    memcpy(result.sections, envelope.sections, sizeof result.sections);
++    status = hel_x3sp_validate_semantics(&result, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++
++    for (i = 0; i < 8; ++i)
++        out->sections[i] = result.sections[i];
++    out->data = result.data;
++    out->size = result.size;
++    out->program_control = result.program_control;
++    out->interpolator_count = result.interpolator_count;
++    out->program_upload_dwords = result.program_upload_dwords;
++    out->constant_upload_dwords = result.constant_upload_dwords;
++    out->state_upload_dwords = result.state_upload_dwords;
++    out->pair_upload_dwords = result.pair_upload_dwords;
++    if (error != NULL) {
++        error->code = HEL_X3SP_ERROR_OK;
++        error->offset = 0;
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++int hel_x3sp_record(const HelX3spView *view, uint32_t kind, uint32_t index,
++                    HelX3spSpan *out)
++{
++    const HelX3spSection *section;
++    size_t record_size;
++    size_t local_offset;
++    size_t section_offset;
++
++    if (out != NULL) {
++        out->data = NULL;
++        out->size = 0;
++    }
++    if (out == NULL || view == NULL || view->data == NULL)
++        return HEL_X3SP_ERROR_ARGUMENT;
++    if (kind < 1u || kind > 8u)
++        return HEL_X3SP_ERROR_RANGE;
++
++    section = &view->sections[kind - 1u];
++    record_size = record_sizes[kind - 1u];
++    if (index >= section->count || section->length % record_size != 0 ||
++        section->count > section->length / record_size)
++        return HEL_X3SP_ERROR_RANGE;
++    if ((size_t)index > SIZE_MAX / record_size)
++        return HEL_X3SP_ERROR_RANGE;
++    local_offset = (size_t)index * record_size;
++    if (local_offset > section->length ||
++        record_size > (size_t)section->length - local_offset)
++        return HEL_X3SP_ERROR_RANGE;
++    section_offset = section->offset;
++    if (section_offset > view->size ||
++        local_offset > view->size - section_offset ||
++        record_size > view->size - section_offset - local_offset)
++        return HEL_X3SP_ERROR_RANGE;
++
++    out->data = view->data + section_offset + local_offset;
++    out->size = record_size;
++    return HEL_X3SP_ERROR_OK;
++}
++
++int hel_x3sp_string(const HelX3spView *view, uint32_t offset, uint32_t length,
++                    HelX3spSpan *out)
++{
++    const HelX3spSection *section;
++    size_t relative_offset;
++    size_t absolute_offset;
++
++    if (out != NULL) {
++        out->data = NULL;
++        out->size = 0;
++    }
++    if (out == NULL || view == NULL || view->data == NULL)
++        return HEL_X3SP_ERROR_ARGUMENT;
++    if (offset == 0u && length == 0u) {
++        out->data = view->data;
++        return HEL_X3SP_ERROR_OK;
++    }
++    if (length == 0u || length > 4096u)
++        return HEL_X3SP_ERROR_RANGE;
++
++    section = &view->sections[7];
++    absolute_offset = (size_t)offset;
++    if (absolute_offset < section->offset)
++        return HEL_X3SP_ERROR_RANGE;
++    relative_offset = absolute_offset - (size_t)section->offset;
++    if (relative_offset > section->length ||
++        (size_t)length > (size_t)section->length - relative_offset ||
++        !view_range_valid(view, absolute_offset, (size_t)length))
++        return HEL_X3SP_ERROR_RANGE;
++    if (!hel_x3sp_validate_string_bytes(view->data + absolute_offset, length))
++        return HEL_X3SP_ERROR_SEMANTIC;
++
++    out->data = view->data + absolute_offset;
++    out->size = length;
++    return HEL_X3SP_ERROR_OK;
++}
++
++int hel_x3sp_word(const HelX3spView *view, uint32_t stage_index,
++                  uint32_t word_index, uint32_t *out)
++{
++    HelX3spSpan stage;
++    HelX3spSpan words;
++    uint32_t code_offset;
++    uint32_t word_count;
++    size_t section_relative;
++    size_t code_bytes;
++    int status;
++
++    if (out != NULL)
++        *out = 0;
++    if (out == NULL || view == NULL || view->data == NULL)
++        return HEL_X3SP_ERROR_ARGUMENT;
++    if (stage_index > 1u)
++        return HEL_X3SP_ERROR_RANGE;
++    status = hel_x3sp_record(view, 2u, stage_index, &stage);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++    status = hel_x3sp_span_u32(stage, 12u, &code_offset);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++    status = hel_x3sp_span_u32(stage, 16u, &word_count);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++    if (word_index >= word_count ||
++        word_count > view->sections[2].length / 4u)
++        return HEL_X3SP_ERROR_RANGE;
++
++    code_bytes = (size_t)word_count * 4u;
++    if (code_offset < view->sections[2].offset)
++        return HEL_X3SP_ERROR_RANGE;
++    section_relative = (size_t)code_offset - view->sections[2].offset;
++    if (section_relative > view->sections[2].length ||
++        code_bytes > (size_t)view->sections[2].length - section_relative ||
++        !view_range_valid(view, code_offset, code_bytes))
++        return HEL_X3SP_ERROR_RANGE;
++    words.data = view->data + code_offset;
++    words.size = code_bytes;
++    return hel_x3sp_span_u32(words, (size_t)word_index * 4u, out);
++}
++
++int hel_x3sp_span_u32(HelX3spSpan span, size_t offset, uint32_t *out)
++{
++    const uint8_t *p;
++
++    if (out != NULL)
++        *out = 0;
++    if (out == NULL || span.data == NULL)
++        return HEL_X3SP_ERROR_ARGUMENT;
++    if (offset > span.size || 4u > span.size - offset)
++        return HEL_X3SP_ERROR_RANGE;
++
++    p = span.data + offset;
++    *out = (uint32_t)p[0] |
++           ((uint32_t)p[1] << 8) |
++           ((uint32_t)p[2] << 16) |
++           ((uint32_t)p[3] << 24);
++    return HEL_X3SP_ERROR_OK;
++}
+diff --git a/src/platform/xenia_guest/x360_shader_artifact_semantics.c b/src/platform/xenia_guest/x360_shader_artifact_semantics.c
+new file mode 100644
+index 0000000..3cd588d
+--- /dev/null
++++ b/src/platform/xenia_guest/x360_shader_artifact_semantics.c
+@@ -0,0 +1,955 @@
++#include "x360_shader_artifact_internal.h"
++
++#include <string.h>
++
++#define X3SP_STAGE_SIZE 160u
++#define X3SP_INTERFACE_SIZE 36u
++#define X3SP_RESOURCE_SIZE 40u
++#define X3SP_DECLARATION_SIZE 24u
++#define X3SP_ACCESS_SIZE 24u
++#define X3SP_ABSENT UINT32_MAX
++
++typedef struct X3spStageInfo {
++    uint32_t stage_record;
++    uint32_t profile;
++    uint32_t registers;
++    uint32_t code_offset;
++    uint32_t code_count;
++    uint32_t input_first;
++    uint32_t input_count;
++    uint32_t output_first;
++    uint32_t output_count;
++    uint32_t resource_first;
++    uint32_t resource_count;
++    uint32_t cbuffer_size;
++    uint32_t cbuffer_capacity;
++    uint32_t bank;
++    uint32_t declaration_first;
++    uint32_t declaration_count;
++    uint32_t access_first;
++    uint32_t access_count;
++    uint32_t program_offset;
++    uint32_t program_length;
++    uint32_t entry_offset;
++    uint32_t entry_length;
++    uint32_t code_first;
++} X3spStageInfo;
++
++static int fail(HelX3spError *error, HelX3spErrorCode code, size_t offset)
++{
++    if (error != NULL) {
++        error->code = (uint32_t)code;
++        error->offset = (uint32_t)offset;
++    }
++    return (int)code;
++}
++
++static int read_u32(const HelX3spView *view, size_t offset, uint32_t *out,
++                    HelX3spError *error)
++{
++    if (offset > view->size || 4u > view->size - offset)
++        return fail(error, HEL_X3SP_ERROR_RANGE, offset);
++    *out = hel_x3sp_read_le32(view->data + offset);
++    return HEL_X3SP_ERROR_OK;
++}
++
++static size_t section_record_offset(const HelX3spView *view, uint32_t section,
++                                    uint32_t index, uint32_t record_size)
++{
++    return (size_t)view->sections[section].offset +
++           (size_t)index * (size_t)record_size;
++}
++
++static int check_partition_range(const HelX3spView *view, uint32_t section_index,
++                                 uint32_t record_size, uint32_t offset,
++                                 uint32_t count, uint32_t *cursor,
++                                 uint32_t *first, HelX3spError *error,
++                                 size_t field_offset)
++{
++    const HelX3spSection *section = &view->sections[section_index];
++    size_t relative;
++    uint32_t start;
++
++    if (count == 0u) {
++        *first = *cursor;
++        if (offset != 0u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++        return HEL_X3SP_ERROR_OK;
++    }
++    if ((size_t)offset < (size_t)section->offset)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++    relative = (size_t)offset - (size_t)section->offset;
++    if (relative % record_size != 0u)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++    if (relative / record_size > section->count)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++    start = (uint32_t)(relative / record_size);
++    if (count > section->count - start)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset + 4u);
++    if (start != *cursor)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++    *first = start;
++    *cursor = start + count;
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int check_word_partition(const HelX3spView *view, uint32_t offset,
++                                uint32_t count, uint32_t *cursor,
++                                uint32_t *first, HelX3spError *error,
++                                size_t field_offset)
++{
++    const HelX3spSection *section = &view->sections[2];
++    size_t relative;
++    uint32_t start;
++
++    if (count == 0u)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset + 4u);
++    if ((size_t)offset < (size_t)section->offset)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++    relative = (size_t)offset - (size_t)section->offset;
++    if (relative % 4u != 0u)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++    if (relative / 4u > section->count)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++    start = (uint32_t)(relative / 4u);
++    if (count > section->count - start)
++        return fail(error, HEL_X3SP_ERROR_RANGE, field_offset + 4u);
++    if (start != *cursor)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++    *first = start;
++    *cursor = start + count;
++    return HEL_X3SP_ERROR_OK;
++}
++
++int hel_x3sp_validate_string_bytes(const uint8_t *data, size_t size)
++{
++    size_t i = 0;
++
++    if (data == NULL && size != 0u)
++        return 0;
++    while (i < size) {
++        uint8_t first = data[i++];
++        uint8_t second;
++
++        if (first == 0u)
++            return 0;
++        if (first <= 0x7fu)
++            continue;
++        if (first >= 0xc2u && first <= 0xdfu) {
++            if (i >= size || data[i] < 0x80u || data[i] > 0xbfu)
++                return 0;
++            ++i;
++            continue;
++        }
++        if (first >= 0xe0u && first <= 0xefu) {
++            if (i + 1u >= size)
++                return 0;
++            second = data[i];
++            if (first == 0xe0u) {
++                if (second < 0xa0u || second > 0xbfu)
++                    return 0;
++            } else if (first == 0xedu) {
++                if (second < 0x80u || second > 0x9fu)
++                    return 0;
++            } else if (second < 0x80u || second > 0xbfu) {
++                return 0;
++            }
++            if (data[i + 1u] < 0x80u || data[i + 1u] > 0xbfu)
++                return 0;
++            i += 2u;
++            continue;
++        }
++        if (first >= 0xf0u && first <= 0xf4u) {
++            if (i + 2u >= size)
++                return 0;
++            second = data[i];
++            if (first == 0xf0u) {
++                if (second < 0x90u || second > 0xbfu)
++                    return 0;
++            } else if (first == 0xf4u) {
++                if (second < 0x80u || second > 0x8fu)
++                    return 0;
++            } else if (second < 0x80u || second > 0xbfu) {
++                return 0;
++            }
++            if (data[i + 1u] < 0x80u || data[i + 1u] > 0xbfu ||
++                data[i + 2u] < 0x80u || data[i + 2u] > 0xbfu)
++                return 0;
++            i += 3u;
++            continue;
++        }
++        return 0;
++    }
++    return 1;
++}
++
++static int get_string_reference(const HelX3spView *view,
++                                const X3spStageInfo stages[2],
++                                uint32_t ordinal, uint32_t *offset,
++                                uint32_t *length)
++{
++    uint32_t pair_offset = view->sections[0].offset;
++    uint32_t stage_index;
++    uint32_t word_index;
++
++    if (ordinal < 2u) {
++        size_t field = (size_t)pair_offset + (size_t)ordinal * 8u;
++        if (field > view->size || 8u > view->size - field)
++            return 0;
++        *offset = hel_x3sp_read_le32(view->data + field);
++        *length = hel_x3sp_read_le32(view->data + field + 4u);
++        return 1;
++    }
++    ordinal -= 2u;
++    for (stage_index = 0; stage_index < 2u; ++stage_index) {
++        size_t stage_record = stages[stage_index].stage_record;
++        if (ordinal < 2u) {
++            size_t field = stage_record + 72u + (size_t)ordinal * 8u;
++            if (field > view->size || 8u > view->size - field)
++                return 0;
++            *offset = hel_x3sp_read_le32(view->data + field);
++            *length = hel_x3sp_read_le32(view->data + field + 4u);
++            return 1;
++        }
++        ordinal -= 2u;
++        if (ordinal < stages[stage_index].resource_count) {
++            word_index = stages[stage_index].resource_first + ordinal;
++            size_t record = section_record_offset(view, 4u, word_index,
++                                                  X3SP_RESOURCE_SIZE);
++            if (record > view->size || 12u > view->size - record)
++                return 0;
++            *offset = hel_x3sp_read_le32(view->data + record + 4u);
++            *length = hel_x3sp_read_le32(view->data + record + 8u);
++            return 1;
++        }
++        ordinal -= stages[stage_index].resource_count;
++        if (ordinal < stages[stage_index].declaration_count) {
++            word_index = stages[stage_index].declaration_first + ordinal;
++            size_t record = section_record_offset(view, 5u, word_index,
++                                                  X3SP_DECLARATION_SIZE);
++            if (record > view->size || 12u > view->size - record)
++                return 0;
++            *offset = hel_x3sp_read_le32(view->data + record);
++            *length = hel_x3sp_read_le32(view->data + record + 4u);
++            return 1;
++        }
++        ordinal -= stages[stage_index].declaration_count;
++    }
++    return 0;
++}
++
++static int validate_string_pool(const HelX3spView *view,
++                                const X3spStageInfo stages[2],
++                                HelX3spError *error)
++{
++    const HelX3spSection *pool = &view->sections[7];
++    uint32_t ref_count = 2u;
++    uint32_t stage_index;
++    uint32_t ordinal;
++    size_t next_new_string = pool->offset;
++    size_t pool_end = (size_t)pool->offset + pool->length;
++
++    for (stage_index = 0; stage_index < 2u; ++stage_index) {
++        ref_count += 2u + stages[stage_index].resource_count +
++                     stages[stage_index].declaration_count;
++    }
++    if (ref_count > 522u)
++        return fail(error, HEL_X3SP_ERROR_RANGE, pool->offset);
++
++    for (ordinal = 0; ordinal < ref_count; ++ordinal) {
++        uint32_t offset, length, previous;
++        int repeated = 0;
++        size_t current_end;
++        size_t field_offset = ordinal < 2u ?
++            (size_t)view->sections[0].offset + (size_t)ordinal * 8u :
++            (size_t)pool->offset;
++
++        if (!get_string_reference(view, stages, ordinal, &offset, &length))
++            return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++        if (length == 0u) {
++            if (ordinal == 1u && offset == 0u)
++                continue;
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++        }
++        if (length > 4096u || (size_t)offset < (size_t)pool->offset)
++            return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++        current_end = (size_t)offset + (size_t)length;
++        if (current_end < (size_t)offset || current_end > pool_end)
++            return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++        if (!hel_x3sp_validate_string_bytes(view->data + offset, length))
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++
++        for (previous = 0; previous < ordinal; ++previous) {
++            uint32_t prior_offset, prior_length;
++            if (!get_string_reference(view, stages, previous,
++                                      &prior_offset, &prior_length))
++                return fail(error, HEL_X3SP_ERROR_RANGE, field_offset);
++            if (prior_length == 0u || prior_length != length)
++                continue;
++            if (memcmp(view->data + prior_offset, view->data + offset,
++                       (size_t)length) == 0) {
++                if (prior_offset != offset)
++                    return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++                repeated = 1;
++                break;
++            }
++        }
++        if (repeated)
++            continue;
++        if ((size_t)offset != next_new_string)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, field_offset);
++        next_new_string = current_end;
++    }
++    if (next_new_string != pool_end)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC, pool->offset);
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int string_refs_equal(const HelX3spView *view, uint32_t left_offset,
++                             uint32_t left_length, uint32_t right_offset,
++                             uint32_t right_length)
++{
++    return left_length == right_length &&
++           memcmp(view->data + left_offset, view->data + right_offset,
++                  (size_t)left_length) == 0;
++}
++
++static int validate_unique_names(const HelX3spView *view, uint32_t section_index,
++                                 uint32_t record_size, uint32_t first,
++                                 uint32_t count, uint32_t name_offset,
++                                 HelX3spError *error)
++{
++    uint32_t i;
++    for (i = 0; i < count; ++i) {
++        size_t current = section_record_offset(view, section_index,
++                                              first + i, record_size);
++        uint32_t current_offset = hel_x3sp_read_le32(view->data + current + name_offset);
++        uint32_t current_length = hel_x3sp_read_le32(view->data + current + name_offset + 4u);
++        uint32_t j;
++        for (j = 0; j < i; ++j) {
++            size_t prior = section_record_offset(view, section_index,
++                                                 first + j, record_size);
++            uint32_t prior_offset = hel_x3sp_read_le32(view->data + prior + name_offset);
++            uint32_t prior_length = hel_x3sp_read_le32(view->data + prior + name_offset + 4u);
++            if (string_refs_equal(view, current_offset, current_length,
++                                  prior_offset, prior_length))
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, current + name_offset);
++        }
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int validate_stage_ranges(HelX3spView *view, X3spStageInfo stages[2],
++                                 HelX3spError *error)
++{
++    uint32_t cursors[6] = {0, 0, 0, 0, 0, 0};
++    uint32_t stage_index;
++
++    for (stage_index = 0; stage_index < 2u; ++stage_index) {
++        X3spStageInfo *stage = &stages[stage_index];
++        size_t base = section_record_offset(view, 1u, stage_index,
++                                            X3SP_STAGE_SIZE);
++        uint32_t stage_tag, profile, registers;
++        uint32_t code_offset, code_count;
++        uint32_t input_offset, input_count, output_offset, output_count;
++        uint32_t resource_offset, resource_count;
++        uint32_t cbuffer_size, capacity, bank;
++        uint32_t declaration_offset, declaration_count;
++        uint32_t access_offset, access_count;
++        uint32_t reserved0, reserved1;
++        int status;
++
++        stage->stage_record = (uint32_t)base;
++        if (read_u32(view, base, &stage_tag, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 4u, &profile, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 8u, &registers, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 12u, &code_offset, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 16u, &code_count, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 20u, &input_offset, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 24u, &input_count, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 28u, &output_offset, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 32u, &output_count, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 36u, &resource_offset, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 40u, &resource_count, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 44u, &cbuffer_size, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 48u, &capacity, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 52u, &bank, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 56u, &declaration_offset, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 60u, &declaration_count, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 64u, &access_offset, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 68u, &access_count, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 152u, &reserved0, error) != HEL_X3SP_ERROR_OK ||
++            read_u32(view, base + 156u, &reserved1, error) != HEL_X3SP_ERROR_OK)
++            return (int)HEL_X3SP_ERROR_RANGE;
++
++        if (stage_tag != stage_index + 1u)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, base);
++        if (profile != 1u && profile != 2u)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, base + 4u);
++        if (registers == 0u || registers > 64u)
++            return fail(error, HEL_X3SP_ERROR_RANGE, base + 8u);
++        if (code_count == 0u || code_count > 1024u || code_count % 3u != 0u)
++            return fail(error, HEL_X3SP_ERROR_RANGE, base + 16u);
++        if (reserved0 != 0u || reserved1 != 0u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                        reserved0 != 0u ? base + 152u : base + 156u);
++
++        stage->profile = profile;
++        stage->registers = registers;
++        stage->code_offset = code_offset;
++        stage->code_count = code_count;
++        stage->input_count = input_count;
++        stage->output_count = output_count;
++        stage->resource_count = resource_count;
++        stage->cbuffer_size = cbuffer_size;
++        stage->cbuffer_capacity = capacity;
++        stage->bank = bank;
++        stage->declaration_count = declaration_count;
++        stage->access_count = access_count;
++        stage->program_offset = hel_x3sp_read_le32(view->data + base + 72u);
++        stage->program_length = hel_x3sp_read_le32(view->data + base + 76u);
++        stage->entry_offset = hel_x3sp_read_le32(view->data + base + 80u);
++        stage->entry_length = hel_x3sp_read_le32(view->data + base + 84u);
++
++        status = check_word_partition(view, code_offset, code_count,
++                                      &cursors[0], &stage->code_first,
++                                      error, base + 12u);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = check_partition_range(view, 3u, X3SP_INTERFACE_SIZE,
++                                       input_offset, input_count, &cursors[1],
++                                       &stage->input_first, error, base + 20u);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = check_partition_range(view, 3u, X3SP_INTERFACE_SIZE,
++                                       output_offset, output_count, &cursors[1],
++                                       &stage->output_first, error, base + 28u);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = check_partition_range(view, 4u, X3SP_RESOURCE_SIZE,
++                                       resource_offset, resource_count, &cursors[2],
++                                       &stage->resource_first, error, base + 36u);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = check_partition_range(view, 5u, X3SP_DECLARATION_SIZE,
++                                       declaration_offset, declaration_count,
++                                       &cursors[3], &stage->declaration_first,
++                                       error, base + 56u);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = check_partition_range(view, 6u, X3SP_ACCESS_SIZE,
++                                       access_offset, access_count, &cursors[4],
++                                       &stage->access_first, error, base + 64u);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++    }
++
++    if (cursors[0] != view->sections[2].count ||
++        cursors[1] != view->sections[3].count ||
++        cursors[2] != view->sections[4].count ||
++        cursors[3] != view->sections[5].count ||
++        cursors[4] != view->sections[6].count)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    view->sections[1].offset);
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int interface_record(const HelX3spView *view, uint32_t index,
++                            uint32_t *kind, uint32_t *location,
++                            uint32_t *width, uint32_t *slot,
++                            uint32_t *fetch_constant, uint32_t *stride,
++                            uint32_t *offset, uint32_t *format,
++                            HelX3spError *error)
++{
++    size_t record = section_record_offset(view, 3u, index, X3SP_INTERFACE_SIZE);
++    uint32_t reserved;
++    uint32_t *fields[] = {kind, location, width, slot, fetch_constant,
++                          stride, offset, format, &reserved};
++    size_t i;
++
++    for (i = 0; i < sizeof fields / sizeof fields[0]; ++i) {
++        int status = read_u32(view, record + i * 4u, fields[i], error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++    }
++    if (reserved != 0u)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 32u);
++    if (*format != 0u && *format != 2u && *format != 3u && *format != 4u)
++        return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, record + 28u);
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int no_fetch(uint32_t slot, uint32_t fetch_constant, uint32_t stride,
++                    uint32_t offset, uint32_t format)
++{
++    return slot == X3SP_ABSENT && fetch_constant == X3SP_ABSENT &&
++           stride == 0u && offset == 0u && format == 0u;
++}
++
++static int validate_interface_sort(const HelX3spView *view, uint32_t first,
++                                   uint32_t count, HelX3spError *error)
++{
++    uint32_t i;
++    uint32_t prior_kind = 0u, prior_location = 0u;
++    for (i = 0; i < count; ++i) {
++        uint32_t kind, location, width, slot, constant, stride, offset, format;
++        int status = interface_record(view, first + i, &kind, &location, &width,
++                                      &slot, &constant, &stride, &offset,
++                                      &format, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        if (kind != 1u && kind != 2u)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED,
++                        section_record_offset(view, 3u, first + i,
++                                              X3SP_INTERFACE_SIZE));
++        if (width < 1u || width > 4u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                        section_record_offset(view, 3u, first + i,
++                                              X3SP_INTERFACE_SIZE) + 8u);
++        if (i != 0u && (kind < prior_kind ||
++                       (kind == prior_kind && location <= prior_location)))
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                        section_record_offset(view, 3u, first + i,
++                                              X3SP_INTERFACE_SIZE));
++        prior_kind = kind;
++        prior_location = location;
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int validate_stage_interfaces(const HelX3spView *view,
++                                     const X3spStageInfo stages[2],
++                                     uint32_t stage_index,
++                                     HelX3spError *error)
++{
++    const X3spStageInfo *stage = &stages[stage_index];
++    uint32_t i;
++    uint32_t position_count = 0u;
++    uint32_t color_count = 0u;
++    uint32_t varying_count = 0u;
++
++    if (stage->input_count > 8u || stage->output_count > 9u)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    stage->stage_record + (stage_index == 0u ? 24u : 32u));
++    {
++        int status = validate_interface_sort(view, stage->input_first,
++                                             stage->input_count, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = validate_interface_sort(view, stage->output_first,
++                                         stage->output_count, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++    }
++
++    for (i = 0; i < stage->input_count; ++i) {
++        uint32_t kind, location, width, slot, constant, stride, offset, format;
++        size_t record;
++        int status = interface_record(view, stage->input_first + i, &kind,
++                                      &location, &width, &slot, &constant,
++                                      &stride, &offset, &format, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        record = section_record_offset(view, 3u, stage->input_first + i,
++                                       X3SP_INTERFACE_SIZE);
++        if (kind != 1u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++        if (stage_index == 0u) {
++            uint32_t expected_width, expected_stride, expected_offset, expected_format;
++            if (stage->profile == 1u) {
++                static const uint32_t widths[4] = {3u, 3u, 2u, 4u};
++                static const uint32_t offsets[4] = {0u, 3u, 6u, 8u};
++                if (location >= 4u)
++                    return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 4u);
++                expected_width = widths[location];
++                expected_stride = 12u;
++                expected_offset = offsets[location];
++                expected_format = expected_width;
++            } else {
++                if (location >= 6u)
++                    return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 4u);
++                expected_width = 4u;
++                expected_stride = 24u;
++                expected_offset = location * 4u;
++                expected_format = 4u;
++            }
++            if (width != expected_width || slot != X3SP_ABSENT ||
++                constant != 0u || stride != expected_stride ||
++                offset != expected_offset || format != expected_format)
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 8u);
++        } else if (location > 7u || slot != location ||
++                   constant != X3SP_ABSENT || stride != 0u || offset != 0u ||
++                   format != 0u) {
++            /* PS inputs carry a varying slot but no vertex-fetch fields. */
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 4u);
++        }
++    }
++
++    for (i = 0; i < stage->output_count; ++i) {
++        uint32_t kind, location, width, slot, constant, stride, offset, format;
++        size_t record;
++        int status = interface_record(view, stage->output_first + i, &kind,
++                                      &location, &width, &slot, &constant,
++                                      &stride, &offset, &format, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        record = section_record_offset(view, 3u, stage->output_first + i,
++                                       X3SP_INTERFACE_SIZE);
++        if (stage_index == 0u) {
++            if (kind == 2u) {
++                ++position_count;
++                if (location != 0u || width != 4u ||
++                    !no_fetch(slot, constant, stride, offset, format))
++                    return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++            } else {
++                ++varying_count;
++                if (location > 7u || slot != location ||
++                    constant != X3SP_ABSENT || stride != 0u ||
++                    offset != 0u || format != 0u)
++                    return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 4u);
++            }
++        } else {
++            ++color_count;
++            if (kind != 1u || location != 0u || width != 4u ||
++                !no_fetch(slot, constant, stride, offset, format))
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++        }
++    }
++    if ((stage_index == 0u && position_count != 1u) ||
++        (stage_index == 1u && color_count != 1u))
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    stage->stage_record + (stage_index == 0u ? 32u : 32u));
++    if (stage_index == 0u && varying_count > 8u)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    stage->stage_record + 32u);
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int find_vs_varying(const HelX3spView *view,
++                           const X3spStageInfo *vs, uint32_t location,
++                           uint32_t *width, uint32_t *slot,
++                           int *found,
++                           HelX3spError *error)
++{
++    uint32_t i;
++    *found = 0;
++    for (i = 0; i < vs->output_count; ++i) {
++        uint32_t kind, item_location, item_width, item_slot;
++        uint32_t constant, stride, offset, format;
++        int status = interface_record(view, vs->output_first + i, &kind,
++                                      &item_location, &item_width, &item_slot,
++                                      &constant, &stride, &offset, &format,
++                                      error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        if (kind == 1u && item_location == location) {
++            *width = item_width;
++            *slot = item_slot;
++            *found = 1;
++            return HEL_X3SP_ERROR_OK;
++        }
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int validate_interface_link(const HelX3spView *view,
++                                   const X3spStageInfo stages[2],
++                                   HelX3spError *error)
++{
++    uint32_t i;
++    for (i = 0; i < stages[1].input_count; ++i) {
++        uint32_t kind, location, width, slot, constant, stride, offset, format;
++        uint32_t vs_width = 0u, vs_slot = 0u;
++        int found;
++        size_t record = section_record_offset(view, 3u,
++                                              stages[1].input_first + i,
++                                              X3SP_INTERFACE_SIZE);
++        int status = interface_record(view, stages[1].input_first + i, &kind,
++                                      &location, &width, &slot, &constant,
++                                      &stride, &offset, &format, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = find_vs_varying(view, &stages[0], location, &vs_width,
++                                 &vs_slot, &found, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        if (!found || vs_width != width || vs_slot != slot)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 4u);
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int validate_resources(const HelX3spView *view,
++                              const X3spStageInfo stages[2],
++                              uint32_t stage_index, uint32_t *constant_cost,
++                              HelX3spError *error)
++{
++    const X3spStageInfo *stage = &stages[stage_index];
++    uint32_t cbuffer_count = 0u, texture_count = 0u, sampler_count = 0u;
++    uint32_t previous_type = 0u, previous_set = 0u, previous_slot = 0u;
++    uint32_t i;
++    size_t bank = stage_index == 0u ? 0u : 256u;
++    int has_buffer;
++    int status;
++
++    status = validate_unique_names(view, 4u, X3SP_RESOURCE_SIZE,
++                                   stage->resource_first, stage->resource_count,
++                                   4u, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++    for (i = 0; i < stage->resource_count; ++i) {
++        uint32_t type, set, slot, physical_set, binding, fetch, resource_bank;
++        uint32_t reserved;
++        size_t record = section_record_offset(view, 4u,
++                                              stage->resource_first + i,
++                                              X3SP_RESOURCE_SIZE);
++        type = hel_x3sp_read_le32(view->data + record);
++        set = hel_x3sp_read_le32(view->data + record + 12u);
++        slot = hel_x3sp_read_le32(view->data + record + 16u);
++        physical_set = hel_x3sp_read_le32(view->data + record + 20u);
++        binding = hel_x3sp_read_le32(view->data + record + 24u);
++        fetch = hel_x3sp_read_le32(view->data + record + 28u);
++        resource_bank = hel_x3sp_read_le32(view->data + record + 32u);
++        reserved = hel_x3sp_read_le32(view->data + record + 36u);
++        if (type < 1u || type > 3u)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, record);
++        if (set > UINT32_C(0x7fffffff) || slot > UINT32_C(0x7fffffff) ||
++            physical_set > UINT32_C(0x7fffffff) ||
++            binding > UINT32_C(0x7fffffff))
++            return fail(error, HEL_X3SP_ERROR_RANGE, record + 12u);
++        if (reserved != 0u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 36u);
++        if (i != 0u) {
++            int out_of_order = type < previous_type;
++            if (type == previous_type) {
++                out_of_order = set < previous_set ||
++                    (set == previous_set && slot <= previous_slot);
++            }
++            if (out_of_order)
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++        }
++        previous_type = type;
++        previous_set = set;
++        previous_slot = slot;
++
++        if (type == 1u) {
++            ++cbuffer_count;
++            if (set != 0u || slot != 0u || physical_set != 0u ||
++                binding != 0u || fetch != X3SP_ABSENT || resource_bank != bank)
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 12u);
++        } else {
++            if (stage_index != 1u)
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++            if (type == 2u)
++                ++texture_count;
++            else
++                ++sampler_count;
++            if (physical_set != set || fetch != 1u ||
++                resource_bank != X3SP_ABSENT)
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 20u);
++        }
++    }
++    if (cbuffer_count > 1u || texture_count > 1u || sampler_count > 1u ||
++        texture_count != sampler_count)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    stage->stage_record + 36u);
++
++    has_buffer = cbuffer_count == 1u;
++    if (!has_buffer) {
++        if (stage->cbuffer_size != 0u || stage->cbuffer_capacity != 0u ||
++            stage->bank != X3SP_ABSENT || stage->declaration_count != 0u ||
++            stage->access_count != 0u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                        stage->stage_record + 44u);
++    } else {
++        if (stage->cbuffer_size < 16u || stage->cbuffer_size > 4096u ||
++            stage->cbuffer_size % 16u != 0u ||
++            stage->cbuffer_capacity != stage->cbuffer_size / 16u ||
++            stage->bank != bank)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                        stage->stage_record + 44u);
++        *constant_cost += stage->cbuffer_capacity * 4u + 2u;
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static uint32_t expected_member_size(uint32_t type)
++{
++    static const uint8_t sizes[5] = {4u, 8u, 12u, 16u, 64u};
++    return type >= 1u && type <= 5u ? sizes[type - 1u] : 0u;
++}
++
++static int validate_declarations(const HelX3spView *view,
++                                 const X3spStageInfo *stage,
++                                 HelX3spError *error)
++{
++    uint32_t prior_end = 0u;
++    uint32_t i;
++    int status = validate_unique_names(view, 5u, X3SP_DECLARATION_SIZE,
++                                       stage->declaration_first,
++                                       stage->declaration_count, 0u, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++    if (stage->declaration_count > 256u || stage->access_count > 256u ||
++        stage->access_count > stage->declaration_count)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    stage->stage_record + 56u);
++    for (i = 0; i < stage->declaration_count; ++i) {
++        size_t record = section_record_offset(view, 5u,
++                                              stage->declaration_first + i,
++                                              X3SP_DECLARATION_SIZE);
++        uint32_t type = hel_x3sp_read_le32(view->data + record + 8u);
++        uint32_t offset = hel_x3sp_read_le32(view->data + record + 12u);
++        uint32_t size = hel_x3sp_read_le32(view->data + record + 16u);
++        uint32_t reserved = hel_x3sp_read_le32(view->data + record + 20u);
++        uint32_t expected_size = expected_member_size(type);
++        if (expected_size == 0u)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, record + 8u);
++        if (reserved != 0u || offset % 16u != 0u || size != expected_size ||
++            offset > stage->cbuffer_size ||
++            size > stage->cbuffer_size - offset ||
++            (i != 0u && offset < prior_end))
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 12u);
++        prior_end = offset + size;
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++static int validate_accesses(const HelX3spView *view,
++                             const X3spStageInfo stages[2],
++                             uint32_t stage_index, HelX3spError *error)
++{
++    const X3spStageInfo *stage = &stages[stage_index];
++    uint32_t previous_declaration = 0u;
++    uint32_t i;
++
++    for (i = 0; i < stage->access_count; ++i) {
++        size_t record = section_record_offset(view, 6u,
++                                              stage->access_first + i,
++                                              X3SP_ACCESS_SIZE);
++        uint32_t declaration_offset = hel_x3sp_read_le32(view->data + record);
++        uint32_t first_register = hel_x3sp_read_le32(view->data + record + 4u);
++        uint32_t register_count = hel_x3sp_read_le32(view->data + record + 8u);
++        uint32_t major = hel_x3sp_read_le32(view->data + record + 12u);
++        uint32_t matrix_stride = hel_x3sp_read_le32(view->data + record + 16u);
++        uint32_t reserved = hel_x3sp_read_le32(view->data + record + 20u);
++        uint32_t declaration_index;
++        size_t declaration_record;
++        uint32_t type, member_offset, expected_count;
++
++        if (stage->declaration_count == 0u ||
++            declaration_offset < view->sections[5].offset ||
++            (declaration_offset - view->sections[5].offset) % X3SP_DECLARATION_SIZE != 0u)
++            return fail(error, HEL_X3SP_ERROR_RANGE, record);
++        declaration_index = (declaration_offset - view->sections[5].offset) /
++                            X3SP_DECLARATION_SIZE;
++        if (declaration_index < stage->declaration_first ||
++            declaration_index - stage->declaration_first >= stage->declaration_count)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++        if (i != 0u && declaration_index <= previous_declaration)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record);
++        previous_declaration = declaration_index;
++        declaration_record = section_record_offset(view, 5u, declaration_index,
++                                                   X3SP_DECLARATION_SIZE);
++        type = hel_x3sp_read_le32(view->data + declaration_record + 8u);
++        member_offset = hel_x3sp_read_le32(view->data + declaration_record + 12u);
++        expected_count = type == 5u ? 4u : 1u;
++        if (major > 2u)
++            return fail(error, HEL_X3SP_ERROR_UNSUPPORTED, record + 12u);
++        if (first_register != member_offset / 16u ||
++            register_count != expected_count ||
++            first_register > stage->cbuffer_capacity ||
++            register_count > stage->cbuffer_capacity - first_register ||
++            reserved != 0u)
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 4u);
++        if (type == 5u) {
++            if ((major != 1u && major != 2u) || matrix_stride != 16u)
++                return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 12u);
++        } else if (major != 0u || matrix_stride != 0u) {
++            return fail(error, HEL_X3SP_ERROR_SEMANTIC, record + 12u);
++        }
++    }
++    return HEL_X3SP_ERROR_OK;
++}
++
++int hel_x3sp_validate_semantics(HelX3spView *view, HelX3spError *error)
++{
++    X3spStageInfo stages[2];
++    uint32_t interface_cursor;
++    uint32_t resource_cursor, declaration_cursor, access_cursor;
++    uint32_t constant_cost = 0u;
++    uint32_t highest_output = 0u;
++    uint32_t has_user_output = 0u;
++    uint32_t i;
++    int status;
++
++    if (view == NULL || view->data == NULL)
++        return fail(error, HEL_X3SP_ERROR_ARGUMENT, 0u);
++    if (view->sections[0].count != 1u ||
++        view->sections[1].count != 2u)
++        return fail(error, HEL_X3SP_ERROR_ENVELOPE, 20u);
++
++    memset(stages, 0, sizeof stages);
++    status = validate_stage_ranges(view, stages, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++
++    interface_cursor = stages[1].output_first + stages[1].output_count;
++    resource_cursor = stages[1].resource_first + stages[1].resource_count;
++    declaration_cursor = stages[1].declaration_first + stages[1].declaration_count;
++    access_cursor = stages[1].access_first + stages[1].access_count;
++    if (interface_cursor != view->sections[3].count ||
++        resource_cursor != view->sections[4].count ||
++        declaration_cursor != view->sections[5].count ||
++        access_cursor != view->sections[6].count)
++        return fail(error, HEL_X3SP_ERROR_SEMANTIC,
++                    view->sections[1].offset);
++
++    status = validate_string_pool(view, stages, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++
++    for (i = 0; i < 2u; ++i) {
++        status = validate_stage_interfaces(view, stages, i, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = validate_resources(view, stages, i, &constant_cost, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = validate_declarations(view, &stages[i], error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++        status = validate_accesses(view, stages, i, error);
++        if (status != HEL_X3SP_ERROR_OK)
++            return status;
++    }
++    status = validate_interface_link(view, stages, error);
++    if (status != HEL_X3SP_ERROR_OK)
++        return status;
++
++    for (i = 0; i < stages[0].output_count; ++i) {
++        uint32_t kind = hel_x3sp_read_le32(view->data +
++            section_record_offset(view, 3u, stages[0].output_first + i,
++                                  X3SP_INTERFACE_SIZE));
++        if (kind == 1u) {
++            uint32_t location = hel_x3sp_read_le32(view->data +
++                section_record_offset(view, 3u, stages[0].output_first + i,
++                                      X3SP_INTERFACE_SIZE) + 4u);
++            if (!has_user_output || location > highest_output)
++                highest_output = location;
++            has_user_output = 1u;
++        }
++    }
++    view->program_control = (stages[0].registers - 1u) |
++                            ((stages[1].registers - 1u) << 8) |
++                            (highest_output << 20);
++    view->interpolator_count = has_user_output ? highest_output + 1u : 0u;
++    view->program_upload_dwords = stages[0].code_count +
++                                  stages[1].code_count + 6u;
++    view->constant_upload_dwords = constant_cost;
++    view->state_upload_dwords = 10u;
++    view->pair_upload_dwords = view->program_upload_dwords +
++                               view->constant_upload_dwords +
++                               view->state_upload_dwords;
++    return HEL_X3SP_ERROR_OK;
++}
+diff --git a/tests/shader_artifact_test.c b/tests/shader_artifact_test.c
+new file mode 100644
+index 0000000..d175884
+--- /dev/null
++++ b/tests/shader_artifact_test.c
+@@ -0,0 +1,716 @@
++#include <assert.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "../src/platform/xenia_guest/x360_shader_artifact.h"
++#include "../src/platform/xenia_guest/x360_shader_artifact_sha256.h"
++
++static uint8_t golden[668];
++static void repair_artifact_integrity(uint8_t *data, size_t size);
++
++enum {
++    TEST_PAIR = 192,
++    TEST_STAGES = 240,
++    TEST_STAGE_SIZE = 160,
++    TEST_CODE = 560,
++    TEST_INTERFACES = 584,
++    TEST_RESOURCES = 872,
++    TEST_DECLARATIONS = 1032,
++    TEST_ACCESSES = 1104,
++    TEST_ACCESS_SIZE = 24,
++    TEST_STRINGS = 1176,
++    TEST_RICH_CAPACITY = 2048
++};
++
++typedef struct TestStringEntry {
++    uint32_t offset;
++    uint32_t length;
++} TestStringEntry;
++
++static void read_fixture(void)
++{
++    FILE *file = fopen("tests/shaders/artifacts/minimal-v1.x3sp", "rb");
++    assert(file != NULL);
++    assert(fread(golden, 1, sizeof golden, file) == sizeof golden);
++    assert(fgetc(file) == EOF);
++    assert(fclose(file) == 0);
++}
++
++static void write_le32(uint8_t *p, uint32_t value)
++{
++    p[0] = (uint8_t)value;
++    p[1] = (uint8_t)(value >> 8);
++    p[2] = (uint8_t)(value >> 16);
++    p[3] = (uint8_t)(value >> 24);
++}
++
++static uint32_t read_le32(const uint8_t *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static uint32_t intern_test_string(uint8_t *data, uint32_t *pool_length,
++                                   TestStringEntry entries[16],
++                                   uint32_t *entry_count,
++                                   const uint8_t *bytes, uint32_t length)
++{
++    uint32_t i;
++    for (i = 0; i < *entry_count; ++i) {
++        if (entries[i].length == length &&
++            memcmp(data + entries[i].offset, bytes, length) == 0)
++            return entries[i].offset;
++    }
++    assert(*entry_count < 16u);
++    entries[*entry_count].offset = TEST_STRINGS + *pool_length;
++    entries[*entry_count].length = length;
++    memcpy(data + entries[*entry_count].offset, bytes, length);
++    *pool_length += length;
++    return entries[(*entry_count)++].offset;
++}
++
++static uint32_t intern_ascii(uint8_t *data, uint32_t *pool_length,
++                             TestStringEntry entries[16], uint32_t *entry_count,
++                             const char *text)
++{
++    return intern_test_string(data, pool_length, entries, entry_count,
++                              (const uint8_t *)text,
++                              (uint32_t)strlen(text));
++}
++
++static void write_string_ref(uint8_t *record, size_t field,
++                             uint32_t offset, uint32_t length)
++{
++    write_le32(record + field, offset);
++    write_le32(record + field + 4u, length);
++}
++
++static void write_interface(uint8_t *data, uint32_t index,
++                            uint32_t kind, uint32_t location, uint32_t width,
++                            uint32_t slot, uint32_t fetch_constant,
++                            uint32_t stride, uint32_t offset, uint32_t format)
++{
++    uint8_t *record = data + TEST_INTERFACES + (size_t)index * 36u;
++    write_le32(record, kind);
++    write_le32(record + 4u, location);
++    write_le32(record + 8u, width);
++    write_le32(record + 12u, slot);
++    write_le32(record + 16u, fetch_constant);
++    write_le32(record + 20u, stride);
++    write_le32(record + 24u, offset);
++    write_le32(record + 28u, format);
++}
++
++static void write_resource(uint8_t *data, uint32_t index, uint32_t type,
++                           uint32_t name_offset, uint32_t name_length,
++                           uint32_t logical_set, uint32_t logical_slot,
++                           uint32_t physical_set, uint32_t binding,
++                           uint32_t fetch_slot, uint32_t bank)
++{
++    uint8_t *record = data + TEST_RESOURCES + (size_t)index * 40u;
++    write_le32(record, type);
++    write_string_ref(record, 4u, name_offset, name_length);
++    write_le32(record + 12u, logical_set);
++    write_le32(record + 16u, logical_slot);
++    write_le32(record + 20u, physical_set);
++    write_le32(record + 24u, binding);
++    write_le32(record + 28u, fetch_slot);
++    write_le32(record + 32u, bank);
++}
++
++static void hash_stage_words(uint8_t *data, uint32_t stage_record,
++                             uint32_t code_offset, uint32_t word_count)
++{
++    HelX3spSha256 ctx;
++    uint8_t digest[32];
++    uint32_t i;
++    hel_x3sp_sha256_init(&ctx);
++    for (i = 0; i < word_count; ++i) {
++        uint32_t word = read_le32(data + code_offset + (size_t)i * 4u);
++        uint8_t big_endian[4] = {
++            (uint8_t)(word >> 24), (uint8_t)(word >> 16),
++            (uint8_t)(word >> 8), (uint8_t)word
++        };
++        hel_x3sp_sha256_update(&ctx, big_endian, sizeof big_endian);
++    }
++    hel_x3sp_sha256_final(&ctx, digest);
++    memcpy(data + stage_record + 120u, digest, sizeof digest);
++}
++
++static void set_directory(uint8_t *data, uint32_t index, uint32_t kind,
++                          uint32_t offset, uint32_t length, uint32_t count)
++{
++    uint8_t *record = data + 64u + (size_t)index * 16u;
++    write_le32(record, kind);
++    write_le32(record + 4u, offset);
++    write_le32(record + 8u, length);
++    write_le32(record + 12u, count);
++}
++
++static size_t build_rich_fixture(uint8_t data[TEST_RICH_CAPACITY])
++{
++    static const uint8_t asset_id[] = {'a', 's', 's', 'e', 't', '-', 0xc2, 0xb5};
++    static const uint32_t vertex_widths[4] = {3u, 3u, 2u, 4u};
++    static const uint32_t vertex_offsets[4] = {0u, 3u, 6u, 8u};
++    TestStringEntry entries[16];
++    uint32_t entry_count = 0u, pool_length = 0u;
++    uint32_t asset, variant, vs_name, main_name, vs_cb, matrix_name, color_name;
++    uint32_t ps_name, ps_cb, texture_name, sampler_name, tint_name;
++    uint32_t i;
++    size_t file_size;
++    uint8_t *vs, *ps;
++
++    memset(data, 0, TEST_RICH_CAPACITY);
++    asset = intern_test_string(data, &pool_length, entries, &entry_count,
++                               asset_id, sizeof asset_id);
++    variant = intern_ascii(data, &pool_length, entries, &entry_count, "v1");
++    vs_name = intern_ascii(data, &pool_length, entries, &entry_count, "vs");
++    main_name = intern_ascii(data, &pool_length, entries, &entry_count, "main");
++    vs_cb = intern_ascii(data, &pool_length, entries, &entry_count, "vscb");
++    matrix_name = intern_ascii(data, &pool_length, entries, &entry_count, "matrix");
++    color_name = intern_ascii(data, &pool_length, entries, &entry_count, "color");
++    ps_name = intern_ascii(data, &pool_length, entries, &entry_count, "ps");
++    ps_cb = intern_ascii(data, &pool_length, entries, &entry_count, "pscb");
++    texture_name = intern_ascii(data, &pool_length, entries, &entry_count, "tex");
++    sampler_name = intern_ascii(data, &pool_length, entries, &entry_count, "samp");
++    tint_name = intern_ascii(data, &pool_length, entries, &entry_count, "tint");
++
++    memcpy(data, "X3SP", 4u);
++    write_le32(data + 4u, 1u);
++    write_le32(data + 8u, 64u);
++    write_le32(data + 16u, 8u);
++    write_le32(data + 20u, 8u);
++    write_le32(data + 24u, 64u);
++    set_directory(data, 0u, 1u, TEST_PAIR, 48u, 1u);
++    set_directory(data, 1u, 2u, TEST_STAGES, 320u, 2u);
++    set_directory(data, 2u, 3u, TEST_CODE, 24u, 6u);
++    set_directory(data, 3u, 4u, TEST_INTERFACES, 288u, 8u);
++    set_directory(data, 4u, 5u, TEST_RESOURCES, 160u, 4u);
++    set_directory(data, 5u, 6u, TEST_DECLARATIONS, 72u, 3u);
++    set_directory(data, 6u, 7u, TEST_ACCESSES, 72u, 3u);
++    set_directory(data, 7u, 8u, TEST_STRINGS, pool_length, pool_length);
++    write_string_ref(data + TEST_PAIR, 0u, asset, sizeof asset_id);
++    write_string_ref(data + TEST_PAIR, 8u, variant, 2u);
++
++    vs = data + TEST_STAGES;
++    write_le32(vs, 1u);
++    write_le32(vs + 4u, 1u);
++    write_le32(vs + 8u, 2u);
++    write_le32(vs + 12u, TEST_CODE);
++    write_le32(vs + 16u, 3u);
++    write_le32(vs + 20u, TEST_INTERFACES);
++    write_le32(vs + 24u, 4u);
++    write_le32(vs + 28u, TEST_INTERFACES + 4u * 36u);
++    write_le32(vs + 32u, 2u);
++    write_le32(vs + 36u, TEST_RESOURCES);
++    write_le32(vs + 40u, 1u);
++    write_le32(vs + 44u, 80u);
++    write_le32(vs + 48u, 5u);
++    write_le32(vs + 52u, 0u);
++    write_le32(vs + 56u, TEST_DECLARATIONS);
++    write_le32(vs + 60u, 2u);
++    write_le32(vs + 64u, TEST_ACCESSES);
++    write_le32(vs + 68u, 2u);
++    write_string_ref(vs, 72u, vs_name, 2u);
++    write_string_ref(vs, 80u, main_name, 4u);
++    memset(vs + 88u, 0x11, 32u);
++
++    ps = data + TEST_STAGES + TEST_STAGE_SIZE;
++    write_le32(ps, 2u);
++    write_le32(ps + 4u, 2u); /* PS provenance may differ from VS. */
++    write_le32(ps + 8u, 1u);
++    write_le32(ps + 12u, TEST_CODE + 12u);
++    write_le32(ps + 16u, 3u);
++    write_le32(ps + 20u, TEST_INTERFACES + 6u * 36u);
++    write_le32(ps + 24u, 1u);
++    write_le32(ps + 28u, TEST_INTERFACES + 7u * 36u);
++    write_le32(ps + 32u, 1u);
++    write_le32(ps + 36u, TEST_RESOURCES + 40u);
++    write_le32(ps + 40u, 3u);
++    write_le32(ps + 44u, 16u);
++    write_le32(ps + 48u, 1u);
++    write_le32(ps + 52u, 256u);
++    write_le32(ps + 56u, TEST_DECLARATIONS + 48u);
++    write_le32(ps + 60u, 1u);
++    write_le32(ps + 64u, TEST_ACCESSES + 48u);
++    write_le32(ps + 68u, 1u);
++    write_string_ref(ps, 72u, ps_name, 2u);
++    write_string_ref(ps, 80u, main_name, 4u);
++    memset(ps + 88u, 0x22, 32u);
++
++    for (i = 0; i < 4u; ++i) {
++        write_interface(data, i, 1u, i, vertex_widths[i], UINT32_MAX, 0u,
++                        12u, vertex_offsets[i], vertex_widths[i]);
++    }
++    write_interface(data, 4u, 1u, 0u, 4u, 0u, UINT32_MAX, 0u, 0u, 0u);
++    write_interface(data, 5u, 2u, 0u, 4u, UINT32_MAX, UINT32_MAX,
++                    0u, 0u, 0u);
++    write_interface(data, 6u, 1u, 0u, 4u, 0u, UINT32_MAX, 0u, 0u, 0u);
++    write_interface(data, 7u, 1u, 0u, 4u, UINT32_MAX, UINT32_MAX,
++                    0u, 0u, 0u);
++
++    write_resource(data, 0u, 1u, vs_cb, 4u, 0u, 0u, 0u, 0u, UINT32_MAX, 0u);
++    write_resource(data, 1u, 1u, ps_cb, 4u, 0u, 0u, 0u, 0u, UINT32_MAX, 256u);
++    write_resource(data, 2u, 2u, texture_name, 3u, 0u, 1u, 0u, 2u, 1u, UINT32_MAX);
++    write_resource(data, 3u, 3u, sampler_name, 4u, 0u, 1u, 0u, 2u, 1u, UINT32_MAX);
++
++    write_string_ref(data + TEST_DECLARATIONS, 0u, matrix_name, 6u);
++    write_le32(data + TEST_DECLARATIONS + 8u, 5u);
++    write_le32(data + TEST_DECLARATIONS + 12u, 0u);
++    write_le32(data + TEST_DECLARATIONS + 16u, 64u);
++    write_string_ref(data + TEST_DECLARATIONS + 24u, 0u, color_name, 5u);
++    write_le32(data + TEST_DECLARATIONS + 32u, 4u);
++    write_le32(data + TEST_DECLARATIONS + 36u, 64u);
++    write_le32(data + TEST_DECLARATIONS + 40u, 16u);
++    write_string_ref(data + TEST_DECLARATIONS + 48u, 0u, tint_name, 4u);
++    write_le32(data + TEST_DECLARATIONS + 56u, 4u);
++    write_le32(data + TEST_DECLARATIONS + 60u, 0u);
++    write_le32(data + TEST_DECLARATIONS + 64u, 16u);
++
++    write_le32(data + TEST_ACCESSES, TEST_DECLARATIONS);
++    write_le32(data + TEST_ACCESSES + 4u, 0u);
++    write_le32(data + TEST_ACCESSES + 8u, 4u);
++    write_le32(data + TEST_ACCESSES + 12u, 1u);
++    write_le32(data + TEST_ACCESSES + 16u, 16u);
++    write_le32(data + TEST_ACCESSES + 24u, TEST_DECLARATIONS + 24u);
++    write_le32(data + TEST_ACCESSES + 28u, 4u);
++    write_le32(data + TEST_ACCESSES + 32u, 1u);
++    write_le32(data + TEST_ACCESSES + 48u, TEST_DECLARATIONS + 48u);
++    write_le32(data + TEST_ACCESSES + 52u, 0u);
++    write_le32(data + TEST_ACCESSES + 56u, 1u);
++
++    write_le32(data + TEST_CODE, UINT32_C(0x12345678));
++    write_le32(data + TEST_CODE + 4u, UINT32_C(0x01020304));
++    write_le32(data + TEST_CODE + 8u, UINT32_C(0xa0b0c0d0));
++    write_le32(data + TEST_CODE + 12u, UINT32_C(0x87654321));
++    write_le32(data + TEST_CODE + 16u, UINT32_C(0x04030201));
++    write_le32(data + TEST_CODE + 20u, UINT32_C(0x0d0c0b0a));
++    hash_stage_words(data, TEST_STAGES, TEST_CODE, 3u);
++    hash_stage_words(data, TEST_STAGES + TEST_STAGE_SIZE,
++                     TEST_CODE + 12u, 3u);
++
++    file_size = (TEST_STRINGS + pool_length + 3u) & ~(size_t)3u;
++    write_le32(data + 12u, (uint32_t)file_size);
++    set_directory(data, 7u, 8u, TEST_STRINGS, pool_length, pool_length);
++    repair_artifact_integrity(data, file_size);
++    return file_size;
++}
++
++static void repair_artifact_integrity(uint8_t *data, size_t size)
++{
++    static const uint8_t zero_digest[32] = {0};
++    HelX3spSha256 ctx;
++    uint8_t digest[32];
++    hel_x3sp_sha256_init(&ctx);
++    hel_x3sp_sha256_update(&ctx, data, 32);
++    hel_x3sp_sha256_update(&ctx, zero_digest, sizeof zero_digest);
++    hel_x3sp_sha256_update(&ctx, data + 64, size - 64);
++    hel_x3sp_sha256_final(&ctx, digest);
++    memcpy(data + 32, digest, sizeof digest);
++}
++
++static void expect_parse_failure(const uint8_t *data, size_t size,
++                                 uint32_t expected_error)
++{
++    HelX3spView view;
++    HelX3spView cleared;
++    HelX3spError error;
++    uint8_t before[TEST_RICH_CAPACITY];
++    int result;
++
++    assert(size <= sizeof before);
++    memcpy(before, data, size);
++    memset(&view, 0xA5, sizeof view);
++    memset(&cleared, 0, sizeof cleared);
++    result = hel_x3sp_parse(data, size, &view, &error);
++    if (result != (int)expected_error)
++        fprintf(stderr, "parse failure mismatch: expected=%u got=%d code=%u offset=%u\n",
++                expected_error, result, error.code, error.offset);
++    assert(result == (int)expected_error);
++    assert(error.code == expected_error);
++    assert(memcmp(&view, &cleared, sizeof view) == 0);
++    assert(memcmp(before, data, size) == 0);
++}
++
++static void expect_rich_field_failure(size_t field_offset, uint32_t value,
++                                      uint32_t expected_error)
++{
++    uint8_t data[TEST_RICH_CAPACITY];
++    size_t size = build_rich_fixture(data);
++    write_le32(data + field_offset, value);
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, expected_error);
++}
++
++static void move_pool_after_shortened_access_table(uint8_t *data, size_t *size)
++{
++    const uint32_t old_pool_length = read_le32(data + 64u + 7u * 16u + 8u);
++    const uint32_t shift = 24u;
++    uint32_t i;
++
++    /* Keep the VS matrix declaration but leave it unused; compact the access table. */
++    memcpy(data + TEST_ACCESSES,
++           data + TEST_ACCESSES + TEST_ACCESS_SIZE, TEST_ACCESS_SIZE);
++    memcpy(data + TEST_ACCESSES + TEST_ACCESS_SIZE,
++           data + TEST_ACCESSES + 2u * TEST_ACCESS_SIZE, TEST_ACCESS_SIZE);
++    write_le32(data + TEST_STAGES + 64u, TEST_ACCESSES);
++    write_le32(data + TEST_STAGES + 68u, 1u);
++    write_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 64u,
++               TEST_ACCESSES + TEST_ACCESS_SIZE);
++    write_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 68u, 1u);
++    set_directory(data, 6u, 7u, TEST_ACCESSES,
++                  2u * TEST_ACCESS_SIZE, 2u);
++
++    memmove(data + TEST_STRINGS - shift, data + TEST_STRINGS, old_pool_length);
++    set_directory(data, 7u, 8u, TEST_STRINGS - shift,
++                  old_pool_length, old_pool_length);
++    for (i = 0; i < 2u; ++i) {
++        uint32_t field = i * 8u;
++        uint32_t offset = read_le32(data + TEST_PAIR + field);
++        write_le32(data + TEST_PAIR + field, offset - shift);
++    }
++    for (i = 0; i < 2u; ++i) {
++        size_t stage = TEST_STAGES + (size_t)i * TEST_STAGE_SIZE;
++        uint32_t field;
++        for (field = 72u; field <= 80u; field += 8u) {
++            uint32_t offset = read_le32(data + stage + field);
++            write_le32(data + stage + field, offset - shift);
++        }
++    }
++    for (i = 0; i < 4u; ++i) {
++        size_t record = TEST_RESOURCES + (size_t)i * 40u;
++        uint32_t offset = read_le32(data + record + 4u);
++        write_le32(data + record + 4u, offset - shift);
++    }
++    for (i = 0; i < 3u; ++i) {
++        size_t record = TEST_DECLARATIONS + (size_t)i * 24u;
++        uint32_t offset = read_le32(data + record);
++        write_le32(data + record, offset - shift);
++    }
++    *size -= shift;
++    write_le32(data + 12u, (uint32_t)*size);
++    repair_artifact_integrity(data, *size);
++}
++
++static void make_sparse_unused_matrix_fixture(uint8_t *data, size_t *size)
++{
++    uint8_t old_interfaces[5u * 36u];
++    uint32_t i;
++
++    *size = build_rich_fixture(data);
++    move_pool_after_shortened_access_table(data, size);
++    write_le32(data + TEST_STAGES + 4u, 2u);
++    write_le32(data + TEST_STAGES + 24u, 1u);
++    write_le32(data + TEST_STAGES + 28u, TEST_INTERFACES + 36u);
++    write_le32(data + TEST_STAGES + 32u, 5u);
++
++    memcpy(old_interfaces, data + TEST_INTERFACES + 36u, sizeof old_interfaces);
++    memcpy(data + TEST_INTERFACES + 36u,
++           data + TEST_INTERFACES + 4u * 36u, 36u);
++    write_interface(data, 0u, 1u, 5u, 4u, UINT32_MAX, 0u,
++                    24u, 20u, 4u);
++    for (i = 0; i < 3u; ++i) {
++        uint32_t location = i + 1u;
++        const uint8_t *input = old_interfaces + (size_t)i * 36u;
++        uint32_t width = read_le32(input + 8u);
++        write_interface(data, i + 2u, 1u, location, width, location,
++                        UINT32_MAX, 0u, 0u, 0u);
++    }
++    repair_artifact_integrity(data, *size);
++}
++
++static void test_golden_parse_and_borrowed_accessors(void)
++{
++    uint8_t unaligned[sizeof golden + 1];
++    uint8_t unchanged[sizeof golden + 1];
++    uint8_t scalar_bytes[] = {0xa5, 0x78, 0x56, 0x34, 0x12};
++    HelX3spView view;
++    HelX3spError error;
++    HelX3spSpan span;
++    uint32_t value;
++
++    unaligned[0] = 0x5a;
++    memcpy(unaligned + 1, golden, sizeof golden);
++    memcpy(unchanged, unaligned, sizeof unaligned);
++    assert(hel_x3sp_parse(unaligned + 1, sizeof golden, &view, &error) == 0);
++    assert(error.code == HEL_X3SP_ERROR_OK);
++    assert(view.data == unaligned + 1);
++    assert(view.size == sizeof golden);
++    assert(view.sections[2].offset == 560);
++    assert(view.program_control == 0);
++    assert(view.interpolator_count == 0);
++    assert(view.program_upload_dwords == 12);
++    assert(view.constant_upload_dwords == 0);
++    assert(view.state_upload_dwords == 10);
++    assert(view.pair_upload_dwords == 22);
++
++    assert(hel_x3sp_record(&view, 1, 0, &span) == 0);
++    assert(span.data == view.data + 192 && span.size == 48);
++    assert(hel_x3sp_record(&view, 3, 5, &span) == 0);
++    assert(span.data == view.data + 580 && span.size == 4);
++    assert(hel_x3sp_record(&view, 8, 10, &span) == 0);
++    assert(span.data == view.data + 666 && span.size == 1 && span.data[0] == 'S');
++    memset(&span, 0xA5, sizeof span);
++    assert(hel_x3sp_record(&view, 3, 6, &span) != 0);
++    assert(span.data == NULL && span.size == 0);
++
++    assert(hel_x3sp_string(&view, 656, 7, &span) == 0);
++    assert(span.size == 7 && memcmp(span.data, "fixture", 7) == 0);
++    assert(hel_x3sp_string(&view, 666, 1, &span) == 0);
++    assert(span.size == 1 && span.data[0] == 'S');
++    assert(hel_x3sp_string(&view, 0, 0, &span) == 0);
++    assert(span.size == 0);
++    memset(&span, 0xA5, sizeof span);
++    assert(hel_x3sp_string(&view, UINT32_MAX, 8, &span) != 0);
++    assert(span.data == NULL && span.size == 0);
++    assert(hel_x3sp_string(&view, 667, 1, &span) == HEL_X3SP_ERROR_RANGE);
++    assert(span.data == NULL && span.size == 0);
++    assert(hel_x3sp_string(&view, 656, 4097u, &span) == HEL_X3SP_ERROR_RANGE);
++    assert(span.data == NULL && span.size == 0);
++    assert(hel_x3sp_record(&view, 1u, 0u, NULL) == HEL_X3SP_ERROR_ARGUMENT);
++    assert(hel_x3sp_string(&view, 656u, 1u, NULL) == HEL_X3SP_ERROR_ARGUMENT);
++    assert(hel_x3sp_word(&view, 0u, 3u, &value) == HEL_X3SP_ERROR_RANGE);
++    assert(value == 0u);
++    assert(hel_x3sp_word(&view, 0u, 0u, NULL) == HEL_X3SP_ERROR_ARGUMENT);
++
++    assert(hel_x3sp_word(&view, 0, 0, &value) == 0);
++    assert(value == UINT32_C(0x12345678));
++    assert(hel_x3sp_word(&view, 1, 2, &value) == 0);
++    assert(value == UINT32_C(0x0d0c0b0a));
++    value = UINT32_C(0xffffffff);
++    assert(hel_x3sp_word(&view, 2, 0, &value) != 0);
++    assert(value == 0);
++
++    value = UINT32_C(0xffffffff);
++    assert(hel_x3sp_span_u32((HelX3spSpan){scalar_bytes + 1, 4}, 0, &value) == 0);
++    assert(value == UINT32_C(0x12345678));
++    value = UINT32_C(0xffffffff);
++    assert(hel_x3sp_span_u32((HelX3spSpan){scalar_bytes, 4}, SIZE_MAX, &value) != 0);
++    assert(value == 0);
++    assert(memcmp(unaligned, unchanged, sizeof unaligned) == 0);
++}
++
++static void test_rich_fixture_baseline(void)
++{
++    uint8_t data[TEST_RICH_CAPACITY];
++    HelX3spView view;
++    HelX3spError error;
++    HelX3spSpan stage;
++    HelX3spSpan asset;
++    uint32_t profile;
++    size_t size = build_rich_fixture(data);
++    int status = hel_x3sp_parse(data, size, &view, &error);
++
++    if (status != HEL_X3SP_ERROR_OK)
++        fprintf(stderr, "rich fixture rejected: code=%u offset=%u\n",
++                error.code, error.offset);
++    assert(status == HEL_X3SP_ERROR_OK);
++    assert(view.program_control == 1u);
++    assert(view.interpolator_count == 1u);
++    assert(view.program_upload_dwords == 12u);
++    assert(view.constant_upload_dwords == 28u);
++    assert(view.state_upload_dwords == 10u);
++    assert(view.pair_upload_dwords == 50u);
++    assert(hel_x3sp_record(&view, 2u, 1u, &stage) == HEL_X3SP_ERROR_OK);
++    assert(hel_x3sp_span_u32(stage, 4u, &profile) == HEL_X3SP_ERROR_OK);
++    assert(profile == 2u);
++    assert(read_le32(data + TEST_STAGES + 80u) ==
++           read_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 80u));
++    assert(hel_x3sp_string(&view, read_le32(data + TEST_PAIR), 8u,
++                           &asset) == HEL_X3SP_ERROR_OK);
++    assert(asset.size == 8u && asset.data[6] == 0xc2u && asset.data[7] == 0xb5u);
++    assert(hel_x3sp_string(&view, read_le32(data + TEST_PAIR) + 6u, 1u,
++                           &asset) == HEL_X3SP_ERROR_SEMANTIC);
++    assert(asset.data == NULL && asset.size == 0u);
++}
++
++static void test_sparse_inputs_and_unused_matrix(void)
++{
++    uint8_t data[TEST_RICH_CAPACITY];
++    HelX3spView view;
++    HelX3spError error;
++    size_t size;
++    int status;
++
++    make_sparse_unused_matrix_fixture(data, &size);
++    status = hel_x3sp_parse(data, size, &view, &error);
++    if (status != HEL_X3SP_ERROR_OK)
++        fprintf(stderr, "sparse/unused fixture rejected: code=%u offset=%u\n",
++                error.code, error.offset);
++    assert(status == HEL_X3SP_ERROR_OK);
++    assert(view.interpolator_count == 4u);
++    assert(view.program_control == ((3u << 20) | 1u));
++}
++
++static void test_repaired_integrity_semantic_mutations(void)
++{
++    static const struct {
++        size_t offset;
++        uint32_t value;
++        uint32_t error;
++    } mutations[] = {
++        {TEST_STAGES + 4u, 99u, HEL_X3SP_ERROR_UNSUPPORTED},
++        {TEST_STAGES + 52u, 256u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_STAGES + 28u, TEST_RESOURCES, HEL_X3SP_ERROR_RANGE},
++        {TEST_RESOURCES + 2u * 40u + 28u, 0u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_RESOURCES + 2u * 40u, 9u, HEL_X3SP_ERROR_UNSUPPORTED},
++        {TEST_INTERFACES + 8u, 4u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_INTERFACES + 20u, 24u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_INTERFACES + 24u, 1u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_INTERFACES + 28u, 1u, HEL_X3SP_ERROR_UNSUPPORTED},
++        {TEST_INTERFACES + 5u * 36u, 1u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_INTERFACES + 7u * 36u, 2u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_INTERFACES + 6u * 36u + 8u, 3u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_RESOURCES + 3u * 40u, 2u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_ACCESSES + 12u, 0u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_ACCESSES + 12u, 3u, HEL_X3SP_ERROR_UNSUPPORTED},
++        {TEST_ACCESSES + 16u, 8u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_DECLARATIONS + 24u + 12u, 48u, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_ACCESSES + 24u, TEST_DECLARATIONS, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_ACCESSES + 2u * 24u, TEST_DECLARATIONS, HEL_X3SP_ERROR_SEMANTIC},
++        {TEST_STAGES + TEST_STAGE_SIZE + 28u, 0u, HEL_X3SP_ERROR_RANGE},
++        {TEST_STAGES + TEST_STAGE_SIZE + 32u, 0u, HEL_X3SP_ERROR_SEMANTIC}
++    };
++    uint8_t data[TEST_RICH_CAPACITY];
++    size_t size;
++    size_t i;
++
++    for (i = 0; i < sizeof mutations / sizeof mutations[0]; ++i)
++        expect_rich_field_failure(mutations[i].offset, mutations[i].value,
++                                  mutations[i].error);
++
++    size = build_rich_fixture(data);
++    write_string_ref(data + TEST_RESOURCES + 3u * 40u, 4u,
++                     read_le32(data + TEST_RESOURCES + 2u * 40u + 4u),
++                     read_le32(data + TEST_RESOURCES + 2u * 40u + 8u));
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    data[TEST_STRINGS] = 0u;
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    data[TEST_STRINGS + 6u] = 0xc0u; /* Overlong lead byte. */
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    write_le32(data + TEST_STAGES + 72u, TEST_STRINGS + 1u);
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    write_le32(data + TEST_PAIR + 4u, 4097u);
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_RANGE);
++
++    size = build_rich_fixture(data);
++    {
++        uint32_t texture_offset = read_le32(data + TEST_RESOURCES + 2u * 40u + 4u);
++        data[texture_offset] = 0xedu;
++        data[texture_offset + 1u] = 0xa0u; /* UTF-8 surrogate encoding. */
++        data[texture_offset + 2u] = 0x80u;
++    }
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    {
++        uint32_t tint_offset = read_le32(data + TEST_DECLARATIONS + 48u);
++        data[tint_offset] = 0xf4u;
++        data[tint_offset + 1u] = 0x90u; /* Beyond U+10FFFF. */
++        data[tint_offset + 2u] = 0x80u;
++        data[tint_offset + 3u] = 0x80u;
++    }
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    write_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 28u, 0u);
++    write_le32(data + TEST_STAGES + TEST_STAGE_SIZE + 32u, 0u);
++    repair_artifact_integrity(data, size);
++    expect_parse_failure(data, size, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    data[size] = 0x7fu;
++    write_le32(data + 12u, (uint32_t)(size + 4u));
++    write_le32(data + 64u + 7u * 16u + 8u,
++               read_le32(data + 64u + 7u * 16u + 8u) + 1u);
++    write_le32(data + 64u + 7u * 16u + 12u,
++               read_le32(data + 64u + 7u * 16u + 12u) + 1u);
++    repair_artifact_integrity(data, size + 4u);
++    expect_parse_failure(data, size + 4u, HEL_X3SP_ERROR_SEMANTIC);
++
++    size = build_rich_fixture(data);
++    data[read_le32(data + TEST_PAIR + 8u)] = 0xc2u;
++    data[read_le32(data + TEST_PAIR + 8u) + 1u] = 0x85u;
++    repair_artifact_integrity(data, size);
++    {
++        HelX3spView view;
++        HelX3spError error;
++        assert(hel_x3sp_parse(data, size, &view, &error) == HEL_X3SP_ERROR_OK);
++    }
++}
++
++static void test_semantic_reference_with_repaired_integrity(void)
++{
++    uint8_t mutated[sizeof golden];
++
++    memcpy(mutated, golden, sizeof mutated);
++    /* VS output now aliases the PS output record in the same table. */
++    write_le32(mutated + 240 + 28, 620);
++    repair_artifact_integrity(mutated, sizeof mutated);
++    expect_parse_failure(mutated, sizeof mutated, HEL_X3SP_ERROR_SEMANTIC);
++}
++
++static void test_failure_clears_view_for_every_truncation(void)
++{
++    size_t size;
++
++    for (size = 0; size < sizeof golden; ++size) {
++        HelX3spView view;
++        HelX3spView cleared;
++        HelX3spError error;
++        memset(&view, 0xA5, sizeof view);
++        memset(&cleared, 0, sizeof cleared);
++        assert(hel_x3sp_parse(golden, size, &view, &error) != HEL_X3SP_ERROR_OK);
++        assert(memcmp(&view, &cleared, sizeof view) == 0);
++    }
++}
++
++static void test_null_arguments_clear_outputs(void)
++{
++    HelX3spView view;
++    HelX3spView cleared;
++    HelX3spSpan span;
++    uint32_t value = UINT32_C(0xffffffff);
++
++    memset(&view, 0xA5, sizeof view);
++    memset(&cleared, 0, sizeof cleared);
++    assert(hel_x3sp_parse(NULL, sizeof golden, &view, NULL) == HEL_X3SP_ERROR_ARGUMENT);
++    assert(memcmp(&view, &cleared, sizeof view) == 0);
++    assert(hel_x3sp_parse(golden, sizeof golden, NULL, NULL) == HEL_X3SP_ERROR_ARGUMENT);
++    memset(&span, 0xA5, sizeof span);
++    assert(hel_x3sp_record(NULL, 1, 0, &span) != 0);
++    assert(span.data == NULL && span.size == 0);
++    assert(hel_x3sp_span_u32((HelX3spSpan){NULL, 4}, 0, &value) != 0);
++    assert(value == 0);
++}
++
++int main(void)
++{
++    read_fixture();
++    test_golden_parse_and_borrowed_accessors();
++    test_rich_fixture_baseline();
++    test_sparse_inputs_and_unused_matrix();
++    test_repaired_integrity_semantic_mutations();
++    test_semantic_reference_with_repaired_integrity();
++    test_failure_clears_view_for_every_truncation();
++    test_null_arguments_clear_outputs();
++    puts("shader artifact semantic/accessor tests passed");
++    return 0;
++}

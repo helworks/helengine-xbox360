@@ -1,6 +1,7 @@
 using helengine.baseplatform.Builders;
 using helengine.baseplatform.Definitions;
 using helengine.baseplatform.Descriptors;
+using helengine.baseplatform.Manifest;
 using helengine.baseplatform.Reporting;
 using helengine.baseplatform.Requests;
 using helengine.baseplatform.Results;
@@ -93,8 +94,10 @@ public sealed partial class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder,
 
             progressReporter.Report(new PlatformBuildProgressUpdate("Stage Content", "manifest", 0, 1, "Staging declared cooked artifacts."));
             string packageSourceRoot = ResolvePackageSourceRoot(request.WorkingRoot);
+            IReadOnlyList<PlatformBuildArtifact> builderCookedArtifacts = new Xbox360PlatformCookWorkItemExecutor().Execute(
+                request.Manifest.PlatformCookWorkItems, request.Manifest.CookedArtifacts, packageSourceRoot, cancellationToken);
             IReadOnlyList<Xbox360StagedAsset> staged = new Xbox360ContentStager()
-                .Stage(request.Manifest.CookedArtifacts, packageSourceRoot, stagingRoot, cancellationToken);
+                .Stage(request.Manifest.CookedArtifacts, builderCookedArtifacts, packageSourceRoot, stagingRoot, cancellationToken);
             progressReporter.Report(new PlatformBuildProgressUpdate("Stage Content", "manifest", 1, 1, $"Staged {staged.Count} cooked file(s)."));
 
             new Xbox360StartupCatalogWriter().Write(catalogRoot, request.Manifest);

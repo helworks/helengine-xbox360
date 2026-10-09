@@ -24,6 +24,9 @@
 #include "RoundedRectCorners.hpp"
 #include "TextureAsset.hpp"
 #include "TextureAssetColorFormat.hpp"
+#include "TextureAssetAlphaPrecision.hpp"
+#include "TextureAssetPixelCodec.hpp"
+#include "x360_native_texture.h"
 #include "byte4.hpp"
 #include "float3.hpp"
 #include "float4.hpp"
@@ -444,17 +447,37 @@ void X360RuntimeTexture::Dispose() {
     }
     const int32_t width = (int32_t)asset->Width;
     const int32_t height = (int32_t)asset->Height;
-    /* Only the format that matches the hardware's 32-bit texture byte for
-       byte is uploaded. The others are named rather than approximated: a
-       wrong conversion is a picture that looks almost right, which is harder
-       to find than one that is missing. */
-    if (asset->ColorFormat != ::TextureAssetColorFormat::Rgba32 ||
-        asset->Colors == nullptr ||
-        asset->Colors->get_Length() < width * height * 4) {
+    if (!asset->Width || !asset->Height || asset->Width > 8192 || asset->Height > 8192 || asset->Colors == nullptr) {
+        hel_log("HEL render2d: texture has invalid dimensions or no pixel payload");
+        return buildTexture(width,height,nullptr,path);
+    }
+    if ((uint32_t)asset->ColorFormat == HEL_X360_NATIVE_COLOR_FORMAT) {
+        textures_++;
+        X360RuntimeTexture *texture = new X360RuntimeTexture();
+        texture->set_Width(width);
+        texture->set_Height(height);
+        texture->set_IsEngineOwned(false);
+        const bool noPalette = asset->PaletteColors == nullptr || asset->PaletteColors->get_Length() == 0;
+        const int error = noPalette && (uint32_t)asset->AlphaPrecision <= 3u && asset->Colors->get_Length() > 0
+            ? hel_texture_create_native(asset->Colors->Data,(uint32_t)asset->Colors->get_Length(),
+                asset->Width,asset->Height,&texture->handle) : HEL_ERR_MESH_INVALID;
+        if (error != HEL_OK) {
+            hel_log_u32("HEL render2d: native texture rejected or allocation failed",(uint32_t)error);
+            if (path != nullptr) hel_log(path);
+        } else {
+            texturesUploaded_++;
+        }
+        return texture;
+    }
+    // Inline legacy font atlases are anonymous RGBA/Opaque defaults whose alpha is actual glyph coverage.
+    // Preserve those bytes without changing the authoring asset or the policy of identified textures.
+    const bool anonymousFontCoverage = hel_x360_preserve_anonymous_font_alpha(
+        (uint32_t)asset->ColorFormat,(uint32_t)asset->AlphaPrecision,
+        !asset->Id.empty() || asset->RuntimeAssetId != 0 || !asset->AuthoringAssetId.empty());
+    if (asset->ColorFormat == ::TextureAssetColorFormat::Rgba32 && asset->Colors->get_Length() < width * height * 4) {
         if (!reportedNoTexturePath_) {
             reportedNoTexturePath_ = true;
-            hel_log("HEL render2d: cooked texture is not 32-bit RGBA, so its "
-                    "pixels are not uploaded");
+            hel_log("HEL render2d: cooked RGBA texture payload is truncated, so its pixels are not uploaded");
             hel_log_u32("HEL render2d: its colour format",
                         (uint32_t)asset->ColorFormat);
             if (path != nullptr) {
@@ -463,7 +486,12 @@ void X360RuntimeTexture::Dispose() {
         }
         return buildTexture(width, height, nullptr, path);
     }
-    return buildTexture(width, height, &(*asset->Colors)[0], path);
+    if (anonymousFontCoverage) return buildTexture(width,height,asset->Colors->Data,path);
+    // The shared codec returns a distinct owned array for every format; free the temporary after the physical upload.
+    Array<uint8_t> *rgba = ::TextureAssetPixelCodec::DecodeToRgba32(asset);
+    ::RuntimeTexture *texture = buildTexture(width,height,rgba->Data,path);
+    delete rgba;
+    return texture;
 }
 
 ::RuntimeTexture *X360RenderManager2D::BuildTextureFromRaw(::TextureAsset *data) {
