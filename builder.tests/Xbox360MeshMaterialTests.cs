@@ -13,7 +13,7 @@ public sealed class Xbox360MeshMaterialTests {
         var fields = new Dictionary<string, string> {
             ["shader-asset-id"] = "mesh-material", ["vertex-program"] = "mesh.vs", ["pixel-program"] = "mesh.ps", ["base-color"] = "#804020FF"
         };
-        var request = new PlatformMaterialCookRequest("material", "materials/test", "x360", "release", "x360-unlit", Xbox360MaterialSchemaIds.MeshShaderSchemaId, fields);
+        var request = new PlatformMaterialCookRequest("material", "materials/test", "x360", "release", "x360-unlit", Xbox360MaterialSchemaIds.MeshShaderSchemaId, fields, numericPolicy: global::helengine.NumericPrecisionPolicy.Default);
         var cooked = new Xbox360MaterialCooker().Cook(request);
         var dependency = Assert.Single(cooked.ReferencedShaderDependencies);
         using var stream = new MemoryStream(cooked.CookedMaterialBytes);
@@ -42,7 +42,7 @@ public sealed class Xbox360MeshMaterialTests {
         // The constructor snapshots fields, so the unsupported-selection case
         // needs a new request containing the changed shader identity.
         var unsupported = new PlatformMaterialCookRequest("material", "materials/test", "x360", "release",
-            "x360-unlit", Xbox360MaterialSchemaIds.MeshShaderSchemaId, fields);
+            "x360-unlit", Xbox360MaterialSchemaIds.MeshShaderSchemaId, fields, numericPolicy: global::helengine.NumericPrecisionPolicy.Default);
         Assert.Throws<InvalidOperationException>(() => new Xbox360MaterialCooker().Cook(unsupported));
     }
 }
