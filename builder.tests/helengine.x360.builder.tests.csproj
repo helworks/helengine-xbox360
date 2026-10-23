@@ -26,7 +26,8 @@
     </MSBuild>
     <ItemGroup>
       <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly)" />
-      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).exe')" />
+      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).exe')" Condition="'$(OS)' == 'Windows_NT'" />
+      <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename)')" Condition="'$(OS)' != 'Windows_NT'" />
       <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).deps.json')" />
       <Xbox360ShaderProtocolFixtureFiles Include="@(_Xbox360ShaderProtocolFixtureAssembly->'%(RootDir)%(Directory)%(Filename).runtimeconfig.json')" />
     </ItemGroup>
