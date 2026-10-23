@@ -1,4 +1,5 @@
 using System.Drawing;
+using helengine.editor;
 
 namespace helengine.x360.builder;
 
@@ -21,7 +22,17 @@ public sealed class Xbox360SourceTextureDecoder {
                 return decoded;
             } finally { texture.Dispose(); }
         }
-        if (!OperatingSystem.IsWindowsVersionAtLeast(6, 1)) throw new PlatformNotSupportedException("Xbox360 authored image decoding requires the Windows image decoder; serialized engine textures are portable.");
+        if (!OperatingSystem.IsWindows()) {
+            TextureImporterRegistration registration = PortableImporterFactory.CreateDefault()
+                .OfType<TextureImporterRegistration>()
+                .Single(item => item.ImporterId == "gdi");
+            using MemoryStream portableStream = new(bytes, false);
+            TextureAsset decoded = registration.Importer.ImportTexture(portableStream)
+                ?? throw new InvalidDataException("Xbox360 source image could not be decoded.");
+            decoded.AlphaPrecision = TextureAssetAlphaPrecision.A8;
+            return decoded;
+        }
+        if (!OperatingSystem.IsWindowsVersionAtLeast(6, 1)) throw new PlatformNotSupportedException("Xbox360 Windows image decoding requires Windows 7 or later.");
         using MemoryStream stream = new(bytes, false);
         using Bitmap image = new(stream);
         ushort width = checked((ushort)image.Width);

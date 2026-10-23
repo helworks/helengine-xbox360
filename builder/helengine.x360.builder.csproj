@@ -16,6 +16,7 @@
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.core\helengine.core.csproj" />
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.files\helengine.files.csproj" />
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.editor\helengine.editor.csproj" />
+    <ProjectReference Include="$(HelengineRoot)\engine\helengine.editor.portableimporter\helengine.editor.portableimporter.csproj" />
     <ProjectReference Include="$(HelengineRoot)\engine\helengine.shader.compilation\helengine.shader.compilation.csproj" />
   </ItemGroup>
   <ItemGroup>
