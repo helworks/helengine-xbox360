@@ -43,7 +43,7 @@ public sealed class Xbox360ShaderArtifactCookerTests {
         string output = Path.Combine(root, ".artifacts", "cooker-tests", Guid.NewGuid().ToString("N"));
         var cooker = new Xbox360ShaderArtifactCooker(new(shadercLibraryPath: shaderc));
         PlatformShaderArtifactCookRequest Request(string text) => new(output, "x360", "release", "x360-unlit", [Batch(), Batch()],
-            [new PlatformShaderArtifactCookSource("SpriteBatchShader", "test-snapshot", text, sourcePath)]);
+            [new PlatformShaderArtifactCookSource("SpriteBatchShader", "test-snapshot", text, sourcePath)], helengine.NumericPrecisionPolicy.Default);
         var request = Request(File.ReadAllText(sourcePath));
         var declaration = Assert.Single(cooker.Cook(request).CookedArtifactDeclarations);
         string destination = Path.Combine(output, declaration.RelativePath);

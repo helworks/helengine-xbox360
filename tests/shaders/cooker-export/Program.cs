@@ -17,7 +17,7 @@ var dependencies = builder.RendererShaderDependencies.Concat(new[] {
 }).ToArray();
 var request = new PlatformShaderArtifactCookRequest(cookRoot, "x360", "release", "x360-unlit", dependencies,
     [new PlatformShaderArtifactCookSource("SpriteBatchShader", Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text))), text, sourcePath),
-     new PlatformShaderArtifactCookSource("mesh-material", Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(meshText))), meshText, meshPath)]);
+     new PlatformShaderArtifactCookSource("mesh-material", Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(meshText))), meshText, meshPath)], helengine.NumericPrecisionPolicy.Default);
 var result = new Xbox360ShaderArtifactCooker(new(shadercLibraryPath: args[2])).Cook(request);
 var manifest = result.CookedArtifactDeclarations.Select(item => new PlatformBuildArtifact(item.RelativePath, item.LogicalArtifactId,
     Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(Path.Combine(cookRoot, item.RelativePath)))) , item.ArtifactKind, item.VariantId)).ToArray();

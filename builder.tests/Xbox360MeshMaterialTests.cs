@@ -32,7 +32,7 @@ public sealed class Xbox360MeshMaterialTests {
         string output = Path.Combine(root, ".artifacts/mesh-material-tests", Guid.NewGuid().ToString("N"));
         var cooker = new Xbox360ShaderArtifactCooker(new(shadercLibraryPath: Path.GetFullPath(Path.Combine(root, "../helengine-wiiu/builder/bin/Debug/net9.0-windows/runtimes/win-x64/native/shaderc_shared.dll"))));
         PlatformShaderArtifactCookRequest ShaderRequest(string source) => new(output, "x360", "release", "x360-unlit", [dependency],
-            [new("mesh-material", "snapshot", source, sourcePath)]);
+            [new("mesh-material", "snapshot", source, sourcePath)], helengine.NumericPrecisionPolicy.Default);
         var declaration = Assert.Single(cooker.Cook(ShaderRequest(text)).CookedArtifactDeclarations);
         string path = Path.Combine(output, declaration.RelativePath);
         byte[] original = File.ReadAllBytes(path);
