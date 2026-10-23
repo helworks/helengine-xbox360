@@ -37,14 +37,15 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'build-paths.ps1')
 $cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
-$generatedFull = Join-Path $repo $GeneratedRoot
+$generatedFull = Resolve-X360HostPath $GeneratedRoot $repo
 if (-not (Test-Path $generatedFull)) {
     throw "No generated core at $generatedFull. Run tools/generate-core.ps1 first."
 }
-$out = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { Join-Path $repo $OutDir } else { Join-Path ([IO.Path]::GetFullPath($NativeObjectCacheRoot)) 'x360-core' }
+$out = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { Resolve-X360HostPath $OutDir $repo } else { Join-Path ([IO.Path]::GetFullPath($NativeObjectCacheRoot)) 'x360-core' }
 New-Item -ItemType Directory -Force $out | Out-Null
-$scriptOut = Join-Path $repo $OutDir
+$scriptOut = Resolve-X360HostPath $OutDir $repo
 New-Item -ItemType Directory -Force $scriptOut | Out-Null
 $outRel = $OutDir.Replace("\", "/")
 $genRel = $GeneratedRoot.Replace("\", "/")
@@ -73,14 +74,13 @@ if ($oldFingerprint -ne $cacheFingerprint) {
     }
 }
 if ($Jobs -le 0) { $Jobs = [Environment]::ProcessorCount }
-$containerOut = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { "/work/$outRel" } else { '/nativecache/x360-core' }
+$containerOut = '/out'
 
 $script = @"
 set -euo pipefail
 export PATH=/opt/devkitpro/devkitPPC/bin:`$PATH
 OUT=$containerOut
-GEN=/work/$genRel
-if [ -d /generated ]; then GEN=/generated; fi
+GEN=/generated
 mkdir -p `$OUT/obj
 FLAGS="-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec -mhard-float -mstrict-align -fno-builtin -fno-stack-protector -fno-asynchronous-unwind-tables -fno-pic -fno-common -O2 -std=c++20 -fno-exceptions -frtti -fno-threadsafe-statics -fno-unwind-tables -I`$GEN -I/work/src/platform/xenia_guest -w"
 # An editor build emits two unity translation units: generated_unity.cpp holds
@@ -113,9 +113,8 @@ $scriptPath = Join-Path $scriptOut "build-core.sh"
 [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n"))
 
 $env:MSYS_NO_PATHCONV = "1"
-$dockerArgs = @('run', '--rm', '-v', "${repo}:/work")
-if (-not [string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { $dockerArgs += @('-v', "${NativeObjectCacheRoot}:/nativecache") }
-$dockerArgs += @($cfg.docker_image, 'bash', "/work/$($OutDir.Replace('\', '/'))/build-core.sh")
+$dockerArgs = @('run', '--rm', '--network', 'none', '-v', "${repo}:/work:ro", '-v', "${generatedFull}:/generated:ro", '-v', "${out}:/out", '-v', "${scriptOut}:/scripts:ro")
+$dockerArgs += @($cfg.docker_image, 'bash', '/scripts/build-core.sh')
 & docker @dockerArgs
 $code = $LASTEXITCODE
 $errorsPath = Join-Path $out "errors.txt"
@@ -138,7 +137,7 @@ if ($code -ne 0) {
 Write-Host "Core archive: $out/libhelcore.a"
 if (-not [string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) {
     Set-Content -LiteralPath $cacheFingerprintPath -Value $cacheFingerprint -Encoding ASCII
-    $publishDir = Join-Path $repo $OutDir
+    $publishDir = Resolve-X360HostPath $OutDir $repo
     New-Item -ItemType Directory -Force $publishDir | Out-Null
     Copy-Item -LiteralPath (Join-Path $out 'libhelcore.a') -Destination (Join-Path $publishDir 'libhelcore.a') -Force
 }

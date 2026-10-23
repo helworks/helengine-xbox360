@@ -9,8 +9,9 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'build-paths.ps1')
 $cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
-$out = Join-Path $repo $OutDir
+$out = Resolve-X360HostPath $OutDir $repo
 New-Item -ItemType Directory -Force $out | Out-Null
 
 # unittest reports on stderr; merge streams in cmd so PowerShell does not treat

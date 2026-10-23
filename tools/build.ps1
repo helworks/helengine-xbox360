@@ -23,32 +23,33 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'build-paths.ps1')
 $cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
-$out = Join-Path $repo $OutDir
+$out = Resolve-X360HostPath $OutDir $repo
 New-Item -ItemType Directory -Force $out | Out-Null
 $nativeCacheRoot = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { Join-Path $out 'native-cache' } else { [IO.Path]::GetFullPath($NativeObjectCacheRoot) }
 $objectCacheRoot = Join-Path $nativeCacheRoot 'x360-image-objects'
 New-Item -ItemType Directory -Force $objectCacheRoot | Out-Null
-$outRel = $OutDir.Replace("\", "/")
-$coreGenRel = $CoreGenerated.Replace("\", "/")
-$coreLibRel = $CoreLib.Replace("\", "/")
-if (-not (Test-Path (Join-Path $repo $CoreLib))) {
+$coreGeneratedFull = Resolve-X360HostPath $CoreGenerated $repo
+$coreLibraryFull = Resolve-X360HostPath $CoreLib $repo
+$shaderRoot = Join-Path $out 'shaders'
+if (-not (Test-Path -LiteralPath $coreLibraryFull)) {
     throw "No core archive at $CoreLib. Run tools/build-core.ps1 first."
 }
 
-& (Join-Path $PSScriptRoot "build-shaders.ps1") -Config $Config | Out-Null
+& (Join-Path $PSScriptRoot "build-shaders.ps1") -Config $Config -OutDir $shaderRoot | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "shader build failed" }
 
 # Cooked content travels inside the image; with nothing staged this writes an
 # empty archive so the image always links the same way.
-$contentFull = Join-Path $repo $ContentRoot
+$contentFull = Resolve-X360HostPath $ContentRoot $repo
 # Capture rather than pipe: piping into Select-Object -First closes the
 # pipeline early, which kills the packer and reports a false failure.
 $contentLog = & $cfg.python (Join-Path $repo "tools/pack-content.py") `
     --content-root $contentFull `
     --out-bin (Join-Path $out "content.bin") `
     --out-stub (Join-Path $out "content.S") `
-    --incbin-path "/work/$outRel/content.bin"
+    --incbin-path '/out/content.bin'
 if ($LASTEXITCODE -ne 0) { $contentLog; throw "content packing failed" }
 $contentLog | Select-Object -First 2 | ForEach-Object { Write-Host $_ }
 
@@ -63,7 +64,7 @@ if ($CatalogRoot) {
         throw "A catalog root was given but holds no xbox360_runtime_scene_catalog.cpp: $CatalogRoot"
     }
     Copy-Item -LiteralPath $generatedCatalog -Destination (Join-Path $out "scene_catalog_generated.cpp") -Force
-    $catalogSource = "$outRel/scene_catalog_generated.cpp"
+    $catalogSource = '/out/scene_catalog_generated.cpp'
     Write-Host "Scene catalog: generated, from $CatalogRoot"
 } else {
     Write-Host "Scene catalog: stub (no authored scenes)"
@@ -74,7 +75,7 @@ if ($CatalogRoot) {
 $common = "-mcpu=powerpc -m32 -mbig-endian -mno-eabi -msdata=none -mno-altivec " +
           "-mhard-float -mstrict-align -ffreestanding -fno-builtin -nostdlib " +
           "-fno-stack-protector -fno-asynchronous-unwind-tables -fno-pic " +
-          "-fno-common -O2 -Wall -Wextra -Werror -I/work/build/shaders"
+          "-fno-common -O2 -Wall -Wextra -Werror -I/out/shaders"
 foreach ($d in $Define) { $common += " -D$d" }
 $cflags = "$common -std=c11"
 # The transpiled engine core is C++: freestanding, no C++ library, no
@@ -90,7 +91,7 @@ $cxxflags = "$common -std=c++17 -fno-exceptions -fno-rtti " +
 # src/platform/xenia_guest/X360RuntimeProvider.hpp.
 $coreCxxflags = (($common -replace " -ffreestanding", "") -replace " -Werror", "") +
                 " -std=c++20 -fno-exceptions -frtti -fno-threadsafe-statics " +
-                "-fno-unwind-tables -I/work/$coreGenRel -I/work/src/platform/xenia_guest"
+                "-fno-unwind-tables -I/generated -I/work/src/platform/xenia_guest"
 
 # Compiled against the generated core (hosted headers, C++20).
 $coreSources = @(
@@ -149,16 +150,17 @@ foreach ($s in ($sources + $coreSources)) {
     $objectNames += $objectName
     $obj = "`$OBJ_ROOT/$objectName"
     $objects += $obj
+    $containerSource = if ($s.StartsWith('/')) { $s } else { "/work/$s" }
     if ($coreSources -contains $s) {
-        $compileLines += "powerpc-eabi-g++ $coreCxxflags -c /work/$s -o $obj"
+        $compileLines += "powerpc-eabi-g++ $coreCxxflags -c $containerSource -o $obj"
     } elseif ($s -eq $catalogSource) {
         # The generated catalog is compiled from the output directory, so it
         # needs to be told where the declarations it defines live.
-        $compileLines += "powerpc-eabi-g++ $cxxflags -I/work/src/demo -c /work/$s -o $obj"
+        $compileLines += "powerpc-eabi-g++ $cxxflags -I/work/src/demo -c $containerSource -o $obj"
     } elseif ($s.EndsWith(".cpp")) {
-        $compileLines += "powerpc-eabi-g++ $cxxflags -c /work/$s -o $obj"
+        $compileLines += "powerpc-eabi-g++ $cxxflags -c $containerSource -o $obj"
     } else {
-        $compileLines += "powerpc-eabi-gcc $cflags -c /work/$s -o $obj"
+        $compileLines += "powerpc-eabi-gcc $cflags -c $containerSource -o $obj"
     }
 }
 # The content stub lives in the output directory rather than the source tree,
@@ -176,8 +178,8 @@ $toolchainId = (& docker image inspect $cfg.docker_image --format '{{.Id}}' | Ou
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($toolchainId)) { throw "Could not identify toolchain image $($cfg.docker_image)." }
 $sourceInputs = @(
     (Get-ChildItem -LiteralPath (Join-Path $repo 'src') -File -Recurse)
-    (Get-ChildItem -LiteralPath (Join-Path $repo 'build/shaders') -File -Recurse -ErrorAction SilentlyContinue)
-    (Get-ChildItem -LiteralPath (Join-Path $repo $CoreGenerated) -File -Recurse)
+    (Get-ChildItem -LiteralPath $shaderRoot -File -Recurse)
+    (Get-ChildItem -LiteralPath $coreGeneratedFull -File -Recurse)
     (Get-Item -LiteralPath (Join-Path $repo 'tools/build.ps1'))
     (Get-Item -LiteralPath (Join-Path $repo 'tools/build-shaders.ps1'))
 )
@@ -185,12 +187,11 @@ $coreObjectCachePath = Join-Path $nativeCacheRoot 'x360-core/obj/helcore.o'
 if (Test-Path -LiteralPath $coreObjectCachePath) {
     $sourceInputs += Get-Item -LiteralPath $coreObjectCachePath
 } else {
-    $sourceInputs += Get-Item -LiteralPath (Join-Path $repo $CoreLib)
+    $sourceInputs += Get-Item -LiteralPath $coreLibraryFull
 }
 if ($CatalogRoot) { $sourceInputs += Get-Item -LiteralPath (Join-Path $out 'scene_catalog_generated.cpp') }
-$coreGeneratedFull = [IO.Path]::GetFullPath((Join-Path $repo $CoreGenerated))
 $coreGeneratedPrefix = $coreGeneratedFull.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
-$coreLibraryFull = [IO.Path]::GetFullPath((Join-Path $repo $CoreLib))
+$shaderPrefix = $shaderRoot.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 $inputRecords = @(
     foreach ($input in $sourceInputs | Sort-Object FullName -Unique) {
         $fullInput = [IO.Path]::GetFullPath($input.FullName)
@@ -202,6 +203,8 @@ $inputRecords = @(
             'generated-core/' + $fullInput.Substring($coreGeneratedPrefix.Length).Replace('\', '/')
         } elseif ($fullInput.EndsWith('scene_catalog_generated.cpp', [StringComparison]::OrdinalIgnoreCase)) {
             'generated-scene-catalog.cpp'
+        } elseif ($fullInput.StartsWith($shaderPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            'shaders/' + $fullInput.Substring($shaderPrefix.Length).Replace('\', '/')
         } elseif ($fullInput.StartsWith($repo, [StringComparison]::OrdinalIgnoreCase)) {
             $fullInput.Substring($repo.Length).TrimStart('\', '/')
         } else {
@@ -210,7 +213,7 @@ $inputRecords = @(
         "$relativeInput=$((Get-FileHash -LiteralPath $fullInput -Algorithm SHA256).Hash)"
     }
 )
-$coreCxxflagsForFingerprint = $coreCxxflags -replace [regex]::Escape("/work/$coreGenRel"), '/work/generated-core'
+$coreCxxflagsForFingerprint = $coreCxxflags
 $nativeFingerprintText = @(
     $toolchainId, $cfg.docker_image, $common, $cflags, $cxxflags, $coreCxxflagsForFingerprint,
     'powerpc-eabi-g++ -nostartfiles -T src/platform/xenia_guest/link.ld -lstdc++ -lsupc++ -lm -lgcc',
@@ -269,7 +272,7 @@ $contentCompileLine = if ($contentCacheHit) { 'echo "reused cached content objec
 $script = @"
 set -euo pipefail
 export PATH=/opt/devkitpro/devkitPPC/bin:`$PATH
-OUT=/work/$outRel
+OUT=/out
 OBJ_ROOT=/nativecache/x360-image-objects
 mkdir -p `$OBJ_ROOT
 powerpc-eabi-gcc --version | head -1 > `$OUT/toolchain.txt
@@ -277,7 +280,7 @@ powerpc-eabi-g++ --version | head -1 >> `$OUT/toolchain.txt
 powerpc-eabi-ld --version | head -1 >> `$OUT/toolchain.txt
 $nativeCompileLines
 $contentCompileLine
-powerpc-eabi-g++ $cxxflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') /work/$coreLibRel -lstdc++ -lsupc++ -lm -lgcc
+powerpc-eabi-g++ $cxxflags -nostartfiles -T /work/src/platform/xenia_guest/link.ld -Wl,-Map,`$OUT/helengine.map -o `$OUT/helengine.elf $($objects -join ' ') /core/libhelcore.a -lstdc++ -lsupc++ -lm -lgcc
 powerpc-eabi-objdump -d `$OUT/helengine.elf > `$OUT/helengine.dis
 powerpc-eabi-nm -n `$OUT/helengine.elf > `$OUT/helengine.nm
 powerpc-eabi-readelf -h -l -S `$OUT/helengine.elf > `$OUT/helengine.readelf.txt
@@ -290,7 +293,8 @@ $env:MSYS_NO_PATHCONV = "1"
 # native stderr line into a terminating error under ErrorActionPreference
 # Stop, and the compiler writes warnings there even on a successful build.
 $buildLog = Join-Path $out "build.log"
-& cmd /c "docker run --pull=never --rm --network none -v ""${repo}:/work"" -v ""${nativeCacheRoot}:/nativecache"" $($cfg.docker_image) bash ""/work/$outRel/build.sh"" > ""$buildLog"" 2>&1"
+$coreLibraryRoot = [IO.Path]::GetDirectoryName($coreLibraryFull)
+& cmd /c "docker run --pull=never --rm --network none -v ""${repo}:/work:ro"" -v ""${out}:/out"" -v ""${coreGeneratedFull}:/generated:ro"" -v ""${coreLibraryRoot}:/core:ro"" -v ""${nativeCacheRoot}:/nativecache"" $($cfg.docker_image) bash /out/build.sh > ""$buildLog"" 2>&1"
 if ($LASTEXITCODE -ne 0) {
     Get-Content $buildLog | Select-Object -Last 25
     throw "docker build step failed with exit code $LASTEXITCODE (see $buildLog)"
