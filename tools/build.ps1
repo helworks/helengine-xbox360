@@ -24,7 +24,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'build-paths.ps1')
-$cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
+$cfg = Get-Content (Resolve-X360HostPath $Config $repo) -Raw | ConvertFrom-Json
 $out = Resolve-X360HostPath $OutDir $repo
 New-Item -ItemType Directory -Force $out | Out-Null
 $nativeCacheRoot = if ([string]::IsNullOrWhiteSpace($NativeObjectCacheRoot)) { Join-Path $out 'native-cache' } else { [IO.Path]::GetFullPath($NativeObjectCacheRoot) }
@@ -293,7 +293,7 @@ $env:MSYS_NO_PATHCONV = "1"
 . (Join-Path $PSScriptRoot 'native-process.ps1')
 $buildLog = Join-Path $out "build.log"
 $coreLibraryRoot = [IO.Path]::GetDirectoryName($coreLibraryFull)
-$dockerArguments = @('run', '--pull=never', '--rm', '--network', 'none', '-v', "${repo}:/work:ro", '-v', "${out}:/out", '-v', "${coreGeneratedFull}:/generated:ro", '-v', "${coreLibraryRoot}:/core:ro", '-v', "${nativeCacheRoot}:/nativecache", $cfg.docker_image, 'bash', '/out/build.sh')
+$dockerArguments = @('run', '--platform', 'linux/amd64', '--pull=never', '--rm', '--network', 'none', '-v', "${repo}:/work:ro", '-v', "${out}:/out", '-v', "${coreGeneratedFull}:/generated:ro", '-v', "${coreLibraryRoot}:/core:ro", '-v', "${nativeCacheRoot}:/nativecache", $cfg.docker_image, 'bash', '/out/build.sh')
 $buildResult = Invoke-X360NativeTool -FilePath 'docker' -Arguments $dockerArguments -WorkingDirectory $repo
 $buildExitCode = $buildResult.ExitCode
 [IO.File]::WriteAllText($buildLog, $buildResult.Output)

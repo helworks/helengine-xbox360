@@ -38,7 +38,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'build-paths.ps1')
-$cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
+$cfg = Get-Content (Resolve-X360HostPath $Config $repo) -Raw | ConvertFrom-Json
 $generatedFull = Resolve-X360HostPath $GeneratedRoot $repo
 if (-not (Test-Path $generatedFull)) {
     throw "No generated core at $generatedFull. Run tools/generate-core.ps1 first."
@@ -113,7 +113,7 @@ $scriptPath = Join-Path $scriptOut "build-core.sh"
 [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n"))
 
 $env:MSYS_NO_PATHCONV = "1"
-$dockerArgs = @('run', '--rm', '--network', 'none', '-v', "${repo}:/work:ro", '-v', "${generatedFull}:/generated:ro", '-v', "${out}:/out", '-v', "${scriptOut}:/scripts:ro")
+$dockerArgs = @('run', '--platform', 'linux/amd64', '--rm', '--network', 'none', '-v', "${repo}:/work:ro", '-v', "${generatedFull}:/generated:ro", '-v', "${out}:/out", '-v', "${scriptOut}:/scripts:ro")
 $dockerArgs += @($cfg.docker_image, 'bash', '/scripts/build-core.sh')
 & docker @dockerArgs
 $code = $LASTEXITCODE

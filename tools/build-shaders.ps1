@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'build-paths.ps1')
-$cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
+$cfg = Get-Content (Resolve-X360HostPath $Config $repo) -Raw | ConvertFrom-Json
 $out = Resolve-X360HostPath $OutDir $repo
 New-Item -ItemType Directory -Force $out | Out-Null
 
