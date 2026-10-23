@@ -240,24 +240,24 @@ void X360RenderManager2D::Visit(::IDrawable2D *drawable) {
     for (::IClipRegion2D *region : clipChain_) {
         if (region == nullptr) he_cpp_custom::Fail("Xbox360 clip chain contains a null region");
         const ::float4 rect = region->GetClipRect();
-        if (!std::isfinite(rect.X) || !std::isfinite(rect.Y) || !std::isfinite(rect.Z) ||
-            !std::isfinite(rect.W) || rect.Z < 0.0f || rect.W < 0.0f)
+        if (!::RealEvaluation::IsFinite(rect.X) || !::RealEvaluation::IsFinite(rect.Y) || !::RealEvaluation::IsFinite(rect.Z) ||
+            !::RealEvaluation::IsFinite(rect.W) || rect.Z < 0.0f || rect.W < 0.0f)
             he_cpp_custom::Fail("Xbox360 authored clip rectangle is invalid");
         clip = clipBuilder_.Intersect(clip, rect);
     }
-    const float right = cameraRect.X + cameraRect.Z;
-    const float bottom = cameraRect.Y + cameraRect.W;
-    const float leftPixel = clampf((float)::Math::Ceiling((double)clip.X - 0.5), cameraRect.X, right);
-    const float topPixel = clampf((float)::Math::Ceiling((double)clip.Y - 0.5), cameraRect.Y, bottom);
-    const float rightPixel = clampf((float)::Math::Ceiling((double)clip.X + clip.Z - 0.5), leftPixel, right);
-    const float bottomPixel = clampf((float)::Math::Ceiling((double)clip.Y + clip.W - 0.5), topPixel, bottom);
+    const ::RealEvaluation right = cameraRect.X + cameraRect.Z;
+    const ::RealEvaluation bottom = cameraRect.Y + cameraRect.W;
+    const ::RealEvaluation leftPixel = ::RealMath::Clamp(::RealMath::Ceiling(::RealEvaluation(clip.X) - 0.5), cameraRect.X, right);
+    const ::RealEvaluation topPixel = ::RealMath::Clamp(::RealMath::Ceiling(::RealEvaluation(clip.Y) - 0.5), cameraRect.Y, bottom);
+    const ::RealEvaluation rightPixel = ::RealMath::Clamp(::RealMath::Ceiling(clip.X + clip.Z - 0.5), leftPixel, right);
+    const ::RealEvaluation bottomPixel = ::RealMath::Clamp(::RealMath::Ceiling(clip.Y + clip.W - 0.5), topPixel, bottom);
     activeScissor_ = ::float4(leftPixel, topPixel, rightPixel - leftPixel, bottomPixel - topPixel);
     if (activeScissor_.Z == 0.0f || activeScissor_.W == 0.0f) {
         ++shapesSkipped_;
         return;
     }
-    if (hel_ui_set_scissor((uint32_t)activeScissor_.X, (uint32_t)activeScissor_.Y,
-            (uint32_t)activeScissor_.Z, (uint32_t)activeScissor_.W) != HEL_OK)
+    if (hel_ui_set_scissor(static_cast<uint32_t>(static_cast<double>(activeScissor_.X)), static_cast<uint32_t>(static_cast<double>(activeScissor_.Y)),
+            static_cast<uint32_t>(static_cast<double>(activeScissor_.Z)), static_cast<uint32_t>(static_cast<double>(activeScissor_.W))) != HEL_OK)
         he_cpp_custom::Fail("Xbox360 resolved UI scissor is outside the backbuffer");
     /* The drawable calls back into one of the Draw* methods below, which is
        how the engine keeps the shape's own fields out of this traversal. */
@@ -319,8 +319,8 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
        work is needed here. */
     const ::float3 position = shape->get_Parent()->get_Position();
     const ::int2 size = shape->get_Size();
-    const float left = position.X;
-    const float top = position.Y;
+    const float left = static_cast<float>(position.X);
+    const float top = static_cast<float>(position.Y);
     const float right = left + (float)size.X;
     const float bottom = top + (float)size.Y;
     if (size.X <= 0 || size.Y <= 0) {
@@ -331,7 +331,7 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
     const uint32_t cornerMask = (uint32_t)shape->get_Corners();
     float outerX[kOutlinePoints];
     float outerY[kOutlinePoints];
-    build_outline(left, top, right, bottom, shape->get_Radius(), cornerMask,
+    build_outline(left, top, right, bottom, static_cast<float>(shape->get_Radius()), cornerMask,
                   outerX, outerY);
 
     float fill[4];
@@ -357,7 +357,7 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
 
     /* The border is the ring between that outline and one inset by its
        thickness, walked in step because both have the same point count. */
-    const float thickness = shape->get_BorderThickness();
+    const float thickness = static_cast<float>(shape->get_BorderThickness());
     if (thickness <= 0.0f) {
         return;
     }
@@ -367,7 +367,7 @@ void X360RenderManager2D::DrawRoundedRect(::IRoundedRectDrawable2D *shape) {
                                halfWidth < halfHeight ? halfWidth : halfHeight);
     float innerX[kOutlinePoints];
     float innerY[kOutlinePoints];
-    const float innerRadius = shape->get_Radius() - inset;
+    const float innerRadius = static_cast<float>(shape->get_Radius() - inset);
     build_outline(left + inset, top + inset, right - inset, bottom - inset,
                   innerRadius < 0.0f ? 0.0f : innerRadius, cornerMask, innerX,
                   innerY);
