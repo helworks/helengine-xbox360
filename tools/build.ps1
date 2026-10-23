@@ -112,6 +112,7 @@ $sources = @(
     "src/platform/xenia_guest/imports.S",
     "src/platform/xenia_guest/platform.c",
     "src/platform/xenia_guest/runtime.c",
+    "src/platform/xenia_guest/atomic64.c",
     "src/platform/xenia_guest/heap.c",
     "src/platform/xenia_guest/content.c",
     "src/platform/xenia_guest/cxx_runtime.cpp",
