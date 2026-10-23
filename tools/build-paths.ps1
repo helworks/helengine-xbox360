@@ -2,7 +2,7 @@
 function Get-X360CanonicalPath {
     param([Parameter(Mandatory)][string]$Path)
     $full = [IO.Path]::GetFullPath($Path)
-    if ($PSVersionTable.OS -match 'Darwin' -and ($full -eq '/tmp' -or $full.StartsWith('/tmp/'))) {
+    if ($PSVersionTable.OS -match '^(Darwin|macOS)(\s|$)' -and ($full -eq '/tmp' -or $full.StartsWith('/tmp/'))) {
         $temporaryAlias = Get-Item -LiteralPath '/tmp' -Force
         $temporaryTarget = [string]$temporaryAlias.Target
         if (($temporaryAlias.Attributes -band [IO.FileAttributes]::ReparsePoint) -and

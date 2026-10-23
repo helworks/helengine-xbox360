@@ -15,7 +15,7 @@ New-Item -ItemType Directory -Force -Path $generated, $content | Out-Null
 $script = Join-Path $repo 'tools/build-image.ps1'
 $checks = 0
 . (Join-Path $repo 'tools/build-paths.ps1')
-$expectedRoot = if ($PSVersionTable.OS -match 'Darwin') { '/private/tmp/helengine/x360/path-tests' } else { $root }
+$expectedRoot = if ($PSVersionTable.OS -match '^(Darwin|macOS)(\s|$)') { '/private/tmp/helengine/x360/path-tests' } else { $root }
 if ((Resolve-X360HostPath $root $repo) -ne $expectedRoot) { throw 'Rooted output was combined with the source checkout or its platform temporary alias was not canonicalized.' }
 $checks++
 if ((Resolve-X360HostPath 'generated/core' $repo) -ne [IO.Path]::GetFullPath((Join-Path $repo 'generated/core'))) { throw 'Relative input was not resolved against the actual source checkout.' }
@@ -60,7 +60,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     Must-Fail { Assert-X360ExternalOutput (Join-Path $linkedOutput 'native') $repo } 'nested output symlink'
     if (-not (Test-Path -LiteralPath $generated)) { throw 'Rejecting a nested link changed its target.' }
     $checks++
-    if ($PSVersionTable.OS -match 'Darwin') {
+    if ($PSVersionTable.OS -match '^(Darwin|macOS)(\s|$)') {
         Must-Fail { Assert-X360ExternalOutput '/tmp/helengine/x360/path-tests/native' '/private/tmp/helengine/x360/path-tests' } 'canonical temporary alias source containment'
         $checks++
     }
