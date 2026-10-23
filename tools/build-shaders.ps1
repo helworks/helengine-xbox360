@@ -14,11 +14,11 @@ $cfg = Get-Content (Join-Path $repo $Config) -Raw | ConvertFrom-Json
 $out = Resolve-X360HostPath $OutDir $repo
 New-Item -ItemType Directory -Force $out | Out-Null
 
-# unittest reports on stderr; merge streams in cmd so PowerShell does not treat
-# the report as an error record.
-$testOutput = & cmd /c "`"$($cfg.python)`" `"$(Join-Path $repo 'tests/xenos_asm_test.py')`" 2>&1"
-$testOutput | Select-Object -Last 2
-if ($LASTEXITCODE -ne 0) { throw "xenos_asm tests failed" }
+# unittest reports on stderr even on success; keep it out of PS5 error records.
+. (Join-Path $PSScriptRoot 'native-process.ps1')
+$testResult = Invoke-X360NativeTool -FilePath $cfg.python -Arguments @((Join-Path $repo 'tests/xenos_asm_test.py')) -WorkingDirectory $repo
+$testResult.Output.TrimEnd([char[]]"`r`n") -split "\r?\n" | Select-Object -Last 2
+if ($testResult.ExitCode -ne 0) { throw "xenos_asm tests failed with exit code $($testResult.ExitCode)" }
 
 foreach ($src in Get-ChildItem (Join-Path $repo "shaders") -Filter *.xasm) {
     $name = ($src.BaseName -replace "\.", "_")

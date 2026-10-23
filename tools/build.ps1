@@ -289,15 +289,17 @@ $scriptPath = Join-Path $out "build.sh"
 [System.IO.File]::WriteAllText($scriptPath, $script.Replace("`r`n", "`n"))
 
 $env:MSYS_NO_PATHCONV = "1"
-# Run through cmd with the output redirected: Windows PowerShell turns any
-# native stderr line into a terminating error under ErrorActionPreference
-# Stop, and the compiler writes warnings there even on a successful build.
+# Capture successful compiler warnings and preserve the real native exit code.
+. (Join-Path $PSScriptRoot 'native-process.ps1')
 $buildLog = Join-Path $out "build.log"
 $coreLibraryRoot = [IO.Path]::GetDirectoryName($coreLibraryFull)
-& cmd /c "docker run --pull=never --rm --network none -v ""${repo}:/work:ro"" -v ""${out}:/out"" -v ""${coreGeneratedFull}:/generated:ro"" -v ""${coreLibraryRoot}:/core:ro"" -v ""${nativeCacheRoot}:/nativecache"" $($cfg.docker_image) bash /out/build.sh > ""$buildLog"" 2>&1"
-if ($LASTEXITCODE -ne 0) {
+$dockerArguments = @('run', '--pull=never', '--rm', '--network', 'none', '-v', "${repo}:/work:ro", '-v', "${out}:/out", '-v', "${coreGeneratedFull}:/generated:ro", '-v', "${coreLibraryRoot}:/core:ro", '-v', "${nativeCacheRoot}:/nativecache", $cfg.docker_image, 'bash', '/out/build.sh')
+$buildResult = Invoke-X360NativeTool -FilePath 'docker' -Arguments $dockerArguments -WorkingDirectory $repo
+$buildExitCode = $buildResult.ExitCode
+[IO.File]::WriteAllText($buildLog, $buildResult.Output)
+if ($buildExitCode -ne 0) {
     Get-Content $buildLog | Select-Object -Last 25
-    throw "docker build step failed with exit code $LASTEXITCODE (see $buildLog)"
+    throw "docker build step failed with exit code $buildExitCode (see $buildLog)"
 }
 $warnings = @(Get-Content $buildLog | Select-String -Pattern "warning:")
 if ($warnings.Count -gt 0) { Write-Host "$($warnings.Count) compiler warning(s); see $buildLog" }
