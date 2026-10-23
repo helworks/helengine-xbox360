@@ -83,7 +83,7 @@ public sealed class Xbox360MaterialCooker {
             BaseColorB = b,
             BaseColorA = a
         };
-        return new PlatformMaterialCookResult(helengine.files.AssetSerializer.SerializeToBytes(cooked), []);
+        return new PlatformMaterialCookResult(helengine.files.AssetSerializer.SerializeToBytes(cooked, request.NumericPolicy), []);
     }
 
     /// <summary>Returns the trimmed field value, or the fallback when the field is absent or blank.</summary>

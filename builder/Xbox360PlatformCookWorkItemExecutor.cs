@@ -17,6 +17,16 @@ public sealed class Xbox360PlatformCookWorkItemExecutor {
         IReadOnlyList<PlatformBuildArtifact> artifacts,
         string packageSourceRootPath,
         CancellationToken cancellationToken) {
+        return Execute(workItems, artifacts, packageSourceRootPath, RealRepresentation.Policy, cancellationToken);
+    }
+
+    /// <summary>Prepares all native textures with the selected target numeric envelope.</summary>
+    public IReadOnlyList<PlatformBuildArtifact> Execute(
+        IReadOnlyList<PlatformCookWorkItem> workItems,
+        IReadOnlyList<PlatformBuildArtifact> artifacts,
+        string packageSourceRootPath,
+        NumericPrecisionPolicy numericPolicy,
+        CancellationToken cancellationToken) {
         ArgumentNullException.ThrowIfNull(workItems);
         ArgumentNullException.ThrowIfNull(artifacts);
         if (string.IsNullOrWhiteSpace(packageSourceRootPath)) throw new ArgumentException("Package source root is required.", nameof(packageSourceRootPath));
@@ -63,7 +73,7 @@ public sealed class Xbox360PlatformCookWorkItemExecutor {
             using TextureAsset cooked = Cooker.Cook(source, plan.Settings);
             cooked.Id = plan.WorkItem.OutputLogicalArtifactId;
             cooked.RuntimeAssetId = RuntimeAssetIdGenerator.Generate(cooked.Id);
-            plan.Payload = Xbox360CookedTextureSerializer.SerializeToBytes(cooked);
+            plan.Payload = Xbox360CookedTextureSerializer.SerializeToBytes(cooked, numericPolicy);
         }
         cancellationToken.ThrowIfCancellationRequested();
         foreach (Xbox360TextureCookWorkPlan plan in plans) {

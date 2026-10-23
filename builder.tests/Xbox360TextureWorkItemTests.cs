@@ -6,6 +6,34 @@ namespace helengine.x360.builder.tests;
 
 /// <summary>Checks batch preflight protects existing outputs and stages cooked textures and font atlases.</summary>
 public sealed class Xbox360TextureWorkItemTests : IDisposable {
+    /// <summary>Checks the big-endian texture envelope with the runtime's selected numeric policy.</summary>
+    [Theory]
+    [InlineData(16)]
+    [InlineData(32)]
+    [InlineData(64)]
+    public void TexturePayloadLoadsWithTargetNumericPolicy(int bits) {
+        var policy = new NumericPrecisionPolicy(bits, bits);
+        using TextureAsset source = Xbox360TextureCookTests.Source(4, 2);
+        byte[] bytes = Xbox360CookedTextureSerializer.SerializeToBytes(source, policy);
+        using var stream = new MemoryStream(bytes);
+        using TextureAsset cooked = Assert.IsType<TextureAsset>(PackagedAssetBinarySerializer.Deserialize(stream, policy));
+        Assert.Equal(4, cooked.Width);
+    }
+
+    /// <summary>Checks nonshader materials retain the requested target envelope.</summary>
+    [Theory]
+    [InlineData(16)]
+    [InlineData(32)]
+    [InlineData(64)]
+    public void MaterialPayloadLoadsWithTargetNumericPolicy(int bits) {
+        var policy = new NumericPrecisionPolicy(bits, bits);
+        var request = new helengine.baseplatform.Requests.PlatformMaterialCookRequest("material", "materials/sample.hasset", "x360", "release", "x360-unlit",
+            Xbox360MaterialSchemaIds.OpaqueSchemaId, new Dictionary<string, string>(), numericPolicy: policy);
+        var result = new Xbox360MaterialCooker().Cook(request);
+        using var stream = new MemoryStream(result.CookedMaterialBytes);
+        Assert.IsType<PlatformMaterialAsset>(PackagedAssetBinarySerializer.Deserialize(stream, policy));
+    }
+
     /// <summary>Uses one fixed test root under the explicit dotnet artifacts directory.</summary>
     readonly string Root = Path.Combine(AppContext.BaseDirectory, "texture-work-items");
     /// <summary>Gets the contained package-source tree consumed by staging.</summary>

@@ -95,7 +95,7 @@ public sealed partial class Xbox360PlatformAssetBuilder : IPlatformAssetBuilder,
             progressReporter.Report(new PlatformBuildProgressUpdate("Stage Content", "manifest", 0, 1, "Staging declared cooked artifacts."));
             string packageSourceRoot = ResolvePackageSourceRoot(request.WorkingRoot);
             IReadOnlyList<PlatformBuildArtifact> builderCookedArtifacts = new Xbox360PlatformCookWorkItemExecutor().Execute(
-                request.Manifest.PlatformCookWorkItems, request.Manifest.CookedArtifacts, packageSourceRoot, cancellationToken);
+                request.Manifest.PlatformCookWorkItems, request.Manifest.CookedArtifacts, packageSourceRoot, request.NumericPolicy, cancellationToken);
             IReadOnlyList<Xbox360StagedAsset> staged = new Xbox360ContentStager()
                 .Stage(request.Manifest.CookedArtifacts, builderCookedArtifacts, packageSourceRoot, stagingRoot, cancellationToken);
             progressReporter.Report(new PlatformBuildProgressUpdate("Stage Content", "manifest", 1, 1, $"Staged {staged.Count} cooked file(s)."));
