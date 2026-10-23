@@ -19,6 +19,8 @@ public sealed class Xbox360SourceTextureDecoderTests {
             Assert.Equal(1, decoded.Height);
             Assert.Equal(TextureAssetColorFormat.Rgba32, decoded.ColorFormat);
             Assert.Equal(TextureAssetAlphaPrecision.A8, decoded.AlphaPrecision);
+            Assert.NotNull(decoded.PaletteColors);
+            Assert.Empty(decoded.PaletteColors);
             Assert.Equal(new byte[] {255, 0, 0, 255}, decoded.Colors);
             Assert.Equal(png, File.ReadAllBytes(path));
         } finally {
