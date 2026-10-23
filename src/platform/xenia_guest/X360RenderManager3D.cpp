@@ -185,17 +185,17 @@ void X360RuntimeModel::Dispose() {
     HelVertex *vertices = new HelVertex[vertexCount];
     for (int32_t index = 0; index < vertexCount; ++index) {
         const ::float3 &position = (*data->Positions)[index];
-        vertices[index].x = position.X;
-        vertices[index].y = position.Y;
-        vertices[index].z = position.Z;
+        vertices[index].x = static_cast<float>(position.X);
+        vertices[index].y = static_cast<float>(position.Y);
+        vertices[index].z = static_cast<float>(position.Z);
         /* A model without normals is drawn facing the viewer rather than
            refused, because its geometry is still correct; it just cannot be
            lit. The count is reported once below. */
         if (hasNormals) {
             const ::float3 &normal = (*data->Normals)[index];
-            vertices[index].nx = normal.X;
-            vertices[index].ny = normal.Y;
-            vertices[index].nz = normal.Z;
+            vertices[index].nx = static_cast<float>(normal.X);
+            vertices[index].ny = static_cast<float>(normal.Y);
+            vertices[index].nz = static_cast<float>(normal.Z);
         } else {
             vertices[index].nx = 0.0f;
             vertices[index].ny = 0.0f;
@@ -206,8 +206,8 @@ void X360RuntimeModel::Dispose() {
            when it has them and zero otherwise; nothing samples them yet. */
         if (hasTexCoords) {
             const ::float2 &uv = (*data->TexCoords)[index];
-            vertices[index].u = uv.X;
-            vertices[index].v = uv.Y;
+            vertices[index].u = static_cast<float>(uv.X);
+            vertices[index].v = static_cast<float>(uv.Y);
         } else {
             vertices[index].u = 0.0f;
             vertices[index].v = 0.0f;
@@ -386,15 +386,15 @@ bool X360RenderManager3D::resolveClearColor(float *rgba) {
         /* Reported as 8-bit channels so the log line can be compared with a
            pixel read straight from a capture. */
         hel_log_u32("HEL render3d: authored clear colour RGBA",
-                    ((uint32_t)(colour.X * 255.0f + 0.5f) << 24) |
-                        ((uint32_t)(colour.Y * 255.0f + 0.5f) << 16) |
-                        ((uint32_t)(colour.Z * 255.0f + 0.5f) << 8) |
-                        (uint32_t)(colour.W * 255.0f + 0.5f));
+                    (static_cast<uint32_t>(static_cast<double>(colour.X * 255.0f + 0.5f)) << 24) |
+                        (static_cast<uint32_t>(static_cast<double>(colour.Y * 255.0f + 0.5f)) << 16) |
+                        (static_cast<uint32_t>(static_cast<double>(colour.Z * 255.0f + 0.5f)) << 8) |
+                        static_cast<uint32_t>(static_cast<double>(colour.W * 255.0f + 0.5f)));
     }
-    rgba[0] = colour.X;
-    rgba[1] = colour.Y;
-    rgba[2] = colour.Z;
-    rgba[3] = colour.W;
+    rgba[0] = static_cast<float>(colour.X);
+    rgba[1] = static_cast<float>(colour.Y);
+    rgba[2] = static_cast<float>(colour.Z);
+    rgba[3] = static_cast<float>(colour.W);
     return true;
 }
 
@@ -427,9 +427,9 @@ HelDrawParams X360RenderManager3D::resolveLighting(::ObjectManager *objectManage
         }
         const ::float4 colour = light->get_Color();
         const float intensity = light->get_Intensity();
-        params.ambient[0] += colour.X * intensity;
-        params.ambient[1] += colour.Y * intensity;
-        params.ambient[2] += colour.Z * intensity;
+        params.ambient[0] += static_cast<float>(colour.X * intensity);
+        params.ambient[1] += static_cast<float>(colour.Y * intensity);
+        params.ambient[2] += static_cast<float>(colour.Z * intensity);
     }
 
     List<::DirectionalLightComponent *> *directionalLights =
@@ -447,14 +447,14 @@ HelDrawParams X360RenderManager3D::resolveLighting(::ObjectManager *objectManage
            direction the light travels, and shading wants the vector from the
            surface towards it, which is the opposite. */
         const ::float3 travel = ::LightDirectionUtility::GetLightDirection(light);
-        params.light_direction[0] = -travel.X;
-        params.light_direction[1] = -travel.Y;
-        params.light_direction[2] = -travel.Z;
+        params.light_direction[0] = static_cast<float>(-travel.X);
+        params.light_direction[1] = static_cast<float>(-travel.Y);
+        params.light_direction[2] = static_cast<float>(-travel.Z);
         const ::float4 colour = light->get_Color();
         const float intensity = light->get_Intensity();
-        params.light_color[0] = colour.X * intensity;
-        params.light_color[1] = colour.Y * intensity;
-        params.light_color[2] = colour.Z * intensity;
+        params.light_color[0] = static_cast<float>(colour.X * intensity);
+        params.light_color[1] = static_cast<float>(colour.Y * intensity);
+        params.light_color[2] = static_cast<float>(colour.Z * intensity);
         break;
     }
 

@@ -27,21 +27,21 @@ extern "C" {
 /// <summary>Converts an engine matrix to the backend's convention.</summary>
 inline HelMat4 hel_matrix_from_engine(const ::float4x4 &source) {
     HelMat4 result;
-    result.m[0] = source.M11;
-    result.m[1] = source.M12;
-    result.m[2] = source.M13;
-    result.m[3] = source.M14;
-    result.m[4] = source.M21;
-    result.m[5] = source.M22;
-    result.m[6] = source.M23;
-    result.m[7] = source.M24;
-    result.m[8] = source.M31;
-    result.m[9] = source.M32;
-    result.m[10] = source.M33;
-    result.m[11] = source.M34;
-    result.m[12] = source.M41;
-    result.m[13] = source.M42;
-    result.m[14] = source.M43;
-    result.m[15] = source.M44;
+    result.m[0] = static_cast<float>(source.M11);
+    result.m[1] = static_cast<float>(source.M12);
+    result.m[2] = static_cast<float>(source.M13);
+    result.m[3] = static_cast<float>(source.M14);
+    result.m[4] = static_cast<float>(source.M21);
+    result.m[5] = static_cast<float>(source.M22);
+    result.m[6] = static_cast<float>(source.M23);
+    result.m[7] = static_cast<float>(source.M24);
+    result.m[8] = static_cast<float>(source.M31);
+    result.m[9] = static_cast<float>(source.M32);
+    result.m[10] = static_cast<float>(source.M33);
+    result.m[11] = static_cast<float>(source.M34);
+    result.m[12] = static_cast<float>(source.M41);
+    result.m[13] = static_cast<float>(source.M42);
+    result.m[14] = static_cast<float>(source.M43);
+    result.m[15] = static_cast<float>(source.M44);
     return result;
 }

@@ -121,7 +121,7 @@ extern "C" int hel_core_scene_build(void) {
     camera->set_FieldOfView((float)(HEL_SCENE_FIELD_OF_VIEW_MILLIRADIANS) / 1000.0f);
 #endif
     hel_log_u32("HEL scene: camera field of view milliradians",
-                (unsigned int)(camera->get_FieldOfView() * 1000.0f));
+                static_cast<unsigned int>(static_cast<double>(camera->get_FieldOfView() * 1000.0f)));
     g_camera_entity->AddComponent(camera);
     g_camera_entity->InitializeHierarchy();
 

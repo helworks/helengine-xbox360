@@ -52,16 +52,16 @@ void X360RenderManager2D::SetCamera(::float4x4 projection, ::float4 viewport) {
     if (!(viewport.X >= 0 && viewport.Y >= 0 && viewport.Z > 0 && viewport.W > 0 &&
           viewport.X + viewport.Z <= hel_video_width() && viewport.Y + viewport.W <= hel_video_height()))
         he_cpp_custom::Fail("Xbox360 batch viewport is outside the render target");
-    const float rows[] = {projection.M11, projection.M12, projection.M13, projection.M14,
-        projection.M21, projection.M22, projection.M23, projection.M24,
-        projection.M31, projection.M32, projection.M33, projection.M34,
-        projection.M41, projection.M42, projection.M43, projection.M44};
+    const float rows[] = {static_cast<float>(projection.M11), static_cast<float>(projection.M12), static_cast<float>(projection.M13), static_cast<float>(projection.M14),
+        static_cast<float>(projection.M21), static_cast<float>(projection.M22), static_cast<float>(projection.M23), static_cast<float>(projection.M24),
+        static_cast<float>(projection.M31), static_cast<float>(projection.M32), static_cast<float>(projection.M33), static_cast<float>(projection.M34),
+        static_cast<float>(projection.M41), static_cast<float>(projection.M42), static_cast<float>(projection.M43), static_cast<float>(projection.M44)};
     if (hel_shader_program_projection(&batchProgram_, rows, batchConstants_))
         he_cpp_custom::Fail("Xbox360 batch projection does not match shader constants");
-    batchDraw_.viewport[0] = (uint32_t)viewport.X;
-    batchDraw_.viewport[1] = (uint32_t)viewport.Y;
-    batchDraw_.viewport[2] = (uint32_t)viewport.Z;
-    batchDraw_.viewport[3] = (uint32_t)viewport.W;
+    batchDraw_.viewport[0] = static_cast<uint32_t>(static_cast<double>(viewport.X));
+    batchDraw_.viewport[1] = static_cast<uint32_t>(static_cast<double>(viewport.Y));
+    batchDraw_.viewport[2] = static_cast<uint32_t>(static_cast<double>(viewport.Z));
+    batchDraw_.viewport[3] = static_cast<uint32_t>(static_cast<double>(viewport.W));
 }
 
 void X360RenderManager2D::Submit(::Batch2DBuffer *buffer, ::Batch2DRun run) {
@@ -91,8 +91,8 @@ void X360RenderManager2D::Submit(::Batch2DBuffer *buffer, ::Batch2DRun run) {
         lateBackdropReported = true;
         const ::float4& first = (*buffer->Vertices)[0].Position;
         const ::float4& opposite = (*buffer->Vertices)[2].Position;
-        const float fields[] = {(first.X + opposite.X) * 0.5f, (first.Y + opposite.Y) * 0.5f,
-            first.X, first.Y, opposite.X, opposite.Y};
+        const float fields[] = {static_cast<float>((first.X + opposite.X) * 0.5f), static_cast<float>((first.Y + opposite.Y) * 0.5f),
+            static_cast<float>(first.X), static_cast<float>(first.Y), static_cast<float>(opposite.X), static_cast<float>(opposite.Y)};
         hel_log_u32("HEL late background: elapsed seconds", (uint32_t)(elapsedTicks / hel_tick_frequency()));
         for (float field : fields) {
             uint32_t word;
@@ -109,8 +109,8 @@ void X360RenderManager2D::Submit(::Batch2DBuffer *buffer, ::Batch2DRun run) {
         hel_log_u32("HEL batch first quad: vertex count", buffer->VertexCount);
         for (int corner = 0; corner < 4; ++corner) {
             const ::Batch2DVertex& vertex = (*buffer->Vertices)[corner];
-            const float fields[] = {vertex.Position.X, vertex.Position.Y, vertex.Position.Z, vertex.Position.W,
-                vertex.TexLocal.X, vertex.TexLocal.Y, vertex.Color.X, vertex.Color.Y, vertex.Color.Z, vertex.Color.W};
+            const float fields[] = {static_cast<float>(vertex.Position.X), static_cast<float>(vertex.Position.Y), static_cast<float>(vertex.Position.Z), static_cast<float>(vertex.Position.W),
+                static_cast<float>(vertex.TexLocal.X), static_cast<float>(vertex.TexLocal.Y), static_cast<float>(vertex.Color.X), static_cast<float>(vertex.Color.Y), static_cast<float>(vertex.Color.Z), static_cast<float>(vertex.Color.W)};
             hel_log_u32("HEL batch first vertex: corner", corner);
             for (float field : fields) {
                 uint32_t word;
@@ -146,7 +146,7 @@ void X360RenderManager2D::DrawSprite(::ISpriteDrawable2D *sprite) {
             hel_log_u32("HEL later sprite: request", sprites_);
             hel_log_u32("HEL later sprite: width", size.X);
             hel_log_u32("HEL later sprite: height", size.Y);
-            const float fields[] = {position.X, position.Y, position.Z};
+            const float fields[] = {static_cast<float>(position.X), static_cast<float>(position.Y), static_cast<float>(position.Z)};
             for (float field : fields) {
                 uint32_t word;
                 std::memcpy(&word, &field, sizeof(word));
