@@ -15,10 +15,11 @@ param(
     [string]$NativeScratchRoot = $env:HELENGINE_X360_NATIVE_SCRATCH_ROOT,
     [string]$BeforeNativeValidationScript = $env:HELENGINE_X360_BEFORE_NATIVE_VALIDATION_SCRIPT,
     [switch]$ValidateScratchOnly,
-    [string]$Config = 'tools/config.local.json',
+    [string]$Config = $env:HELENGINE_X360_NATIVE_CONFIG,
     [string[]]$Define = @('HEL_DEMO_MODE=0')
 )
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($Config)) { $Config = 'tools/config.local.json' }
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'build-paths.ps1')
